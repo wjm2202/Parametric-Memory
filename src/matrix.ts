@@ -65,6 +65,27 @@ export class SparseTransitionMatrix {
     }
 
     /**
+     * Return counts of trained atoms and edges for cluster-level monitoring.
+     * O(atoms) — reads only Map sizes, no iteration over edge lists.
+     */
+    getStats(): { trainedAtoms: number; totalEdges: number } {
+        let totalEdges = 0;
+        for (const targets of this.transitions.values()) {
+            totalEdges += targets.size;
+        }
+        return { trainedAtoms: this.transitions.size, totalEdges };
+    }
+
+    /**
+     * Return all outgoing transitions for a single hash as a plain Map.
+     * Read-only — shares the internal Map reference; caller must not mutate.
+     * Returns undefined if the hash has no recorded transitions.
+     */
+    getTransitions(from: Hash): ReadonlyMap<Hash, number> | undefined {
+        return this.transitions.get(from);
+    }
+
+    /**
      * Import transitions from a previously exported array, merging with any
      * existing weights.
      */

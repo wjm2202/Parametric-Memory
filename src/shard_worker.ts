@@ -134,6 +134,39 @@ export class ShardWorker {
         return { proof, next, nextProof, hash, predictedHash };
     }
 
+    /** Cluster-level stats — delegates to in-memory matrix, no DB I/O. */
+    getStats(): { trainedAtoms: number; totalEdges: number } {
+        return this.matrix.getStats();
+    }
+
+    /**
+     * Return the outgoing weight map for a given atom.
+     * Reads only from the in-memory matrix — zero DB I/O, cannot block writes.
+     * Returns null if the atom is unknown to this shard.
+     * Cross-shard neighbours are returned with `to: null` and their `toHash`
+     * so the orchestrator can resolve them.
+     */
+    getWeights(item: DataAtom): { to: DataAtom | null; toHash: Hash; weight: number }[] | null {
+        const idx = this.dataIndex.get(item);
+        if (idx === undefined) return null;
+        const hash = this.kernel.getLeafHash(idx);
+        const transitions = this.matrix.getTransitions(hash);
+        if (!transitions || transitions.size === 0) return [];
+
+        const result: { to: DataAtom | null; toHash: Hash; weight: number }[] = [];
+        for (const [toHash, weight] of transitions) {
+            const toIdx = this.hashToIndex.get(toHash);
+            result.push({
+                to: toIdx !== undefined ? this.data[toIdx] : null,
+                toHash,
+                weight,
+            });
+        }
+        // Sort descending by weight so the dominant prediction is first
+        result.sort((a, b) => b.weight - a.weight);
+        return result;
+    }
+
     async close(): Promise<void> {
         await this.db.close();
     }

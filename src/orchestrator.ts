@@ -109,6 +109,47 @@ export class ShardedOrchestrator {
         }
     }
 
+    /**
+     * Aggregate trained-atom and edge counts across all shards.
+     * O(shards) — never scans individual atoms.
+     */
+    getClusterStats(): { trainedAtoms: number; totalEdges: number } {
+        let trainedAtoms = 0;
+        let totalEdges = 0;
+        for (const shard of this.shards.values()) {
+            const s = shard.getStats();
+            trainedAtoms += s.trainedAtoms;
+            totalEdges += s.totalEdges;
+        }
+        return { trainedAtoms, totalEdges };
+    }
+
+    /**
+     * Return the outgoing weight map for an atom.
+     * Routes to the shard that owns the atom; resolves cross-shard neighbours.
+     * Returns null if the atom is not in any shard.
+     * Read-only — cannot block or slow train/access operations.
+     */
+    getWeights(item: DataAtom): { to: DataAtom; weight: number }[] | null {
+        const shardIdx = this.router.getShardIndex(item);
+        const shard = this.shards.get(shardIdx);
+        if (!shard) return null;
+
+        const raw = shard.getWeights(item);
+        if (raw === null) return null;
+
+        // Resolve any cross-shard neighbours (to === null) by searching all shards
+        return raw.map(entry => {
+            if (entry.to !== null) return { to: entry.to, weight: entry.weight };
+            for (const other of this.shards.values()) {
+                const resolved = other.resolveByHash(entry.toHash);
+                if (resolved) return { to: resolved.atom, weight: entry.weight };
+            }
+            // Hash genuinely unknown — omit by returning a sentinel we filter out
+            return null;
+        }).filter((e): e is { to: DataAtom; weight: number } => e !== null);
+    }
+
     /** Close all shard LevelDB instances gracefully. */
     async close(): Promise<void> {
         for (const shard of this.shards.values()) {

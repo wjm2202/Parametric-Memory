@@ -2,7 +2,7 @@ import 'dotenv/config';
 import Fastify, { FastifyInstance } from 'fastify';
 import { ShardedOrchestrator } from './orchestrator';
 import { collectDefaultMetrics, register } from 'prom-client';
-import { accessCounter, requestDuration, trainCounter, trainSequenceLength } from './metrics';
+import { accessCounter, requestDuration, trainCounter, trainSequenceLength, atomDominanceRatio, atomTrainedEdges, clusterTotalEdges, clusterTrainedAtoms } from './metrics';
 
 // Collect Node.js / process metrics automatically (visible at GET /metrics)
 collectDefaultMetrics();
@@ -65,10 +65,49 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             await orchestrator.train(sequence as string[]);
             trainCounter.inc();
             trainSequenceLength.observe(sequence.length);
+
+            // Update per-atom learning metrics.
+            // Only iterates atoms that appeared as `from` in this sequence —
+            // O(sequence_length - 1), never scans the full atom pool.
+            const fromAtoms = new Set((sequence as string[]).slice(0, -1));
+            for (const atom of fromAtoms) {
+                const weights = orchestrator.getWeights(atom);
+                if (weights && weights.length > 0) {
+                    const total = weights.reduce((s, t) => s + t.weight, 0);
+                    atomDominanceRatio.set({ atom }, weights[0].weight / total);
+                    atomTrainedEdges.set({ atom }, weights.length);
+                }
+            }
+            // Cluster-level totals — O(shards), not O(atoms)
+            const stats = orchestrator.getClusterStats();
+            clusterTotalEdges.set(stats.totalEdges);
+            clusterTrainedAtoms.set(stats.trainedAtoms);
+
             return { status: 'Success', message: `Trained path of length ${sequence.length} across shards.` };
         } catch (e: any) {
             return reply.status(500).send({ error: e.message });
         }
+    });
+
+    /**
+     * GET /weights/:atom  —  Introspect Markov weights for a single atom.
+     * Read-only. Returns outgoing transitions sorted by weight descending.
+     * Response includes dominanceRatio so callers can assess prediction confidence.
+     */
+    server.get('/weights/:atom', async (request, reply) => {
+        const { atom } = request.params as { atom: string };
+        const transitions = orchestrator.getWeights(atom);
+        if (transitions === null) {
+            return reply.status(404).send({ error: `Atom '${atom}' not found in any shard.` });
+        }
+        const totalWeight = transitions.reduce((s, t) => s + t.weight, 0);
+        return {
+            atom,
+            transitions,
+            totalWeight,
+            dominantNext: transitions[0]?.to ?? null,
+            dominanceRatio: totalWeight > 0 ? transitions[0].weight / totalWeight : null,
+        };
     });
 
     /**

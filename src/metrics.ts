@@ -4,7 +4,7 @@
  * Uses lazy-singleton helpers so the module is safe to import across multiple
  * test files without triggering prom-client's "duplicate metric" error.
  */
-import { Counter, Histogram, register } from 'prom-client';
+import { Counter, Histogram, Gauge, register } from 'prom-client';
 
 function getOrCreate<T>(name: string, factory: () => T): T {
     const existing = register.getSingleMetric(name);
@@ -48,5 +48,54 @@ export const trainSequenceLength = getOrCreate(
         name: 'mmpm_train_sequence_length',
         help: 'Distribution of /train sequence lengths',
         buckets: [1, 2, 5, 10, 25, 50, 100, 250, 500],
+    })
+);
+
+// ─── Learning / weight evolution metrics ─────────────────────────────────────
+// Cardinality design: O(atoms), never O(atoms²).
+// Per-edge labels (from + to) are intentionally avoided.
+
+/**
+ * Prediction confidence per atom: dominant_weight / total_weight.
+ * 0 = untrained, 1 = single deterministic successor.
+ * Label cardinality: one series per atom in the cluster.
+ */
+export const atomDominanceRatio = getOrCreate(
+    'mmpm_atom_dominance_ratio',
+    () => new Gauge({
+        name: 'mmpm_atom_dominance_ratio',
+        help: 'Prediction confidence per atom (top_weight / total_weight). Updated on /train.',
+        labelNames: ['atom'] as const,
+    })
+);
+
+/**
+ * Outgoing trained edge count (out-degree) per atom.
+ * Shows how many distinct successors each atom has learned.
+ */
+export const atomTrainedEdges = getOrCreate(
+    'mmpm_atom_trained_edges',
+    () => new Gauge({
+        name: 'mmpm_atom_trained_edges',
+        help: 'Number of outgoing trained edges per atom. Updated on /train.',
+        labelNames: ['atom'] as const,
+    })
+);
+
+/** Total trained edges across the entire cluster (scalar, O(1) cardinality). */
+export const clusterTotalEdges = getOrCreate(
+    'mmpm_cluster_total_edges',
+    () => new Gauge({
+        name: 'mmpm_cluster_total_edges',
+        help: 'Total trained edges across all shards in the cluster.',
+    })
+);
+
+/** Atoms with at least one outgoing trained transition (scalar, O(1) cardinality). */
+export const clusterTrainedAtoms = getOrCreate(
+    'mmpm_cluster_trained_atoms',
+    () => new Gauge({
+        name: 'mmpm_cluster_trained_atoms',
+        help: 'Atoms with at least one outgoing trained transition.',
     })
 );
