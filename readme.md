@@ -94,6 +94,6 @@ docker-compose up --build
 
 # 3. In a separate terminal, run the test script to generate data
 ./test-api.sh
-This setup gives you a professional, verifiable environment. As a Chapter Lead, you now have a "Knowledge Vault" that proves its own efficiency via live metrics.
+This setup gives you a professional, verifiable environment.
 
 
