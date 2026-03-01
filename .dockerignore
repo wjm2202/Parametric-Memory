@@ -1,0 +1,55 @@
+# ── Dependencies ──────────────────────────────────────────────────────────────
+# Never copy node_modules; the Dockerfile runs `npm ci` inside the image
+node_modules/
+
+# ── Build output ───────────────────────────────────────────────────────────────
+dist/
+*.js.map
+*.d.ts.map
+
+# ── Environment files ──────────────────────────────────────────────────────────
+# All .env variants stay off the image; runtime config is injected via
+# docker-compose environment: or --env-file flags
+.env
+.env.*
+
+# ── LevelDB / runtime data ────────────────────────────────────────────────────
+# These are persisted via named Docker volumes, not baked into the image
+mmpm-db/
+mmpm-test-smoke-db/
+test-*-db*/
+
+# ── Git ───────────────────────────────────────────────────────────────────────
+.git/
+.gitignore
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+
+# ── Test artefacts ────────────────────────────────────────────────────────────
+coverage/
+.nyc_output/
+vitest-results/
+src/__tests__/
+
+# ── Grafana / Prometheus local config (mounted at runtime via volumes) ─────────
+grafana/
+prometheus.yml
+
+# ── CI and editor ─────────────────────────────────────────────────────────────
+.github/
+.vscode/
+.idea/
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+
+# ── Shell scripts (smoke tests, helpers — not needed in production image) ───────
+*.sh
+
+# ── Docs ──────────────────────────────────────────────────────────────────────
+*.md
+design_doc.txt

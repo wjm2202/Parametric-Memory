@@ -1,0 +1,45 @@
+# ── Dependencies ──────────────────────────────────────────────────────
+node_modules/
+
+# ── Build output ──────────────────────────────────────────────────────
+dist/
+*.js.map
+*.d.ts.map
+
+# ── LevelDB / runtime data ────────────────────────────────────────────
+mmpm-db/
+mmpm-test-smoke-db/
+test-*-db*/
+/tmp/mmpm-*
+
+# ── Environment files ─────────────────────────────────────────────────
+# Block ALL .env variants — they may contain secrets
+.env
+.env.*
+# Exception: .env.example is safe documentation — always commit it
+!.env.example
+
+# ── Logs ──────────────────────────────────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+
+# ── Test artefacts ────────────────────────────────────────────────────
+coverage/
+.nyc_output/
+vitest-results/
+
+# ── Docker ────────────────────────────────────────────────────────────
+# (docker-compose.yml and Dockerfile ARE committed)
+
+# ── macOS ─────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ── Editor ────────────────────────────────────────────────────────────
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*.orig

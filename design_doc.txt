@@ -1,0 +1,141 @@
+================================================================================
+  MARKOV-MERKLE PREDICTIVE MEMORY (MMPM) — DESIGN DOCUMENT
+================================================================================
+
+This document provides a rigorous analysis of the MMPM architecture. It details
+the mathematical foundations, the defensive security posture, and the specific
+engineering decisions that elevate this from a simple data structure to a
+high-performance cognitive substrate.
+
+--------------------------------------------------------------------------------
+1. MATHEMATICAL FORMALISM
+--------------------------------------------------------------------------------
+
+The MMPM operates on a directed graph where nodes V are cryptographic
+commitments (Merkle Leaves) and edges E are probabilistic transitions.
+
+
+A. The Markov Property
+-----------------------
+We treat the AI's internal state as a discrete-time Markov chain. The
+probability of the next "Knowledge Atom" X_{n+1} depends only on the current
+atom X_n:
+
+  P(X_{n+1} = x | X_n, X_{n-1}, ..., X_0) = P(X_{n+1} = x | X_n)
+
+By enforcing this, we minimise the computational overhead of the look-ahead.
+Instead of analysing a full path history, we perform an O(K) linear scan of
+the adjacency list for the current node, where K is its out-degree (number of
+known successor states), to find the transition T_ij with the highest weight.
+
+
+B. Merkle Proof Complexity
+---------------------------
+The verification cost of any state is logarithmic: O(log2 N).
+
+By pre-fetching the audit path for X_{n+1} during the processing of X_n, we
+perform Latency Hiding. The "Verification Tax" is pre-computed and returned
+ready-to-use within the same response, so callers incur zero extra round-trip
+cost on their next access.
+
+
+--------------------------------------------------------------------------------
+2. INNOVATIVE ARCHITECTURAL HOOKS
+--------------------------------------------------------------------------------
+
+I. Deterministic State Anchoring
+----------------------------------
+Most Markov chains use abstract states. Our innovation is Anchoring — every
+state in the Markov model is an immutable SHA-256 hash of actual data.
+
+  Innovation:
+    If the data behind a state changes (even by one bit), its hash changes,
+    which effectively severs the Markovian connection. This ensures the
+    predictor can never point to corrupted or tampered data.
+
+
+II. The Implicit-Explicit Feedback Loop
+-----------------------------------------
+We implemented a dual-learning system:
+
+  A-Priori  (Explicit)  — Hard-coding "Golden Paths" via reinforcePath()
+  In-Situ   (Implicit)  — Learning via lastAccessed tracking in access()
+
+  Innovation:
+    This allows the system to be useful on Day 1 (via explicit training) while
+    becoming more efficient over time (via implicit observation). It creates a
+    self-optimising memory.
+
+
+III. Adjacency List Storage in the Binary Domain
+--------------------------------------------------
+Storing the transition matrix as a nested Map is an adjacency list
+representation of the transition graph.
+
+  Innovation:
+    By avoiding a dense N x N matrix, we bypass the "Quadratic Memory Trap."
+    The adjacency list only allocates space for transitions that have actually
+    been observed, keeping memory proportional to the number of edges rather
+    than the square of the number of nodes.
+
+
+--------------------------------------------------------------------------------
+3. SECURITY & RESILIENCE ANALYSIS
+--------------------------------------------------------------------------------
+
+I. Resilience to Path Injection
+---------------------------------
+An attacker might try to train the memory to predict a malicious state:
+
+  Attack:   A -> Malicious_Code
+
+  Defense:
+    While the Markov model is probabilistic, the Merkle Tree is deterministic.
+    Even if the predictor points to a malicious node, that node must exist
+    within the Merkle Tree (the "known world"). An attacker cannot inject a new,
+    unverified state without changing the Root Hash, which invalidates the
+    entire memory.
+
+
+II. State Exhaustion Mitigation
+---------------------------------
+By using LevelDB, we leverage LSM-tree (Log-Structured Merge-tree) persistence.
+
+  Defense:
+    LevelDB handles Compaction. Old, low-weight transitions that haven't been
+    accessed are eventually pushed to lower disk levels or overwritten. This
+    provides a natural, physics-based "forgetting" mechanism that prevents
+    state bloat.
+
+    The SparseTransitionMatrix.decay() method provides an explicit, controllable
+    version of this at the in-memory layer.
+
+
+--------------------------------------------------------------------------------
+4. ENGINEERING COMPARISON
+--------------------------------------------------------------------------------
+
+  Metric              | Traditional RAG / DB          | MMPM Architecture
+  --------------------|-------------------------------|---------------------------
+  Verification        | Post-retrieval (adds delay)   | Pre-computed / anticipatory
+  Lookup Engine       | Vector similarity (CPU heavy) | Adjacency list scan O(K)
+  Consistency         | Eventual                      | Strong cryptographic proof
+  Learning            | Requires retraining/re-index  | Instantaneous weight update
+
+
+--------------------------------------------------------------------------------
+5. FINAL SYNTHESIS
+--------------------------------------------------------------------------------
+
+The MMPM is essentially a "Predictive File System for AI."
+
+It treats knowledge not as a static library to be searched, but as a sequential
+flow to be anticipated. By wrapping probabilistic logic (Markov) inside a
+cryptographic shell (Merkle), we've created a structure that is:
+
+  - Smart enough to guess   (Markov transition weights)
+  - Rigid enough to verify  (SHA-256 Merkle proofs)
+  - Fast enough to scale    (Sparse O(N) storage, O(log N) verification)
+  - Persistent across runs  (LevelDB weight and atom storage)
+
+================================================================================

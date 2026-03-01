@@ -1,0 +1,7 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: 'mmpm_service'
+    static_configs:
+      - targets: ['mmpm-service:3000']

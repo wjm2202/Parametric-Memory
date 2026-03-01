@@ -1,0 +1,34 @@
+{
+  "name": "markov-merkle-memory",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "ts-node src/server.ts",
+    "test:efficiency": "ts-node src/index.ts",
+    "docker:build": "docker build -t markov-merkle-memory .",
+    "docker:run": "docker run -p 3000:3000 markov-merkle-memory",
+    "clean": "rm -rf dist",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:smoke": "bash run-smoke.sh",
+    "test:sharding": "ts-node src/test-sharding.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "devDependencies": {
+    "@types/node": "^25.3.3",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  },
+  "dependencies": {
+    "classic-level": "^3.0.0",
+    "dotenv": "^17.3.1",
+    "fastify": "^5.7.4",
+    "prom-client": "^15.1.3"
+  }
+}
