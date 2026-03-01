@@ -3,11 +3,10 @@ import { Hash, MerkleProof } from './types';
 
 export class MerkleKernel {
     private leaves: Buffer[] = [];
-    private tree: Buffer[][] = [];
 
     constructor(dataBlocks: string[]) {
         this.leaves = dataBlocks.map(d => this.hash(d));
-        this.buildTree();
+        // Tree is not materialised in memory — root and proofs are computed on demand.
     }
 
     /**
@@ -17,7 +16,6 @@ export class MerkleKernel {
     addLeaves(dataBlocks: string[]): number {
         const startIdx = this.leaves.length;
         this.leaves.push(...dataBlocks.map(d => this.hash(d)));
-        this.buildTree();
         return startIdx;
     }
 
@@ -25,38 +23,44 @@ export class MerkleKernel {
         return createHash('sha256').update(data).digest();
     }
 
-    private buildTree(): void {
-        let layer = this.leaves;
-        this.tree = [layer];
-        while (layer.length > 1) {
-            const nextLayer: Buffer[] = [];
-            for (let i = 0; i < layer.length; i += 2) {
-                const left = layer[i];
-                const right = layer[i + 1] || left;
-                nextLayer.push(this.hash(Buffer.concat([left, right])));
-            }
-            layer = nextLayer;
-            this.tree.push(layer);
-        }
-    }
-
+    /**
+     * Compute the Merkle root on demand — O(N) hashing, O(N) temporary
+     * allocation that is released immediately after the call.
+     * The full tree is never resident in memory.
+     */
     get root(): Hash {
-        const top = this.tree[this.tree.length - 1];
-        if (!top || top.length === 0) return '0'.repeat(64);
-        return top[0].toString('hex');
+        if (this.leaves.length === 0) return '0'.repeat(64);
+        let layer = this.leaves;
+        while (layer.length > 1) {
+            const next: Buffer[] = [];
+            for (let i = 0; i < layer.length; i += 2) {
+                next.push(this.hash(Buffer.concat([layer[i], layer[i + 1] || layer[i]])));
+            }
+            layer = next;
+        }
+        return layer[0].toString('hex');
     }
 
     getLeafHash(index: number): Hash {
         return this.leaves[index].toString('hex');
     }
 
+    /**
+     * Generate a Merkle proof by walking the tree level-by-level on demand.
+     * Only O(log N) hashes are retained per call; no tree is stored.
+     */
     getProof(index: number): MerkleProof {
         const auditPath: Hash[] = [];
+        let layer = this.leaves;
         let currIdx = index;
-        for (let i = 0; i < this.tree.length - 1; i++) {
-            const layer = this.tree[i];
-            const siblingIdx = (currIdx % 2 === 1) ? currIdx - 1 : currIdx + 1;
+        while (layer.length > 1) {
+            const siblingIdx = currIdx % 2 === 0 ? currIdx + 1 : currIdx - 1;
             auditPath.push((layer[siblingIdx] || layer[currIdx]).toString('hex'));
+            const next: Buffer[] = [];
+            for (let i = 0; i < layer.length; i += 2) {
+                next.push(this.hash(Buffer.concat([layer[i], layer[i + 1] || layer[i]])));
+            }
+            layer = next;
             currIdx = Math.floor(currIdx / 2);
         }
         return { leaf: this.getLeafHash(index), root: this.root, auditPath, index };

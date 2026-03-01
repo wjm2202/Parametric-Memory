@@ -1,7 +1,6 @@
 import { ClassicLevel as Level } from 'classic-level';
 import { DataAtom, Hash, MerkleProof } from './types';
 import { MerkleKernel } from './merkle';
-import { SparseTransitionMatrix } from './matrix';
 import { performance } from 'perf_hooks';
 
 /**
@@ -14,15 +13,23 @@ export class ShardWorker {
     private dataIndex: Map<DataAtom, number>;
     private hashToIndex: Map<Hash, number> = new Map();
     private kernel: MerkleKernel;
-    private matrix: SparseTransitionMatrix;
+    /**
+     * Transition weights keyed by (fromIndex → toHash → weight).
+     * Using the numeric index for the from-key reduces per-atom overhead from
+     * ~128 B (64-char hex string object) to ~8 B (V8 SMI), a ~16× saving on
+     * the outer map.  The to-key remains a Hash because it may point to an
+     * atom on a different shard whose local index is unknown.
+     */
+    private transitions: Map<number, Map<Hash, number>> = new Map();
     private db: Level<string, string>;
 
     constructor(dataBlocks: DataAtom[], dbPath: string) {
         this.data = dataBlocks;
         this.dataIndex = new Map(dataBlocks.map((d, i) => [d, i]));
         this.kernel = new MerkleKernel(dataBlocks);
-        this.matrix = new SparseTransitionMatrix();
-        this.db = new Level<string, string>(dbPath);
+        // Lower per-shard LevelDB block cache from the default 8 MB to 2 MB.
+        // 8 shards at default = 64 MB baseline; at 2 MB = 16 MB.
+        this.db = new Level<string, string>(dbPath, { blockSize: 4096, cacheSize: 2 * 1024 * 1024 });
 
         // Pre-compute Hash -> Index for O(1) prediction lookups
         dataBlocks.forEach((_, i) => {
@@ -39,8 +46,12 @@ export class ShardWorker {
                 if (!key.startsWith('w:')) break;
                 const parts = key.split(':');
                 if (parts.length === 3) {
-                    const [, from, to] = parts;
-                    this.matrix.recordTransition(from, to, parseInt(value));
+                    const [, fromHash, toHash] = parts;
+                    const fromIdx = this.hashToIndex.get(fromHash);
+                    if (fromIdx === undefined) continue;
+                    if (!this.transitions.has(fromIdx)) this.transitions.set(fromIdx, new Map());
+                    const targets = this.transitions.get(fromIdx)!;
+                    targets.set(toHash, (targets.get(toHash) || 0) + parseInt(value));
                 }
             }
         } catch (err) {
@@ -86,15 +97,18 @@ export class ShardWorker {
      * Persistent Training: Updates RAM and Disk.
      */
     async recordTransition(from: Hash, to: Hash) {
-        // 1. Update In-Memory Matrix
-        this.matrix.recordTransition(from, to);
+        const fromIdx = this.hashToIndex.get(from);
+        if (fromIdx === undefined) return;
 
-        // 2. Async Persist to LevelDB
-        const key = `w:${from}:${to}`;
-        const currentVal = await this.db.get(key).catch(() => '0') ?? '0';
-        const newVal = (parseInt(currentVal) + 1).toString();
+        // Update in-memory structure
+        if (!this.transitions.has(fromIdx)) this.transitions.set(fromIdx, new Map());
+        const targets = this.transitions.get(fromIdx)!;
+        const newWeight = (targets.get(to) || 0) + 1;
+        targets.set(to, newWeight);
 
-        await this.db.put(key, newVal).catch((err: unknown) => {
+        // Persist the live accumulated count — no preceding db.get() needed
+        // because the in-memory map always holds the correct cumulative value.
+        await this.db.put(`w:${from}:${to}`, newWeight.toString()).catch((err: unknown) => {
             console.error("Shard Persistence Error:", err);
         });
     }
@@ -115,11 +129,19 @@ export class ShardWorker {
         const hash = this.kernel.getLeafHash(idx);
         const proof = this.kernel.getProof(idx);
 
-        // Markov Prediction
-        const predictions = this.matrix.predictNext(hash);
+        // Markov Prediction — O(out-degree) linear scan, no allocation for the common top-1 case
+        const targets = this.transitions.get(idx);
+        let predictedHash: Hash | null = null;
+        if (targets && targets.size > 0) {
+            let bestHash: Hash | null = null;
+            let bestWeight = -Infinity;
+            for (const [h, w] of targets) {
+                if (w > bestWeight) { bestWeight = w; bestHash = h; }
+            }
+            predictedHash = bestHash;
+        }
         let next: DataAtom | null = null;
         let nextProof: MerkleProof | null = null;
-        let predictedHash: Hash | null = predictions[0] ?? null;
 
         if (predictedHash !== null) {
             const nIdx = this.hashToIndex.get(predictedHash);
@@ -134,9 +156,11 @@ export class ShardWorker {
         return { proof, next, nextProof, hash, predictedHash };
     }
 
-    /** Cluster-level stats — delegates to in-memory matrix, no DB I/O. */
+    /** Cluster-level stats — reads only Map sizes, no DB I/O, O(trainedAtoms). */
     getStats(): { trainedAtoms: number; totalEdges: number } {
-        return this.matrix.getStats();
+        let totalEdges = 0;
+        for (const t of this.transitions.values()) totalEdges += t.size;
+        return { trainedAtoms: this.transitions.size, totalEdges };
     }
 
     /**
@@ -149,8 +173,7 @@ export class ShardWorker {
     getWeights(item: DataAtom): { to: DataAtom | null; toHash: Hash; weight: number }[] | null {
         const idx = this.dataIndex.get(item);
         if (idx === undefined) return null;
-        const hash = this.kernel.getLeafHash(idx);
-        const transitions = this.matrix.getTransitions(hash);
+        const transitions = this.transitions.get(idx);
         if (!transitions || transitions.size === 0) return [];
 
         const result: { to: DataAtom | null; toHash: Hash; weight: number }[] = [];

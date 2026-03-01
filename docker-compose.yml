@@ -34,6 +34,12 @@ services:
       - GF_SECURITY_ADMIN_USER=${GF_SECURITY_ADMIN_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD:-admin}
       - GF_AUTH_DISABLE_LOGIN_FORM=false
+      # Explicitly disable anonymous access.
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      # Suppress the /api/live/ws 401 log entries that fire on every pre-login
+      # browser request. Grafana Live itself stays enabled (needed for Unified
+      # Alerting and any future streaming datasources); we just quiet the noise.
+      - GF_LOG_FILTERS=context:warn
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning
       - ./grafana/dashboards:/etc/grafana/dashboards
