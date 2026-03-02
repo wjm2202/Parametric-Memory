@@ -15,13 +15,14 @@
 import { ShardedOrchestrator } from '../../orchestrator';
 import { buildApp } from '../../server';
 import type { FastifyInstance } from 'fastify';
+const atom = (value: string) => `v1.other.${value}`;
 
 // ── Atom set ──────────────────────────────────────────────────────────────────
 
 /** 200 uniquely named atoms. "N_000" … "N_199". */
 export const LARGE_ATOMS: string[] = Array.from(
     { length: 200 },
-    (_, i) => `N_${String(i).padStart(3, '0')}`
+    (_, i) => atom(`N_${String(i).padStart(3, '0')}`)
 );
 
 // ── Chain definitions ─────────────────────────────────────────────────────────

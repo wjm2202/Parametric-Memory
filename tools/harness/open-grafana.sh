@@ -20,7 +20,7 @@ fi
 GRAFANA_USER="${GF_SECURITY_ADMIN_USER:-admin}"
 GRAFANA_PASS="${GF_SECURITY_ADMIN_PASSWORD:-admin}"
 GRAFANA_URL="http://localhost:3001"
-DASHBOARD_URL="${GRAFANA_URL}/d/mmpm-sprint7-harness/mmpm-sprint-7-harness?orgId=1&from=now-30m&to=now&timezone=browser"
+DASHBOARD_URL="${GRAFANA_URL}/d/mmpm-sprint7-harness/mmpm-sprint-7-harness?orgId=1&from=now-15m&to=now&timezone=browser"
 EXPORTER_URL="http://127.0.0.1:9466"
 EXPORTER_LOG="/tmp/mmpm-bench-exporter.log"
 EXPORTER_PID_FILE="/tmp/mmpm-bench-exporter.pid"

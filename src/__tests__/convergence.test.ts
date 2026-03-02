@@ -25,6 +25,8 @@ import {
     expectedDominant,
     GroundTruthEdge,
 } from '../generator';
+const atom = (value: string) => `v1.other.${value}`;
+const deatomize = (value: string) => value.startsWith('v1.other.') ? value.slice('v1.other.'.length) : value;
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -41,12 +43,12 @@ function captureWeights(
     sequencesSeen: number,
 ): WeightSnapshot {
     const weights = new Map<string, { to: string; weight: number; ratio: number }[]>();
-    for (const atom of atoms) {
-        const raw = orchestrator.getWeights(atom);
+    for (const source of atoms) {
+        const raw = orchestrator.getWeights(atom(source));
         if (!raw) continue;
         const total = raw.reduce((s, t) => s + t.weight, 0);
-        weights.set(atom, raw.map(t => ({
-            to: t.to,
+        weights.set(source, raw.map(t => ({
+            to: deatomize(t.to),
             weight: t.weight,
             ratio: total > 0 ? t.weight / total : 0,
         })));
@@ -67,13 +69,13 @@ function printLearningCurve(history: WeightSnapshot[], sourceAtom: string): void
 
 async function trainEpoch(orchestrator: ShardedOrchestrator, sequences: string[][]): Promise<void> {
     for (const seq of sequences) {
-        await orchestrator.train(seq);
+        await orchestrator.train(seq.map(atom));
     }
 }
 
 function makeOrchestrator(atoms: string[]): { orchestrator: ShardedOrchestrator; dbDir: string } {
     const dbDir = mkdtempSync(join(tmpdir(), 'mmpm-convergence-'));
-    const orchestrator = new ShardedOrchestrator(2, atoms, dbDir);
+    const orchestrator = new ShardedOrchestrator(2, atoms.map(atom), dbDir);
     return { orchestrator, dbDir };
 }
 
@@ -119,20 +121,20 @@ describe('Convergence Study 1: dominant path (70/30 split)', () => {
     }, 30_000);
 
     afterAll(async () => {
-        await orchestrator.close();
+        if (orchestrator) await orchestrator.close();
         rmSync(dbDir, { recursive: true, force: true });
     });
 
     it('after full training, dominant prediction is S1_B (the 70% path)', () => {
         const dominant = expectedDominant(GROUND_TRUTH);
-        const weights = orchestrator.getWeights('S1_A');
+        const weights = captureWeights(orchestrator, ['S1_A'], 0, 0).weights.get('S1_A');
         expect(weights).not.toBeNull();
         expect(weights!.length).toBeGreaterThan(0);
         expect(weights![0].to).toBe(dominant.get('S1_A'));
     });
 
     it('S1_B weight is strictly greater than S1_C weight after training', () => {
-        const weights = orchestrator.getWeights('S1_A')!;
+        const weights = captureWeights(orchestrator, ['S1_A'], 0, 0).weights.get('S1_A')!;
         const bWeight = weights.find(t => t.to === 'S1_B')?.weight ?? 0;
         const cWeight = weights.find(t => t.to === 'S1_C')?.weight ?? 0;
         expect(bWeight).toBeGreaterThan(cWeight);
@@ -176,16 +178,16 @@ describe('Convergence Study 2: weight flip (B dominant → C overtakes)', () => 
         await orchestrator.init();
 
         await trainEpoch(orchestrator, PHASE1_SEQ);
-        afterPhase1 = orchestrator.getWeights('S2_A') ?? [];
+        afterPhase1 = (orchestrator.getWeights(atom('S2_A')) ?? []).map(t => ({ to: deatomize(t.to), weight: t.weight }));
         console.log('\n  After Phase 1 (A→B ×10):', afterPhase1);
 
         await trainEpoch(orchestrator, PHASE2_SEQ);
-        afterPhase2 = orchestrator.getWeights('S2_A') ?? [];
+        afterPhase2 = (orchestrator.getWeights(atom('S2_A')) ?? []).map(t => ({ to: deatomize(t.to), weight: t.weight }));
         console.log('  After Phase 2 (A→C ×30):', afterPhase2);
     }, 30_000);
 
     afterAll(async () => {
-        await orchestrator.close();
+        if (orchestrator) await orchestrator.close();
         rmSync(dbDir, { recursive: true, force: true });
     });
 
@@ -258,7 +260,7 @@ describe('Convergence Study 3: multi-source convergence', () => {
     }, 30_000);
 
     afterAll(async () => {
-        await orchestrator.close();
+        if (orchestrator) await orchestrator.close();
         rmSync(dbDir, { recursive: true, force: true });
     });
 
@@ -270,7 +272,7 @@ describe('Convergence Study 3: multi-source convergence', () => {
 
     for (const [source, expectedNext] of dominant) {
         it(`[${source}] converges to predict '${expectedNext}'`, () => {
-            const weights = orchestrator.getWeights(source);
+            const weights = captureWeights(orchestrator, [source], 0, 0).weights.get(source);
             expect(weights).not.toBeNull();
             expect(weights!.length).toBeGreaterThan(0);
             expect(weights![0].to).toBe(expectedNext);
@@ -290,35 +292,35 @@ describe('Convergence Study 4: GET /weights API contract', () => {
         ({ orchestrator, dbDir } = makeOrchestrator(['W_A', 'W_B', 'W_C']));
         await orchestrator.init();
         // Train deterministic weights: W_A→W_B ×3, W_A→W_C ×1
-        for (let i = 0; i < 3; i++) await orchestrator.train(['W_A', 'W_B']);
-        await orchestrator.train(['W_A', 'W_C']);
+        for (let i = 0; i < 3; i++) await orchestrator.train([atom('W_A'), atom('W_B')]);
+        await orchestrator.train([atom('W_A'), atom('W_C')]);
     });
 
     afterAll(async () => {
-        await orchestrator.close();
+        if (orchestrator) await orchestrator.close();
         rmSync(dbDir, { recursive: true, force: true });
     });
 
     it('returns transitions sorted descending by weight', () => {
-        const weights = orchestrator.getWeights('W_A')!;
+        const weights = captureWeights(orchestrator, ['W_A'], 0, 0).weights.get('W_A')!;
         for (let i = 1; i < weights.length; i++) {
             expect(weights[i - 1].weight).toBeGreaterThanOrEqual(weights[i].weight);
         }
     });
 
     it('dominant next is W_B (weight 3 > weight 1)', () => {
-        const weights = orchestrator.getWeights('W_A')!;
+        const weights = captureWeights(orchestrator, ['W_A'], 0, 0).weights.get('W_A')!;
         expect(weights[0].to).toBe('W_B');
         expect(weights[0].weight).toBe(3);
     });
 
     it('returns empty array for an untrained atom (no outgoing transitions)', () => {
-        const weights = orchestrator.getWeights('W_B');
+        const weights = orchestrator.getWeights(atom('W_B'));
         expect(weights).toEqual([]);
     });
 
     it('returns null for an atom not in any shard', () => {
-        const weights = orchestrator.getWeights('NOT_IN_CLUSTER');
+        const weights = orchestrator.getWeights(atom('NOT_IN_CLUSTER'));
         expect(weights).toBeNull();
     });
 });

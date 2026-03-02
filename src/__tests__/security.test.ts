@@ -35,6 +35,8 @@ import { ShardRouter } from '../router';
 import { MerkleKernel } from '../merkle';
 import { buildApp } from '../server';
 import type { MerkleProof } from '../types';
+const atom = (value: string) => `v1.other.${value}`;
+const weightsUrl = (value: string) => `/weights/${encodeURIComponent(value)}`;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -70,7 +72,7 @@ async function inject(
 // Auth-guarded server
 let guardedServer: FastifyInstance;
 let guardedOrch: ShardedOrchestrator;
-const ATOMS = ['Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon', 'Zeta', 'Eta', 'Theta'];
+const ATOMS = ['Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon', 'Zeta', 'Eta', 'Theta'].map(atom);
 const API_KEY = 'super-secret-key';
 
 // Open server (no API key)
@@ -89,7 +91,7 @@ beforeAll(async () => {
         guardedServer = server;
         guardedOrch = orchestrator;
         // Train a sequence for prediction tests
-        await orchestrator.train(['Alpha', 'Beta', 'Gamma', 'Delta']);
+        await orchestrator.train([atom('Alpha'), atom('Beta'), atom('Gamma'), atom('Delta')]);
     }
     {
         const { server, orchestrator } = buildApp({
@@ -100,15 +102,15 @@ beforeAll(async () => {
         await orchestrator.init();
         openServer = server;
         openOrch = orchestrator;
-        await orchestrator.train(['Alpha', 'Beta', 'Gamma', 'Delta']);
+        await orchestrator.train([atom('Alpha'), atom('Beta'), atom('Gamma'), atom('Delta')]);
     }
 });
 
 afterAll(async () => {
-    await guardedServer.close();
-    await guardedOrch.close();
-    await openServer.close();
-    await openOrch.close();
+    if (guardedServer) await guardedServer.close();
+    if (guardedOrch) await guardedOrch.close();
+    if (openServer) await openServer.close();
+    if (openOrch) await openOrch.close();
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -117,9 +119,9 @@ afterAll(async () => {
 
 describe('Security — missing token is rejected on all data routes', () => {
     const routes: Array<{ method: 'POST' | 'GET'; url: string; payload?: unknown }> = [
-        { method: 'POST', url: '/access', payload: { data: 'Alpha' } },
-        { method: 'POST', url: '/train', payload: { sequence: ['Alpha', 'Beta'] } },
-        { method: 'GET', url: '/weights/Alpha' },
+        { method: 'POST', url: '/access', payload: { data: atom('Alpha') } },
+        { method: 'POST', url: '/train', payload: { sequence: [atom('Alpha'), atom('Beta')] } },
+        { method: 'GET', url: weightsUrl(atom('Alpha')) },
     ];
 
     for (const { method, url, payload } of routes) {
@@ -138,18 +140,18 @@ describe('Security — missing token is rejected on all data routes', () => {
 describe('Security — wrong token rejected', () => {
     it('POST /access → 401 with wrong token', async () => {
         const res = await inject(guardedServer, 'POST', '/access',
-            { payload: { data: 'Alpha' }, token: 'Bearer wrong-key' });
+            { payload: { data: atom('Alpha') }, token: 'Bearer wrong-key' });
         expect(res.statusCode).toBe(401);
     });
 
     it('POST /train → 401 with wrong token', async () => {
         const res = await inject(guardedServer, 'POST', '/train',
-            { payload: { sequence: ['Alpha', 'Beta'] }, token: 'Bearer wrong-key' });
+            { payload: { sequence: [atom('Alpha'), atom('Beta')] }, token: 'Bearer wrong-key' });
         expect(res.statusCode).toBe(401);
     });
 
     it('GET /weights/Alpha → 401 with wrong token', async () => {
-        const res = await inject(guardedServer, 'GET', '/weights/Alpha',
+        const res = await inject(guardedServer, 'GET', weightsUrl(atom('Alpha')),
             { token: 'Bearer wrong-key' });
         expect(res.statusCode).toBe(401);
     });
@@ -174,7 +176,7 @@ describe('Security — malformed Authorization header shapes are rejected', () =
             const headers: Record<string, string> = { authorization: value };
             const res = await guardedServer.inject({
                 method: 'POST', url: '/access',
-                payload: { data: 'Alpha' },
+                payload: { data: atom('Alpha') },
                 headers,
             });
             expect(res.statusCode).toBe(401);
@@ -191,18 +193,18 @@ describe('Security — correct token accepted on all data routes', () => {
 
     it('POST /access → 200 with correct token', async () => {
         const res = await inject(guardedServer, 'POST', '/access',
-            { payload: { data: 'Alpha' }, token: auth });
+            { payload: { data: atom('Alpha') }, token: auth });
         expect(res.statusCode).toBe(200);
     });
 
     it('POST /train → 200 with correct token', async () => {
         const res = await inject(guardedServer, 'POST', '/train',
-            { payload: { sequence: ['Alpha', 'Beta'] }, token: auth });
+            { payload: { sequence: [atom('Alpha'), atom('Beta')] }, token: auth });
         expect(res.statusCode).toBe(200);
     });
 
     it('GET /weights/Alpha → 200 with correct token', async () => {
-        const res = await inject(guardedServer, 'GET', '/weights/Alpha',
+        const res = await inject(guardedServer, 'GET', weightsUrl(atom('Alpha')),
             { token: auth });
         expect(res.statusCode).toBe(200);
     });
@@ -233,12 +235,12 @@ describe('Security — /metrics is always unauthenticated', () => {
 describe('Security — open server requires no authentication', () => {
     it('POST /access → 200 with no token on open server', async () => {
         const res = await inject(openServer, 'POST', '/access',
-            { payload: { data: 'Alpha' } });
+            { payload: { data: atom('Alpha') } });
         expect(res.statusCode).toBe(200);
     });
 
     it('GET /weights/Alpha → 200 with no token on open server', async () => {
-        const res = await inject(openServer, 'GET', '/weights/Alpha');
+        const res = await inject(openServer, 'GET', weightsUrl(atom('Alpha')));
         expect(res.statusCode).toBe(200);
     });
 });
@@ -250,7 +252,7 @@ describe('Security — open server requires no authentication', () => {
 describe('Security — Merkle proof integrity at the API level', () => {
     it('currentProof in /access response independently verifies', async () => {
         const res = await inject(openServer, 'POST', '/access',
-            { payload: { data: 'Alpha' } });
+            { payload: { data: atom('Alpha') } });
         expect(res.statusCode).toBe(200);
         const body = JSON.parse(res.payload);
         expect(MerkleKernel.verifyProof(body.currentProof)).toBe(true);
@@ -258,7 +260,7 @@ describe('Security — Merkle proof integrity at the API level', () => {
 
     it('predictedProof, when present, independently verifies', async () => {
         const res = await inject(openServer, 'POST', '/access',
-            { payload: { data: 'Alpha' } });
+            { payload: { data: atom('Alpha') } });
         const body = JSON.parse(res.payload);
         if (body.predictedProof) {
             expect(MerkleKernel.verifyProof(body.predictedProof)).toBe(true);
@@ -267,7 +269,7 @@ describe('Security — Merkle proof integrity at the API level', () => {
 
     it('shardRootProof, when present, independently verifies', async () => {
         const res = await inject(openServer, 'POST', '/access',
-            { payload: { data: 'Alpha' } });
+            { payload: { data: atom('Alpha') } });
         const body = JSON.parse(res.payload);
         if (body.shardRootProof) {
             expect(MerkleKernel.verifyProof(body.shardRootProof)).toBe(true);
@@ -276,21 +278,21 @@ describe('Security — Merkle proof integrity at the API level', () => {
 
     it('proof root is a 64-char hex SHA-256 digest', async () => {
         const res = await inject(openServer, 'POST', '/access',
-            { payload: { data: 'Beta' } });
+            { payload: { data: atom('Beta') } });
         const body = JSON.parse(res.payload);
         expect(body.currentProof.root).toMatch(/^[a-f0-9]{64}$/);
     });
 
     it('proof survives JSON round-trip and still verifies', async () => {
         const res = await inject(openServer, 'POST', '/access',
-            { payload: { data: 'Gamma' } });
+            { payload: { data: atom('Gamma') } });
         const proof: MerkleProof = JSON.parse(JSON.stringify(JSON.parse(res.payload).currentProof));
         expect(MerkleKernel.verifyProof(proof)).toBe(true);
     });
 
     it('mutating the leaf in a serialised proof breaks verification', async () => {
         const res = await inject(openServer, 'POST', '/access',
-            { payload: { data: 'Delta' } });
+            { payload: { data: atom('Delta') } });
         const proof: MerkleProof = JSON.parse(res.payload).currentProof;
         proof.leaf = 'ff'.repeat(32); // tamper
         expect(MerkleKernel.verifyProof(proof)).toBe(false);
@@ -298,7 +300,7 @@ describe('Security — Merkle proof integrity at the API level', () => {
 
     it('mutating the first audit path node breaks verification', async () => {
         const res = await inject(openServer, 'POST', '/access',
-            { payload: { data: 'Alpha' } });
+            { payload: { data: atom('Alpha') } });
         const proof: MerkleProof = JSON.parse(res.payload).currentProof;
         if (proof.auditPath.length > 0) {
             proof.auditPath[0] = '00'.repeat(32); // tamper
@@ -326,20 +328,22 @@ describe('Security — Merkle proof integrity at the API level', () => {
 
 describe('Security — cross-shard prediction proof integrity', () => {
     it('predictedProof for a cross-shard edge is verifiable', async () => {
-        // Find a cross-shard pair from the ATOMS set
         const router = new ShardRouter(4);
+        const candidates = [atom('Epsilon'), atom('Zeta'), atom('Eta'), atom('Theta')];
         let from: string | null = null;
         let to: string | null = null;
         outer:
-        for (const a of ATOMS) {
-            for (const b of ATOMS) {
+        for (const a of candidates) {
+            for (const b of candidates) {
                 if (a !== b && router.getShardIndex(a) !== router.getShardIndex(b)) {
-                    from = a; to = b;
+                    from = a;
+                    to = b;
                     break outer;
                 }
             }
         }
-        expect(from, 'could not find cross-shard pair').not.toBeNull();
+        expect(from).not.toBeNull();
+        expect(to).not.toBeNull();
 
         // Train the cross-shard edge
         await inject(openServer, 'POST', '/train',
@@ -349,7 +353,7 @@ describe('Security — cross-shard prediction proof integrity', () => {
             { payload: { data: from! } });
         const body = JSON.parse(res.payload);
 
-        expect(body.predictedNext).toBe(to);
+        expect(body.predictedNext).toBe(to!);
         if (body.predictedProof) {
             expect(MerkleKernel.verifyProof(body.predictedProof)).toBe(true);
         }

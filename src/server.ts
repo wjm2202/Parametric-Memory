@@ -6,6 +6,7 @@ import { IngestionPipeline } from './ingestion';
 import { collectDefaultMetrics, register } from 'prom-client';
 import { accessCounter, requestDuration, trainCounter, trainSequenceLength, atomDominanceRatio, atomTrainedEdges, clusterTotalEdges, clusterTrainedAtoms } from './metrics';
 import { logger } from './logger';
+import { assertAtomsV1, encodeAtomV1, isAtomV1, normalizeAtomInput } from './atom_schema';
 
 // Collect Node.js / process metrics automatically (visible at GET /metrics)
 collectDefaultMetrics();
@@ -18,21 +19,28 @@ interface BuildAppOpts {
     apiKey?: string;
 }
 
+const SCHEMA_ERROR = "schema v1 required: use 'v1.<type>.<value>' or object { type, value } with type in {fact,event,relation,state,other}.";
+
 /** Load a JSON seed file and return its atom array, or null on any error. */
 function loadSeedFile(filePath: string): string[] | null {
     try {
         const raw = readFileSync(filePath, 'utf-8');
         const parsed = JSON.parse(raw);
-        if (!Array.isArray(parsed) || !parsed.every((x: unknown) => typeof x === 'string')) {
-            logger.warn(`MMPM seed file '${filePath}' must be a JSON array of strings — ignored.`);
+        if (!Array.isArray(parsed)) {
+            logger.warn(`MMPM seed file '${filePath}' must be a JSON array — ignored.`);
+            return null;
+        }
+        const normalized = parsed.map(normalizeAtomInput);
+        if (normalized.some(x => x === null)) {
+            logger.warn(`MMPM seed file '${filePath}' contains non-v1 atoms — ignored.`);
             return null;
         }
         if (parsed.length === 0) {
             logger.warn(`MMPM seed file '${filePath}' is empty — ignored.`);
             return null;
         }
-        logger.info(`MMPM loaded ${parsed.length} atoms from seed file: ${filePath}`);
-        return parsed as string[];
+        logger.info(`MMPM loaded ${normalized.length} schema-v1 atoms from seed file: ${filePath}`);
+        return normalized as string[];
     } catch (e: any) {
         logger.warn(`MMPM could not read seed file '${filePath}': ${e.message}`);
         return null;
@@ -54,7 +62,17 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
         opts.data ??
         (seedFilePath ? loadSeedFile(seedFilePath) : null) ??
         (process.env.MMPM_INITIAL_DATA?.split(',')) ??
-        ['Node_A', 'Node_B', 'Node_C', 'Node_D', 'Node_E', 'Step_1', 'Step_2'];
+        [
+            encodeAtomV1('other', 'Node_A'),
+            encodeAtomV1('other', 'Node_B'),
+            encodeAtomV1('other', 'Node_C'),
+            encodeAtomV1('other', 'Node_D'),
+            encodeAtomV1('other', 'Node_E'),
+            encodeAtomV1('other', 'Step_1'),
+            encodeAtomV1('other', 'Step_2'),
+        ];
+
+    assertAtomsV1(initialData, 'initialData');
 
     const apiKey = opts.apiKey ?? (process.env.MMPM_API_KEY || undefined);
     const orchestrator = new ShardedOrchestrator(numShards, initialData, dbBasePath);
@@ -98,11 +116,11 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
         let item: string | undefined;
         let warmRead = false;
         try {
-            const body = request.body as { data?: string; warmRead?: boolean };
-            item = body.data;
+            const body = request.body as { data?: unknown; warmRead?: boolean };
+            item = normalizeAtomInput(body.data) ?? undefined;
             warmRead = body.warmRead === true;
-            if (!item || typeof item !== 'string') {
-                return reply.status(400).send({ error: "Property 'data' is required." });
+            if (!item) {
+                return reply.status(400).send({ error: `Property 'data' invalid — ${SCHEMA_ERROR}` });
             }
             const report = await orchestrator.access(item);
             const result = report.predictedNext !== null ? 'hit' : 'miss';
@@ -143,17 +161,21 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
     server.post('/train', async (request, reply) => {
         try {
             const { sequence } = request.body as { sequence?: unknown };
-            if (!sequence || !Array.isArray(sequence) || !sequence.every(s => typeof s === 'string')) {
-                return reply.status(400).send({ error: "Property 'sequence' must be a non-empty array of strings." });
+            if (!sequence || !Array.isArray(sequence) || sequence.length === 0) {
+                return reply.status(400).send({ error: "Property 'sequence' must be a non-empty array." });
             }
-            await orchestrator.train(sequence as string[]);
+            const normalized = sequence.map(normalizeAtomInput);
+            if (normalized.some(x => x === null)) {
+                return reply.status(400).send({ error: `Property 'sequence' invalid — ${SCHEMA_ERROR}` });
+            }
+            await orchestrator.train(normalized as string[]);
             trainCounter.inc();
-            trainSequenceLength.observe(sequence.length);
+            trainSequenceLength.observe(normalized.length);
 
             // Update per-atom learning metrics.
             // Only iterates atoms that appeared as `from` in this sequence —
             // O(sequence_length - 1), never scans the full atom pool.
-            const fromAtoms = new Set((sequence as string[]).slice(0, -1));
+            const fromAtoms = new Set((normalized as string[]).slice(0, -1));
             for (const atom of fromAtoms) {
                 const weights = orchestrator.getWeights(atom);
                 if (weights && weights.length > 0) {
@@ -167,7 +189,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             clusterTotalEdges.set(stats.totalEdges);
             clusterTrainedAtoms.set(stats.trainedAtoms);
 
-            return { status: 'Success', message: `Trained path of length ${sequence.length} across shards.` };
+            return { status: 'Success', message: `Trained path of length ${normalized.length} across shards.` };
         } catch (e: any) {
             return reply.status(500).send({ error: e.message });
         }
@@ -243,12 +265,16 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
     server.post('/atoms', async (request, reply) => {
         try {
             const { atoms } = request.body as { atoms?: unknown };
-            if (!Array.isArray(atoms) || atoms.length === 0 || !atoms.every(a => typeof a === 'string')) {
-                return reply.status(400).send({ error: "'atoms' must be a non-empty array of strings." });
+            if (!Array.isArray(atoms) || atoms.length === 0) {
+                return reply.status(400).send({ error: "'atoms' must be a non-empty array." });
+            }
+            const normalized = atoms.map(normalizeAtomInput);
+            if (normalized.some(x => x === null)) {
+                return reply.status(400).send({ error: `'atoms' invalid — ${SCHEMA_ERROR}` });
             }
             const admission = orchestrator.getWriteAdmission(
                 pipeline.getStats().queueDepth,
-                atoms.length
+                normalized.length
             );
             if (!admission.accept) {
                 reply.header('Retry-After', String(admission.retryAfterSec));
@@ -262,7 +288,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
                     },
                 });
             }
-            const receipt = await pipeline.enqueue(atoms as string[]);
+            const receipt = await pipeline.enqueue(normalized as string[]);
             return { status: 'Queued', ...receipt };
         } catch (e: any) {
             return reply.status(500).send({ error: e.message });
@@ -311,6 +337,9 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
      */
     server.delete('/atoms/:atom', async (request, reply) => {
         const { atom } = request.params as { atom: string };
+        if (!isAtomV1(atom)) {
+            return reply.status(400).send({ error: `Path param 'atom' invalid — ${SCHEMA_ERROR}` });
+        }
         try {
             const treeVersion = await orchestrator.removeAtom(atom);
             return { status: 'Success', tombstonedAtom: atom, treeVersion };
@@ -328,6 +357,23 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             atoms: orchestrator.listAtoms(),
             treeVersion: orchestrator.getMasterVersion(),
         };
+    });
+
+    /**
+     * GET /atoms/:atom  —  Inspect a single atom's stored record.
+     * Returns shard assignment, status, hash, commit visibility, and
+     * outgoing learned transitions.
+     */
+    server.get('/atoms/:atom', async (request, reply) => {
+        const { atom } = request.params as { atom: string };
+        if (!isAtomV1(atom)) {
+            return reply.status(400).send({ error: `Path param 'atom' invalid — ${SCHEMA_ERROR}` });
+        }
+        const record = orchestrator.inspectAtom(atom);
+        if (!record) {
+            return reply.status(404).send({ error: `Atom '${atom}' not found in any shard.` });
+        }
+        return record;
     });
 
     return { server, orchestrator, pipeline };

@@ -11,6 +11,7 @@
  * lifecycle harness in lifecycle.test.ts.
  */
 import { DataAtom } from '../../types';
+const atom = (value: string): DataAtom => `v1.other.${value}`;
 
 export interface TrainingStep {
     /** Sequence of atoms to train in order, e.g. ['A', 'B', 'C'] */
@@ -59,15 +60,15 @@ export interface TestScenario {
 export const LINEAR_CHAIN: TestScenario = {
     name: 'linear-chain',
     description: 'Single unambiguous path A→B→C→D. Each atom predicts the next; D predicts null.',
-    atoms: ['Alpha', 'Beta', 'Gamma', 'Delta'],
+    atoms: [atom('Alpha'), atom('Beta'), atom('Gamma'), atom('Delta')],
     training: [
-        { sequence: ['Alpha', 'Beta', 'Gamma', 'Delta'], repeat: 3 },
+        { sequence: [atom('Alpha'), atom('Beta'), atom('Gamma'), atom('Delta')], repeat: 3 },
     ],
     expectations: [
-        { from: 'Alpha', expectedNext: 'Beta',  reason: 'Alpha trained exclusively → Beta' },
-        { from: 'Beta',  expectedNext: 'Gamma', reason: 'Beta trained exclusively → Gamma' },
-        { from: 'Gamma', expectedNext: 'Delta', reason: 'Gamma trained exclusively → Delta' },
-        { from: 'Delta', expectedNext: null,    reason: 'Delta is terminal — no outgoing transitions' },
+        { from: atom('Alpha'), expectedNext: atom('Beta'),  reason: 'Alpha trained exclusively → Beta' },
+        { from: atom('Beta'),  expectedNext: atom('Gamma'), reason: 'Beta trained exclusively → Gamma' },
+        { from: atom('Gamma'), expectedNext: atom('Delta'), reason: 'Gamma trained exclusively → Delta' },
+        { from: atom('Delta'), expectedNext: null,          reason: 'Delta is terminal — no outgoing transitions' },
     ],
 };
 
@@ -79,16 +80,16 @@ export const LINEAR_CHAIN: TestScenario = {
 export const FORKING_PATH: TestScenario = {
     name: 'forking-path',
     description: 'Root has two successors. Dominant path trained 5× should win over 1× Minority.',
-    atoms: ['Root', 'Dominant', 'Minority', 'End'],
+    atoms: [atom('Root'), atom('Dominant'), atom('Minority'), atom('End')],
     training: [
-        { sequence: ['Root', 'Dominant', 'End'], repeat: 5 },
-        { sequence: ['Root', 'Minority', 'End'], repeat: 1 },
+        { sequence: [atom('Root'), atom('Dominant'), atom('End')], repeat: 5 },
+        { sequence: [atom('Root'), atom('Minority'), atom('End')], repeat: 1 },
     ],
     expectations: [
-        { from: 'Root',      expectedNext: 'Dominant', reason: 'Root→Dominant weight 5 > Root→Minority weight 1' },
-        { from: 'Dominant',  expectedNext: 'End',      reason: 'Dominant trained exclusively → End' },
-        { from: 'Minority',  expectedNext: 'End',      reason: 'Minority trained exclusively → End' },
-        { from: 'End',       expectedNext: null,        reason: 'End is terminal in all training sequences' },
+        { from: atom('Root'),      expectedNext: atom('Dominant'), reason: 'Root→Dominant weight 5 > Root→Minority weight 1' },
+        { from: atom('Dominant'),  expectedNext: atom('End'),      reason: 'Dominant trained exclusively → End' },
+        { from: atom('Minority'),  expectedNext: atom('End'),      reason: 'Minority trained exclusively → End' },
+        { from: atom('End'),       expectedNext: null,             reason: 'End is terminal in all training sequences' },
     ],
 };
 
@@ -100,15 +101,15 @@ export const FORKING_PATH: TestScenario = {
 export const CIRCULAR: TestScenario = {
     name: 'circular',
     description: 'Loop A→B→C→A. Prediction should follow the ring regardless of entry point.',
-    atoms: ['Loop_A', 'Loop_B', 'Loop_C'],
+    atoms: [atom('Loop_A'), atom('Loop_B'), atom('Loop_C')],
     training: [
         // Train the full cycle 4× to build strong weights on all three edges
-        { sequence: ['Loop_A', 'Loop_B', 'Loop_C', 'Loop_A', 'Loop_B', 'Loop_C'], repeat: 4 },
+        { sequence: [atom('Loop_A'), atom('Loop_B'), atom('Loop_C'), atom('Loop_A'), atom('Loop_B'), atom('Loop_C')], repeat: 4 },
     ],
     expectations: [
-        { from: 'Loop_A', expectedNext: 'Loop_B', reason: 'Loop_A→Loop_B is the trained transition' },
-        { from: 'Loop_B', expectedNext: 'Loop_C', reason: 'Loop_B→Loop_C is the trained transition' },
-        { from: 'Loop_C', expectedNext: 'Loop_A', reason: 'Loop_C→Loop_A closes the ring' },
+        { from: atom('Loop_A'), expectedNext: atom('Loop_B'), reason: 'Loop_A→Loop_B is the trained transition' },
+        { from: atom('Loop_B'), expectedNext: atom('Loop_C'), reason: 'Loop_B→Loop_C is the trained transition' },
+        { from: atom('Loop_C'), expectedNext: atom('Loop_A'), reason: 'Loop_C→Loop_A closes the ring' },
     ],
 };
 
@@ -121,16 +122,16 @@ export const CIRCULAR: TestScenario = {
 export const CONVERGENT: TestScenario = {
     name: 'convergent',
     description: 'PathX and PathY both lead to Hub. Hub→End regardless of which path was taken.',
-    atoms: ['PathX_Start', 'PathY_Start', 'Hub', 'End'],
+    atoms: [atom('PathX_Start'), atom('PathY_Start'), atom('Hub'), atom('End')],
     training: [
-        { sequence: ['PathX_Start', 'Hub', 'End'], repeat: 3 },
-        { sequence: ['PathY_Start', 'Hub', 'End'], repeat: 3 },
+        { sequence: [atom('PathX_Start'), atom('Hub'), atom('End')], repeat: 3 },
+        { sequence: [atom('PathY_Start'), atom('Hub'), atom('End')], repeat: 3 },
     ],
     expectations: [
-        { from: 'PathX_Start', expectedNext: 'Hub', reason: 'PathX trained exclusively into Hub' },
-        { from: 'PathY_Start', expectedNext: 'Hub', reason: 'PathY trained exclusively into Hub' },
-        { from: 'Hub',         expectedNext: 'End', reason: 'Hub trained exclusively → End' },
-        { from: 'End',         expectedNext: null,  reason: 'End is terminal' },
+        { from: atom('PathX_Start'), expectedNext: atom('Hub'), reason: 'PathX trained exclusively into Hub' },
+        { from: atom('PathY_Start'), expectedNext: atom('Hub'), reason: 'PathY trained exclusively into Hub' },
+        { from: atom('Hub'),         expectedNext: atom('End'), reason: 'Hub trained exclusively → End' },
+        { from: atom('End'),         expectedNext: null,        reason: 'End is terminal' },
     ],
 };
 
@@ -143,13 +144,13 @@ export const CONVERGENT: TestScenario = {
 export const UNTRAINED_ATOM: TestScenario = {
     name: 'untrained-atom',
     description: 'Orphan atom exists in the pool but receives no training. Proof valid, prediction null.',
-    atoms: ['Trained_A', 'Trained_B', 'Orphan'],
+    atoms: [atom('Trained_A'), atom('Trained_B'), atom('Orphan')],
     training: [
-        { sequence: ['Trained_A', 'Trained_B'], repeat: 2 },
+        { sequence: [atom('Trained_A'), atom('Trained_B')], repeat: 2 },
     ],
     expectations: [
-        { from: 'Trained_A', expectedNext: 'Trained_B', reason: 'Trained_A→Trained_B is the only training path' },
-        { from: 'Orphan',    expectedNext: null,         reason: 'Orphan has no outgoing transitions — no training' },
+        { from: atom('Trained_A'), expectedNext: atom('Trained_B'), reason: 'Trained_A→Trained_B is the only training path' },
+        { from: atom('Orphan'),    expectedNext: null,               reason: 'Orphan has no outgoing transitions — no training' },
     ],
 };
 
@@ -162,13 +163,13 @@ export const UNTRAINED_ATOM: TestScenario = {
 export const REINFORCEMENT: TestScenario = {
     name: 'reinforcement',
     description: 'Same transition trained 20×. Weight accumulates; prediction remains stable.',
-    atoms: ['Src', 'Dst', 'Noise'],
+    atoms: [atom('Src'), atom('Dst'), atom('Noise')],
     training: [
-        { sequence: ['Src', 'Dst'],   repeat: 20 },
-        { sequence: ['Src', 'Noise'], repeat: 1  },
+        { sequence: [atom('Src'), atom('Dst')],   repeat: 20 },
+        { sequence: [atom('Src'), atom('Noise')], repeat: 1  },
     ],
     expectations: [
-        { from: 'Src', expectedNext: 'Dst', reason: 'Dst weight 20 dominates Noise weight 1' },
+        { from: atom('Src'), expectedNext: atom('Dst'), reason: 'Dst weight 20 dominates Noise weight 1' },
     ],
 };
 

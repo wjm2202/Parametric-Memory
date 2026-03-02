@@ -53,6 +53,7 @@ import { MasterKernel } from '../master';
 import { ShardWorker } from '../shard_worker';
 import { ShardedOrchestrator } from '../orchestrator';
 import { MMPMValidator } from '../validator';
+const atom = (value: string) => `v1.other.${value}`;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -147,44 +148,44 @@ describe('MerkleKernel — tombstone()', () => {
 
 describe('ShardWorker — addAtoms()', () => {
     it('registered atoms are accessible after addAtoms()', async () => {
-        const worker = new ShardWorker(['A', 'B'], tempDb('sw-add'));
+        const worker = new ShardWorker([atom('A'), atom('B')], tempDb('sw-add'));
         await worker.init();
 
         const rootBefore = worker.getKernelRoot();
-        await worker.addAtoms(['C', 'D']);
+        await worker.addAtoms([atom('C'), atom('D')]);
         // In the snapshot model, atoms are queued in PendingWrites until commit().
         // commit() performs the atomic snapshot swap — only then does getKernelRoot() change.
         await worker.commit();
 
         expect(worker.getKernelRoot()).not.toBe(rootBefore); // root changed after commit
         // C and D are now reachable
-        const resultC = await worker.access('C');
+        const resultC = await worker.access(atom('C'));
         expect(resultC.proof.leaf).toMatch(/^[a-f0-9]{64}$/);
-        const resultD = await worker.access('D');
+        const resultD = await worker.access(atom('D'));
         expect(resultD.proof.leaf).toMatch(/^[a-f0-9]{64}$/);
         await worker.close();
     });
 
     it('getHash() returns valid hashes for dynamically added atoms', async () => {
-        const worker = new ShardWorker(['A'], tempDb('sw-hash'));
+        const worker = new ShardWorker([atom('A')], tempDb('sw-hash'));
         await worker.init();
-        await worker.addAtoms(['NewAtom']);
-        expect(worker.getHash('NewAtom')).toMatch(/^[a-f0-9]{64}$/);
+        await worker.addAtoms([atom('NewAtom')]);
+        expect(worker.getHash(atom('NewAtom'))).toMatch(/^[a-f0-9]{64}$/);
         await worker.close();
     });
 
     it('transitions to dynamically added atoms can be recorded and retrieved', async () => {
-        const worker = new ShardWorker(['A', 'B'], tempDb('sw-train'));
+        const worker = new ShardWorker([atom('A'), atom('B')], tempDb('sw-train'));
         await worker.init();
-        await worker.addAtoms(['C']);
+        await worker.addAtoms([atom('C')]);
 
-        const hashA = worker.getHash('A')!;
-        const hashC = worker.getHash('C')!;
+        const hashA = worker.getHash(atom('A'))!;
+        const hashC = worker.getHash(atom('C'))!;
         expect(hashA).toBeDefined();
         expect(hashC).toBeDefined();
         await worker.recordTransition(hashA, hashC);
 
-        const result = await worker.access('A');
+        const result = await worker.access(atom('A'));
         // predictedHash should point at C
         expect(result.predictedHash).toBe(hashC);
         await worker.close();
@@ -195,59 +196,59 @@ describe('ShardWorker — addAtoms()', () => {
 
 describe('ShardWorker — tombstoneAtom()', () => {
     it('access() throws after tombstoneAtom()', async () => {
-        const worker = new ShardWorker(['A', 'B', 'C'], tempDb('sw-tomb-access'));
+        const worker = new ShardWorker([atom('A'), atom('B'), atom('C')], tempDb('sw-tomb-access'));
         await worker.init();
-        await worker.tombstoneAtom('B');
-        await expect(worker.access('B')).rejects.toThrow(/tombstoned/i);
+        await worker.tombstoneAtom(atom('B'));
+        await expect(worker.access(atom('B'))).rejects.toThrow(/tombstoned/i);
         await worker.close();
     });
 
     it('getHash() returns undefined for tombstoned atoms', async () => {
-        const worker = new ShardWorker(['A', 'B'], tempDb('sw-tomb-hash'));
+        const worker = new ShardWorker([atom('A'), atom('B')], tempDb('sw-tomb-hash'));
         await worker.init();
-        await worker.tombstoneAtom('A');
-        expect(worker.getHash('A')).toBeUndefined();
-        expect(worker.getHash('B')).toMatch(/^[a-f0-9]{64}$/); // B unchanged
+        await worker.tombstoneAtom(atom('A'));
+        expect(worker.getHash(atom('A'))).toBeUndefined();
+        expect(worker.getHash(atom('B'))).toMatch(/^[a-f0-9]{64}$/); // B unchanged
         await worker.close();
     });
 
     it('getWeights() omits tombstoned targets from the result', async () => {
-        const worker = new ShardWorker(['A', 'B', 'C'], tempDb('sw-tomb-weights'));
+        const worker = new ShardWorker([atom('A'), atom('B'), atom('C')], tempDb('sw-tomb-weights'));
         await worker.init();
 
         // Train A→B and A→C
-        const hashA = worker.getHash('A')!;
-        const hashB = worker.getHash('B')!;
-        const hashC = worker.getHash('C')!;
+        const hashA = worker.getHash(atom('A'))!;
+        const hashB = worker.getHash(atom('B'))!;
+        const hashC = worker.getHash(atom('C'))!;
         await worker.recordTransition(hashA, hashB);
         await worker.recordTransition(hashA, hashC);
         await worker.recordTransition(hashA, hashC); // C is dominant
 
         // Before tombstone: both B and C appear
-        const weightsBefore = worker.getWeights('A')!;
-        expect(weightsBefore.map(t => t.to)).toContain('B');
-        expect(weightsBefore.map(t => t.to)).toContain('C');
+        const weightsBefore = worker.getWeights(atom('A'))!;
+        expect(weightsBefore.map(t => t.to)).toContain(atom('B'));
+        expect(weightsBefore.map(t => t.to)).toContain(atom('C'));
 
         // Tombstone B — it should disappear from weights
-        await worker.tombstoneAtom('B');
-        const weightsAfter = worker.getWeights('A')!;
-        expect(weightsAfter.map(t => t.to)).not.toContain('B');
-        expect(weightsAfter.map(t => t.to)).toContain('C');
+        await worker.tombstoneAtom(atom('B'));
+        const weightsAfter = worker.getWeights(atom('A'))!;
+        expect(weightsAfter.map(t => t.to)).not.toContain(atom('B'));
+        expect(weightsAfter.map(t => t.to)).toContain(atom('C'));
         await worker.close();
     });
 
     it('tombstoneAtom() is idempotent', async () => {
-        const worker = new ShardWorker(['A', 'B'], tempDb('sw-tomb-idempotent'));
+        const worker = new ShardWorker([atom('A'), atom('B')], tempDb('sw-tomb-idempotent'));
         await worker.init();
-        await worker.tombstoneAtom('A');
-        await expect(worker.tombstoneAtom('A')).resolves.toBeUndefined();
+        await worker.tombstoneAtom(atom('A'));
+        await expect(worker.tombstoneAtom(atom('A'))).resolves.toBeUndefined();
         await worker.close();
     });
 
     it('tombstoneAtom() throws for an atom not in this shard', async () => {
-        const worker = new ShardWorker(['A', 'B'], tempDb('sw-tomb-unknown'));
+        const worker = new ShardWorker([atom('A'), atom('B')], tempDb('sw-tomb-unknown'));
         await worker.init();
-        await expect(worker.tombstoneAtom('Z')).rejects.toThrow(/not found/i);
+        await expect(worker.tombstoneAtom(atom('Z'))).rejects.toThrow(/not found/i);
         await worker.close();
     });
 });
@@ -256,88 +257,88 @@ describe('ShardWorker — tombstoneAtom()', () => {
 
 describe('ShardedOrchestrator — dynamic atoms', () => {
     it('addAtoms() returns a new treeVersion greater than before', async () => {
-        const mem = new ShardedOrchestrator(4, ['A', 'B'], tempDb('orch-add'));
+        const mem = new ShardedOrchestrator(4, [atom('A'), atom('B')], tempDb('orch-add'));
         await mem.init();
         const vBefore = mem.getMasterVersion();
-        const vAfter = await mem.addAtoms(['C', 'D']);
+        const vAfter = await mem.addAtoms([atom('C'), atom('D')]);
         expect(vAfter).toBeGreaterThan(vBefore);
         await mem.close();
     });
 
     it('newly added atoms are accessible and produce valid proofs', async () => {
-        const mem = new ShardedOrchestrator(4, ['A', 'B'], tempDb('orch-access'));
+        const mem = new ShardedOrchestrator(4, [atom('A'), atom('B')], tempDb('orch-access'));
         await mem.init();
-        await mem.addAtoms(['NewNode']);
+        await mem.addAtoms([atom('NewNode')]);
 
-        const report = await mem.access('NewNode');
-        expect(report.currentData).toBe('NewNode');
+        const report = await mem.access(atom('NewNode'));
+        expect(report.currentData).toBe(atom('NewNode'));
         expect(MerkleKernel.verifyProof(report.currentProof)).toBe(true);
         await mem.close();
     });
 
     it('training between an old atom and a new atom works', async () => {
-        const mem = new ShardedOrchestrator(4, ['A', 'B'], tempDb('orch-train'));
+        const mem = new ShardedOrchestrator(4, [atom('A'), atom('B')], tempDb('orch-train'));
         await mem.init();
-        await mem.addAtoms(['C']);
-        await mem.train(['A', 'C']);
+        await mem.addAtoms([atom('C')]);
+        await mem.train([atom('A'), atom('C')]);
 
-        const report = await mem.access('A');
-        expect(report.predictedNext).toBe('C');
+        const report = await mem.access(atom('A'));
+        expect(report.predictedNext).toBe(atom('C'));
         await mem.close();
     });
 
     it('removeAtom() returns a new treeVersion', async () => {
-        const mem = new ShardedOrchestrator(4, ['A', 'B', 'C'], tempDb('orch-remove'));
+        const mem = new ShardedOrchestrator(4, [atom('A'), atom('B'), atom('C')], tempDb('orch-remove'));
         await mem.init();
         const vBefore = mem.getMasterVersion();
-        const vAfter = await mem.removeAtom('B');
+        const vAfter = await mem.removeAtom(atom('B'));
         expect(vAfter).toBeGreaterThan(vBefore);
         await mem.close();
     });
 
     it('access() throws for a tombstoned atom', async () => {
-        const mem = new ShardedOrchestrator(4, ['A', 'B', 'C'], tempDb('orch-tomb-access'));
+        const mem = new ShardedOrchestrator(4, [atom('A'), atom('B'), atom('C')], tempDb('orch-tomb-access'));
         await mem.init();
-        await mem.removeAtom('B');
-        await expect(mem.access('B')).rejects.toThrow(/tombstoned/i);
+        await mem.removeAtom(atom('B'));
+        await expect(mem.access(atom('B'))).rejects.toThrow(/tombstoned/i);
         await mem.close();
     });
 
     it('after removeAtom, predictions skip the tombstoned atom', async () => {
-        const mem = new ShardedOrchestrator(4, ['A', 'B', 'C'], tempDb('orch-skip'));
+        const mem = new ShardedOrchestrator(4, [atom('A'), atom('B'), atom('C')], tempDb('orch-skip'));
         await mem.init();
         // Train A→B (×1) and A→C (×5) so C is dominant
-        await mem.train(['A', 'C']);
-        await mem.train(['A', 'C']);
-        await mem.train(['A', 'C']);
-        await mem.train(['A', 'C']);
-        await mem.train(['A', 'C']);
-        await mem.train(['A', 'B']);
+        await mem.train([atom('A'), atom('C')]);
+        await mem.train([atom('A'), atom('C')]);
+        await mem.train([atom('A'), atom('C')]);
+        await mem.train([atom('A'), atom('C')]);
+        await mem.train([atom('A'), atom('C')]);
+        await mem.train([atom('A'), atom('B')]);
 
         // Before tombstone C is the dominant prediction
-        const before = await mem.access('A');
-        expect(before.predictedNext).toBe('C');
+        const before = await mem.access(atom('A'));
+        expect(before.predictedNext).toBe(atom('C'));
 
         // Tombstone C — prediction should now fall through to B or null
-        await mem.removeAtom('C');
-        const after = await mem.access('A');
-        expect(after.predictedNext).not.toBe('C');
+        await mem.removeAtom(atom('C'));
+        const after = await mem.access(atom('A'));
+        expect(after.predictedNext).not.toBe(atom('C'));
         await mem.close();
     });
 
     it('listAtoms() reports correct active/tombstoned status', async () => {
-        const mem = new ShardedOrchestrator(4, ['A', 'B', 'C'], tempDb('orch-list'));
+        const mem = new ShardedOrchestrator(4, [atom('A'), atom('B'), atom('C')], tempDb('orch-list'));
         await mem.init();
-        await mem.addAtoms(['D']);
-        await mem.removeAtom('B');
+        await mem.addAtoms([atom('D')]);
+        await mem.removeAtom(atom('B'));
 
         const atoms = mem.listAtoms();
         const find = (name: string) => atoms.find(a => a.atom === name);
 
-        expect(find('A')?.status).toBe('active');
-        expect(find('B')?.status).toBe('tombstoned');
-        expect(find('C')?.status).toBe('active');
-        expect(find('D')?.status).toBe('active');
+        expect(find(atom('A'))?.status).toBe('active');
+        expect(find(atom('B'))?.status).toBe('tombstoned');
+        expect(find(atom('C'))?.status).toBe('active');
+        expect(find(atom('D'))?.status).toBe('active');
         await mem.close();
     });
 });
@@ -346,15 +347,15 @@ describe('ShardedOrchestrator — dynamic atoms', () => {
 
 describe('MMPMValidator — versioned validation', () => {
     it('validates a proof from version N after the tree moves to version N+1', async () => {
-        const mem = new ShardedOrchestrator(4, ['A', 'B', 'C'], tempDb('val-versioned'));
+        const mem = new ShardedOrchestrator(4, [atom('A'), atom('B'), atom('C')], tempDb('val-versioned'));
         await mem.init();
 
         // Capture a report at version N
-        const reportAtN = await mem.access('A');
+        const reportAtN = await mem.access(atom('A'));
         const versionN = reportAtN.treeVersion;
 
         // Add an atom to advance to version N+1
-        await mem.addAtoms(['D']);
+        await mem.addAtoms([atom('D')]);
         expect(mem.getMasterVersion()).toBeGreaterThan(versionN);
 
         // The versioned validator (backed by MasterKernel) should still accept the old proof
@@ -409,31 +410,31 @@ describe('ShardedOrchestrator — unified seed+dynamic atom storage (6.1)', () =
         // Verify that seeds are written to LevelDB on first init() so they
         // are available on subsequent restarts independent of the constructor.
         const db = tempDb('unified-seeds');
-        const mem1 = new ShardedOrchestrator(4, ['X', 'Y', 'Z'], db);
+        const mem1 = new ShardedOrchestrator(4, [atom('X'), atom('Y'), atom('Z')], db);
         await mem1.init();
         await mem1.close();
 
         // Reopen with the SAME seeds — atoms must still be accessible
-        const mem2 = new ShardedOrchestrator(4, ['X', 'Y', 'Z'], db);
+        const mem2 = new ShardedOrchestrator(4, [atom('X'), atom('Y'), atom('Z')], db);
         await mem2.init();
-        const report = await mem2.access('X');
-        expect(report.currentData).toBe('X');
+        const report = await mem2.access(atom('X'));
+        expect(report.currentData).toBe(atom('X'));
         expect(report.currentProof).toBeDefined();
         await mem2.close();
     });
 
     it('Markov weights trained on seeds survive restart', async () => {
         const db = tempDb('unified-weights');
-        const mem1 = new ShardedOrchestrator(4, ['P', 'Q', 'R'], db);
+        const mem1 = new ShardedOrchestrator(4, [atom('P'), atom('Q'), atom('R')], db);
         await mem1.init();
-        await mem1.train(['P', 'Q', 'Q', 'Q']); // P→Q heavily weighted
+        await mem1.train([atom('P'), atom('Q'), atom('Q'), atom('Q')]); // P→Q heavily weighted
         await new Promise(r => setTimeout(r, 30));
         await mem1.close();
 
-        const mem2 = new ShardedOrchestrator(4, ['P', 'Q', 'R'], db);
+        const mem2 = new ShardedOrchestrator(4, [atom('P'), atom('Q'), atom('R')], db);
         await mem2.init();
-        const report = await mem2.access('P');
-        expect(report.predictedNext).toBe('Q');
+        const report = await mem2.access(atom('P'));
+        expect(report.predictedNext).toBe(atom('Q'));
         await mem2.close();
     });
 });
@@ -443,44 +444,44 @@ describe('ShardedOrchestrator — unified seed+dynamic atom storage (6.1)', () =
 describe('ShardedOrchestrator — dynamic atom persistence across restart', () => {
     it('dynamically added atoms survive close() + init()', async () => {
         const db = tempDb('pers-add');
-        const mem1 = new ShardedOrchestrator(4, ['A', 'B'], db);
+        const mem1 = new ShardedOrchestrator(4, [atom('A'), atom('B')], db);
         await mem1.init();
-        await mem1.addAtoms(['C']);
-        await mem1.train(['A', 'C']);
+        await mem1.addAtoms([atom('C')]);
+        await mem1.train([atom('A'), atom('C')]);
         await new Promise(r => setTimeout(r, 50)); // let async writes settle
         await mem1.close();
 
-        const mem2 = new ShardedOrchestrator(4, ['A', 'B'], db);
+        const mem2 = new ShardedOrchestrator(4, [atom('A'), atom('B')], db);
         await mem2.init();
 
         // C should be accessible
-        const report = await mem2.access('C');
-        expect(report.currentData).toBe('C');
+        const report = await mem2.access(atom('C'));
+        expect(report.currentData).toBe(atom('C'));
 
         // Training weight A→C survives as well
-        const reportA = await mem2.access('A');
-        expect(reportA.predictedNext).toBe('C');
+        const reportA = await mem2.access(atom('A'));
+        expect(reportA.predictedNext).toBe(atom('C'));
 
         await mem2.close();
     });
 
     it('tombstoned atoms remain inaccessible after restart', async () => {
         const db = tempDb('pers-tomb');
-        const mem1 = new ShardedOrchestrator(4, ['A', 'B', 'C'], db);
+        const mem1 = new ShardedOrchestrator(4, [atom('A'), atom('B'), atom('C')], db);
         await mem1.init();
-        await mem1.removeAtom('B');
+        await mem1.removeAtom(atom('B'));
         await new Promise(r => setTimeout(r, 50));
         await mem1.close();
 
-        const mem2 = new ShardedOrchestrator(4, ['A', 'B', 'C'], db);
+        const mem2 = new ShardedOrchestrator(4, [atom('A'), atom('B'), atom('C')], db);
         await mem2.init();
 
         // B was tombstoned — should throw on access
-        await expect(mem2.access('B')).rejects.toThrow(/tombstoned/i);
+        await expect(mem2.access(atom('B'))).rejects.toThrow(/tombstoned/i);
 
         // A and C remain accessible
-        await expect(mem2.access('A')).resolves.toBeDefined();
-        await expect(mem2.access('C')).resolves.toBeDefined();
+        await expect(mem2.access(atom('A'))).resolves.toBeDefined();
+        await expect(mem2.access(atom('C'))).resolves.toBeDefined();
 
         await mem2.close();
     });

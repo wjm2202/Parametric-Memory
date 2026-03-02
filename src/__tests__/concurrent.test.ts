@@ -4,6 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { ShardedOrchestrator } from '../orchestrator';
 import { MerkleKernel } from '../merkle';
+const atom = (value: string) => `v1.other.${value}`;
 
 const dbDirs: string[] = [];
 
@@ -22,7 +23,7 @@ afterAll(() => {
 
 describe('Concurrent read/write stress (Story 8.1)', () => {
     it('runs for 10 seconds with zero invalid proofs under concurrent access/addAtoms load', async () => {
-        const seedAtoms = Array.from({ length: 24 }, (_, i) => `Seed_${i}`);
+        const seedAtoms = Array.from({ length: 24 }, (_, i) => atom(`Seed_${i}`));
         const db = tempDb('mmpm-concurrent-');
         const orchestrator = new ShardedOrchestrator(4, seedAtoms, db);
         await orchestrator.init();
@@ -58,7 +59,7 @@ describe('Concurrent read/write stress (Story 8.1)', () => {
 
         const writer = async () => {
             while (Date.now() < deadline) {
-                const newAtom = `Live_${nextAtomId++}`;
+                const newAtom = atom(`Live_${nextAtomId++}`);
                 try {
                     await orchestrator.addAtoms([newAtom]);
                     activeAtoms.push(newAtom);

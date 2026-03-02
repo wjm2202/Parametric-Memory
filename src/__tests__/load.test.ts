@@ -43,8 +43,8 @@ beforeAll(async () => {
 }, 60_000);
 
 afterAll(async () => {
-    await server.close();
-    await orchestrator.close();
+    if (server) await server.close();
+    if (orchestrator) await orchestrator.close();
     try { rmSync(dbDir, { recursive: true, force: true }); } catch { /* ok */ }
 });
 
