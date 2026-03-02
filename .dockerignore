@@ -32,7 +32,9 @@ npm-debug.log*
 coverage/
 .nyc_output/
 vitest-results/
-src/__tests__/
+# src/__tests__/ is intentionally NOT excluded here.
+# The builder stage needs the test files to run `npm test`.
+# The production runtime stage never copies them (it only copies dist/ from the builder).
 
 # ── Grafana / Prometheus local config (mounted at runtime via volumes) ─────────
 grafana/

@@ -43,3 +43,8 @@ vitest-results/
 *.swp
 *.swo
 *.orig
+
+test-shard-db*
+mmpm-demo-db/
+tools/harness/results/*.json
+tools/harness/results/*.prom

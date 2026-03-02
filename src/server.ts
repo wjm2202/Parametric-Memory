@@ -1,31 +1,76 @@
 import 'dotenv/config';
+import { readFileSync } from 'fs';
 import Fastify, { FastifyInstance } from 'fastify';
 import { ShardedOrchestrator } from './orchestrator';
+import { IngestionPipeline } from './ingestion';
 import { collectDefaultMetrics, register } from 'prom-client';
 import { accessCounter, requestDuration, trainCounter, trainSequenceLength, atomDominanceRatio, atomTrainedEdges, clusterTotalEdges, clusterTrainedAtoms } from './metrics';
+import { logger } from './logger';
 
 // Collect Node.js / process metrics automatically (visible at GET /metrics)
 collectDefaultMetrics();
 
 interface BuildAppOpts {
     data?: string[];
+    atomSeedFile?: string;   // path to a JSON file: ["atom1", "atom2", ...]
     dbBasePath?: string;
     numShards?: number;
     apiKey?: string;
 }
 
-export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; orchestrator: ShardedOrchestrator } {
-    const server = Fastify({ logger: false });
+/** Load a JSON seed file and return its atom array, or null on any error. */
+function loadSeedFile(filePath: string): string[] | null {
+    try {
+        const raw = readFileSync(filePath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed) || !parsed.every((x: unknown) => typeof x === 'string')) {
+            logger.warn(`MMPM seed file '${filePath}' must be a JSON array of strings — ignored.`);
+            return null;
+        }
+        if (parsed.length === 0) {
+            logger.warn(`MMPM seed file '${filePath}' is empty — ignored.`);
+            return null;
+        }
+        logger.info(`MMPM loaded ${parsed.length} atoms from seed file: ${filePath}`);
+        return parsed as string[];
+    } catch (e: any) {
+        logger.warn(`MMPM could not read seed file '${filePath}': ${e.message}`);
+        return null;
+    }
+}
+
+export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; orchestrator: ShardedOrchestrator; pipeline: IngestionPipeline } {
+    const server = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' } });
     const numShards = opts.numShards ?? parseInt(process.env.SHARD_COUNT ?? '4');
     const dbBasePath = opts.dbBasePath ?? (process.env.DB_BASE_PATH ?? './mmpm-db');
-    const initialData = opts.data ?? (process.env.MMPM_INITIAL_DATA?.split(',') ?? ['Node_A', 'Node_B', 'Node_C', 'Node_D', 'Node_E', 'Step_1', 'Step_2']);
+
+    // Atom resolution order (first non-null wins):
+    //   1. opts.data  — programmatic / test usage
+    //   2. opts.atomSeedFile or MMPM_ATOM_FILE  — JSON file mounted at deploy time
+    //   3. MMPM_INITIAL_DATA  — comma-separated env var (legacy / simple cases)
+    //   4. built-in defaults
+    const seedFilePath = opts.atomSeedFile ?? process.env.MMPM_ATOM_FILE;
+    const initialData =
+        opts.data ??
+        (seedFilePath ? loadSeedFile(seedFilePath) : null) ??
+        (process.env.MMPM_INITIAL_DATA?.split(',')) ??
+        ['Node_A', 'Node_B', 'Node_C', 'Node_D', 'Node_E', 'Step_1', 'Step_2'];
+
     const apiKey = opts.apiKey ?? (process.env.MMPM_API_KEY || undefined);
     const orchestrator = new ShardedOrchestrator(numShards, initialData, dbBasePath);
+    // Ingestion pipeline: batches incoming atoms, flushes without blocking reads.
+    // batchSize and flushIntervalMs can be tuned via env vars.
+    const pipeline = new IngestionPipeline(orchestrator, {
+        batchSize: parseInt(process.env.INGEST_BATCH_SIZE ?? '100'),
+        flushIntervalMs: parseInt(process.env.INGEST_FLUSH_MS ?? '1000'),
+    });
+
+    const probePaths = new Set(['/metrics', '/health', '/ready']);
 
     // Optional Bearer token auth — /metrics always bypasses
     if (apiKey) {
         server.addHook('onRequest', async (request, reply) => {
-            if (request.url === '/metrics') return;
+            if (probePaths.has(request.url)) return;
             const auth = request.headers.authorization;
             if (!auth || auth !== `Bearer ${apiKey}`) {
                 return reply.status(401).send({ error: 'Unauthorized' });
@@ -33,12 +78,29 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
         });
     }
 
+    // Startup/readiness guard for strict orchestrator behavior.
+    // Probes remain available while the service is still initializing.
+    server.addHook('onRequest', async (request, reply) => {
+        if (probePaths.has(request.url)) return;
+        if (!orchestrator.isReady()) {
+            reply.header('Retry-After', '1');
+            return reply.status(503).send({
+                error: 'Service unavailable: orchestrator not ready',
+                ready: false,
+            });
+        }
+    });
+
     /**
      * POST /access  —  Body: { "data": "Node_A" }
      */
     server.post('/access', async (request, reply) => {
+        let item: string | undefined;
+        let warmRead = false;
         try {
-            const { data: item } = request.body as { data?: string };
+            const body = request.body as { data?: string; warmRead?: boolean };
+            item = body.data;
+            warmRead = body.warmRead === true;
             if (!item || typeof item !== 'string') {
                 return reply.status(400).send({ error: "Property 'data' is required." });
             }
@@ -46,8 +108,30 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             const result = report.predictedNext !== null ? 'hit' : 'miss';
             accessCounter.inc({ result });
             requestDuration.observe(report.latencyMs);
-            return report;
+            return { ...report, verified: true };
         } catch (e: any) {
+            if (warmRead && item) {
+                const warm = orchestrator.tryWarmRead(item);
+                if (warm) {
+                    accessCounter.inc({ result: 'miss' });
+                    requestDuration.observe(warm.latencyMs);
+                    return warm;
+                }
+                if (pipeline.getQueuedAtoms().includes(item)) {
+                    const queuedWarm = {
+                        currentData: item,
+                        currentProof: null,
+                        predictedNext: null,
+                        predictedProof: null,
+                        latencyMs: 0,
+                        treeVersion: orchestrator.getMasterVersion(),
+                        verified: false,
+                    };
+                    accessCounter.inc({ result: 'miss' });
+                    requestDuration.observe(queuedWarm.latencyMs);
+                    return queuedWarm;
+                }
+            }
             accessCounter.inc({ result: 'error' });
             return reply.status(404).send({ error: e.message });
         }
@@ -111,6 +195,29 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
     });
 
     /**
+     * GET /health  —  Live cluster health check.
+     * Returns per-shard status: pending writes, snapshot version,
+     * commit state, active reader count, plus aggregate cluster stats.
+     */
+    server.get('/health', async () => {
+        return {
+            status: 'ok',
+            ready: orchestrator.isReady(),
+            ...orchestrator.getClusterHealth(),
+        };
+    });
+
+    /**
+     * GET /ready  —  strict readiness endpoint for orchestrators.
+     * 200 when serving traffic is safe; 503 otherwise.
+     */
+    server.get('/ready', async (_, reply) => {
+        const ready = orchestrator.isReady();
+        if (!ready) return reply.status(503).send({ ready: false });
+        return { ready: true };
+    });
+
+    /**
      * GET /metrics  —  Prometheus scrape endpoint
      */
     server.get('/metrics', async (request, reply) => {
@@ -118,7 +225,112 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
         return register.metrics();
     });
 
-    return { server, orchestrator };
+    // ─────────────────────────────────────────────────────────────────────────
+    // Dynamic atom management
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * POST /atoms  —  Queue new atoms for ingestion (non-blocking).
+     * Body: { "atoms": ["new_atom_1", "new_atom_2", ...] }
+     *
+     * Atoms are accepted into the ingestion pipeline immediately.  They are
+     * batched and committed asynchronously — reads are never blocked.
+     * Use GET /atoms/pending to check what is queued but not yet committed.
+     * Use POST /admin/commit to force an immediate flush.
+     *
+     * Returns: { queued, batchId, commitEtaMs }
+     */
+    server.post('/atoms', async (request, reply) => {
+        try {
+            const { atoms } = request.body as { atoms?: unknown };
+            if (!Array.isArray(atoms) || atoms.length === 0 || !atoms.every(a => typeof a === 'string')) {
+                return reply.status(400).send({ error: "'atoms' must be a non-empty array of strings." });
+            }
+            const admission = orchestrator.getWriteAdmission(
+                pipeline.getStats().queueDepth,
+                atoms.length
+            );
+            if (!admission.accept) {
+                reply.header('Retry-After', String(admission.retryAfterSec));
+                return reply.status(503).send({
+                    error: 'Backpressure: write buffer is saturated. Retry later.',
+                    retryAfterSec: admission.retryAfterSec,
+                    pressure: {
+                        highWaterMark: admission.highWaterMark,
+                        totalShardPendingWrites: admission.totalShardPendingWrites,
+                        projectedPendingWrites: admission.projectedPendingWrites,
+                    },
+                });
+            }
+            const receipt = await pipeline.enqueue(atoms as string[]);
+            return { status: 'Queued', ...receipt };
+        } catch (e: any) {
+            return reply.status(500).send({ error: e.message });
+        }
+    });
+
+    /**
+     * GET /atoms/pending  —  List atoms queued in the ingestion pipeline but
+     * not yet committed to the Merkle snapshot.
+     *
+     * Returns: { queuedInPipeline, pipelineStats }
+     */
+    server.get('/atoms/pending', async () => {
+        const stats = pipeline.getStats();
+        return {
+            queuedInPipeline: pipeline.getQueuedAtoms(),
+            pipelineStats: stats,
+        };
+    });
+
+    /**
+     * POST /admin/commit  —  Force an immediate flush of the ingestion pipeline.
+     * Useful for testing and for cases where you need atoms committed right away.
+     *
+     * Returns: { status, flushedCount }
+     */
+    server.post('/admin/commit', async (_, reply) => {
+        try {
+            const before = pipeline.getStats().totalCommitted;
+            await pipeline.flush();
+            const after = pipeline.getStats().totalCommitted;
+            return { status: 'Committed', flushedCount: after - before };
+        } catch (e: any) {
+            return reply.status(500).send({ error: e.message });
+        }
+    });
+
+    /**
+     * DELETE /atoms/:atom  —  Tombstone (soft-delete) a single atom.
+     *
+     * The atom's Merkle leaf is replaced with a zero sentinel.  No indices shift,
+     * so proofs previously issued for other atoms remain valid at their treeVersion.
+     * The tombstoned atom can no longer be accessed or used as a training endpoint.
+     *
+     * Returns: { status, tombstonedAtom, treeVersion }
+     */
+    server.delete('/atoms/:atom', async (request, reply) => {
+        const { atom } = request.params as { atom: string };
+        try {
+            const treeVersion = await orchestrator.removeAtom(atom);
+            return { status: 'Success', tombstonedAtom: atom, treeVersion };
+        } catch (e: any) {
+            return reply.status(404).send({ error: e.message });
+        }
+    });
+
+    /**
+     * GET /atoms  —  List all registered atoms across all shards.
+     * Returns: { atoms: [{ atom, status: 'active' | 'tombstoned' }], treeVersion }
+     */
+    server.get('/atoms', async () => {
+        return {
+            atoms: orchestrator.listAtoms(),
+            treeVersion: orchestrator.getMasterVersion(),
+        };
+    });
+
+    return { server, orchestrator, pipeline };
 }
 
 // Only run when invoked directly
@@ -127,19 +339,28 @@ if (require.main === module) {
     const HOST = process.env.HOST ?? '0.0.0.0';
     const NUM_SHARDS = parseInt(process.env.SHARD_COUNT ?? '4');
 
-    const { server, orchestrator } = buildApp({ numShards: NUM_SHARDS });
+    const { server, orchestrator, pipeline } = buildApp({
+        numShards: NUM_SHARDS,
+        atomSeedFile: process.env.MMPM_ATOM_FILE,
+    });
 
-    const shutdown = async () => { await server.close(); await orchestrator.close(); process.exit(0); };
+    const shutdown = async () => {
+        await pipeline.stop();
+        await server.close();
+        await orchestrator.close();
+        process.exit(0);
+    };
     process.on('SIGTERM', shutdown);
     process.on('SIGINT', shutdown);
 
     (async () => {
         try {
             await orchestrator.init();
+            pipeline.start();
             await server.listen({ port: PORT, host: HOST });
-            console.log(`MMPM Cluster Online — Shards: ${NUM_SHARDS} | ${HOST}:${PORT}`);
+            logger.info(`MMPM Cluster Online — Shards: ${NUM_SHARDS} | ${HOST}:${PORT}`);
         } catch (err) {
-            console.error(err);
+            logger.error(err);
             process.exit(1);
         }
     })();

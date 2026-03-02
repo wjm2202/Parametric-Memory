@@ -5,6 +5,13 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
     test: {
+        // Only discover tests inside the TypeScript source tree.
+        // This prevents vitest from also picking up the compiled CJS copies
+        // in dist/__tests__/ which fail with "Vitest cannot be imported in a
+        // CommonJS module using require()".
+        include: ['src/**/*.{test,spec}.ts'],
+        // Belt-and-braces: never run anything under dist/ or node_modules/.
+        exclude: ['dist/**', 'node_modules/**'],
         // Load .env.test into process.env before every test file.
         setupFiles: ['./src/__tests__/setup.ts'],
     },

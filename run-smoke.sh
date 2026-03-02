@@ -41,10 +41,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# ── 4. Wait for the server to become ready (poll /metrics) ──────────────────
+# ── 4. Wait for the server to become ready (poll /ready) ───────────────────
 echo "→ Waiting for server to be ready ..."
 RETRIES=20
-until curl -sf "${MMPM_BASE_URL}/metrics" > /dev/null 2>&1; do
+until [[ "$(curl -s -o /dev/null -w '%{http_code}' "${MMPM_BASE_URL}/ready")" == "200" ]]; do
     RETRIES=$((RETRIES - 1))
     if [[ $RETRIES -le 0 ]]; then
         echo "ERROR: Server did not become ready in time." >&2

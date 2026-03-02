@@ -6,6 +6,17 @@ RUN npm install
 COPY . .
 RUN npm run build
 
+# ── test stage ────────────────────────────────────────────────────────────────
+# Contains full devDependencies + compiled source + test files.
+# Run with:  docker build --target test --progress=plain .
+# or via:    docker compose run --rm mmpm-test
+#
+# NODE_OPTIONS ensures V8 uses the same heap ceiling as production.
+FROM builder AS test
+ENV NODE_OPTIONS=--max-old-space-size=512
+CMD ["npm", "test"]
+
+# ── production runtime ────────────────────────────────────────────────────────
 FROM node:20-alpine
 # Explicit heap ceiling — prevents V8 guessing from container-visible RAM.
 # Override at runtime: docker run -e NODE_OPTIONS=--max-old-space-size=1024 ...
