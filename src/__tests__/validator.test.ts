@@ -6,6 +6,7 @@ import { rmSync } from 'fs';
 
 const dbDirs: string[] = [];
 let counter = 0;
+const atom = (value: string) => `v1.other.${value}`;
 
 function freshDb(): string {
     const path = `./test-validator-db-${Date.now()}-${counter++}`;
@@ -72,10 +73,10 @@ describe('MMPMValidator.verifyProof', () => {
 // ---------------------------------------------------------------------------
 describe('MMPMValidator.validateReport', () => {
     it('validates a real PredictionReport from ShardedOrchestrator', async () => {
-        const data = ['A', 'B', 'C', 'D'];
+        const data = [atom('A'), atom('B'), atom('C'), atom('D')];
         const mem = new ShardedOrchestrator(4, data, freshDb());
         await mem.init();
-        const report = await mem.access('A');
+        const report = await mem.access(atom('A'));
 
         // Build validator anchored to the current master root
         const masterRoot = report.shardRootProof?.root ?? report.currentProof.root;
@@ -85,24 +86,24 @@ describe('MMPMValidator.validateReport', () => {
     });
 
     it('returns false when currentData is tampered after generation', async () => {
-        const data = ['A', 'B', 'C', 'D'];
+        const data = [atom('A'), atom('B'), atom('C'), atom('D')];
         const mem = new ShardedOrchestrator(4, data, freshDb());
         await mem.init();
-        const report = await mem.access('A');
+        const report = await mem.access(atom('A'));
         const masterRoot = report.shardRootProof?.root ?? report.currentProof.root;
         const v = new MMPMValidator(masterRoot);
 
         // Mutate the data atom — the hash won't match the proof leaf anymore
-        const tampered = { ...report, currentData: 'TAMPERED' };
+        const tampered = { ...report, currentData: atom('TAMPERED') };
         expect(v.validateReport(tampered)).toBe(false);
         await mem.close();
     });
 
     it('returns false when the master root does not match the shard proof', async () => {
-        const data = ['A', 'B', 'C', 'D'];
+        const data = [atom('A'), atom('B'), atom('C'), atom('D')];
         const mem = new ShardedOrchestrator(4, data, freshDb());
         await mem.init();
-        const report = await mem.access('A');
+        const report = await mem.access(atom('A'));
 
         // Validator anchored to a different (wrong) master root
         const wrongRoot = '00'.repeat(32);
@@ -118,7 +119,7 @@ describe('MMPMValidator.validateReport', () => {
     });
 
     it('validates correctly for all atoms in a multi-shard cluster', async () => {
-        const data = ['Node_A', 'Node_B', 'Node_C', 'Node_D', 'Step_1', 'Step_2'];
+        const data = [atom('Node_A'), atom('Node_B'), atom('Node_C'), atom('Node_D'), atom('Step_1'), atom('Step_2')];
         const mem = new ShardedOrchestrator(4, data, freshDb());
         await mem.init();
 
@@ -133,10 +134,10 @@ describe('MMPMValidator.validateReport', () => {
 
     it('still validates when there is no shardRootProof (single effective shard)', async () => {
         // Use 1 shard so no master tree branching
-        const data = ['X', 'Y', 'Z'];
+        const data = [atom('X'), atom('Y'), atom('Z')];
         const mem = new ShardedOrchestrator(1, data, freshDb());
         await mem.init();
-        const report = await mem.access('X');
+        const report = await mem.access(atom('X'));
         const masterRoot = report.shardRootProof?.root ?? report.currentProof.root;
         const v = new MMPMValidator(masterRoot);
         expect(v.validateReport(report)).toBe(true);

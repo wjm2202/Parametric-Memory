@@ -8,6 +8,7 @@ import { createHash } from 'crypto';
 import { performance } from 'perf_hooks';
 import { logger } from './logger';
 import { commitLatency, commitsTotal, epochTransitionsTotal, pendingWritesGauge } from './metrics';
+import { assertAtomV1, isAtomV1 } from './atom_schema';
 
 /**
  * SHARD WORKER — v3 (Snapshot + Epoch + WAL)
@@ -156,6 +157,11 @@ export class ShardWorker {
             this.dataIndex = new Map();
             for await (const [, value] of this.db.iterator({ gte: 'ai:', lte: 'ai:~' })) {
                 const atom = value as string;
+                if (!isAtomV1(atom)) {
+                    throw new Error(
+                        `Legacy atom '${atom}' found in ${this.dbPath}. Strict schema v1 is enabled; start with a fresh DB.`
+                    );
+                }
                 this.dataIndex.set(atom, this.data.length);
                 this.data.push(atom);
             }
@@ -307,6 +313,7 @@ export class ShardWorker {
      */
     async addAtoms(atoms: DataAtom[]): Promise<void> {
         for (const atom of atoms) {
+            assertAtomV1(atom, 'addAtoms.atom');
             if (this.dataIndex.has(atom)) continue;
 
             const idx = this.data.length;
@@ -368,6 +375,27 @@ export class ShardWorker {
             atom,
             status: this.tombstoned.has(idx) ? 'tombstoned' : 'active',
         }));
+    }
+
+    /**
+     * Inspect a single atom record as stored in this shard.
+     */
+    getAtomRecord(item: DataAtom): {
+        atom: DataAtom;
+        index: number;
+        status: 'active' | 'tombstoned';
+        hash: Hash;
+        committed: boolean;
+    } | null {
+        const idx = this.dataIndex.get(item);
+        if (idx === undefined) return null;
+        return {
+            atom: item,
+            index: idx,
+            status: this.tombstoned.has(idx) ? 'tombstoned' : 'active',
+            hash: createHash('sha256').update(item).digest().toString('hex'),
+            committed: idx < this.activeSnapshot.leafCount,
+        };
     }
 
     /**

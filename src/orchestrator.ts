@@ -1,8 +1,9 @@
 import { ShardWorker } from './shard_worker';
 import { MasterKernel } from './master';
 import { ShardRouter } from './router';
-import { DataAtom, PredictionReport } from './types';
+import { DataAtom, Hash, PredictionReport } from './types';
 import { performance } from 'perf_hooks';
+import { assertAtomV1, assertAtomsV1 } from './atom_schema';
 
 export class ShardedOrchestrator {
     private shards: Map<number, ShardWorker> = new Map();
@@ -62,6 +63,7 @@ export class ShardedOrchestrator {
         this.backpressureRetryAfterSec = envRetryAfterSec ?? options?.backpressureRetryAfterSec ?? 1;
 
         this.router = new ShardRouter(numShards);
+        assertAtomsV1(data, 'constructor.data');
         const buckets: Map<number, DataAtom[]> = new Map();
 
         // 1. Group data using Consistent Hashing
@@ -103,6 +105,7 @@ export class ShardedOrchestrator {
     }
 
     async access(item: DataAtom): Promise<PredictionReport> {
+        assertAtomV1(item, 'access.item');
         const start = performance.now();
         const sIdx = this.router.getShardIndex(item);
         const shard = this.shards.get(sIdx);
@@ -185,6 +188,7 @@ export class ShardedOrchestrator {
      * from the Merkle tree state.  No commit needed.
      */
     async train(sequence: string[]): Promise<void> {
+        assertAtomsV1(sequence, 'train.sequence');
         for (let i = 0; i < sequence.length - 1; i++) {
             const from = sequence[i];
             const to = sequence[i + 1];
@@ -303,6 +307,7 @@ export class ShardedOrchestrator {
      * @returns The new master treeVersion after all atoms are committed.
      */
     async addAtoms(atoms: DataAtom[]): Promise<number> {
+        assertAtomsV1(atoms, 'addAtoms.atoms');
         // Group atoms by their target shard
         const buckets = new Map<number, DataAtom[]>();
         for (const atom of atoms) {
@@ -344,6 +349,7 @@ export class ShardedOrchestrator {
      * @throws  Error if the atom is not registered on any shard.
      */
     async removeAtom(atom: DataAtom): Promise<number> {
+        assertAtomV1(atom, 'removeAtom.atom');
         const shardIdx = this.router.getShardIndex(atom);
         const shard = this.shards.get(shardIdx);
         if (!shard) throw new Error(`No shard found for atom '${atom}'.`);
@@ -362,6 +368,38 @@ export class ShardedOrchestrator {
             result.push(...shard.getAtoms());
         }
         return result;
+    }
+
+    /**
+     * Inspect a single atom record, including shard and outgoing learned edges.
+     */
+    inspectAtom(atom: DataAtom): {
+        atom: DataAtom;
+        shard: number;
+        index: number;
+        status: 'active' | 'tombstoned';
+        hash: Hash;
+        committed: boolean;
+        treeVersion: number;
+        outgoingTransitions: { to: DataAtom; weight: number }[];
+    } | null {
+        const shardIdx = this.router.getShardIndex(atom);
+        const shard = this.shards.get(shardIdx);
+        if (!shard) return null;
+
+        const record = shard.getAtomRecord(atom);
+        if (!record) return null;
+
+        return {
+            atom,
+            shard: shardIdx,
+            index: record.index,
+            status: record.status,
+            hash: record.hash,
+            committed: record.committed,
+            treeVersion: this.master.currentVersion,
+            outgoingTransitions: this.getWeights(atom) ?? [],
+        };
     }
 
     /** Current master-tree version. */

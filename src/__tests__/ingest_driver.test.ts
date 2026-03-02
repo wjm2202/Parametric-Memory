@@ -6,6 +6,7 @@ import { ShardedOrchestrator } from '../orchestrator';
 import { buildApp } from '../server';
 import { generateStructuredDataset } from '../../tools/harness/generator';
 import { runIngestionDriver } from '../../tools/harness/ingest_driver';
+const atom = (value: string) => `v1.other.${value}`;
 
 const dirs: string[] = [];
 
@@ -32,7 +33,7 @@ describe('Harness ingestion driver (Story 9.2)', () => {
             seed: 101,
         });
 
-        const orchestrator = new ShardedOrchestrator(4, ['Seed_A', 'Seed_B'], tempDb('bulk'));
+        const orchestrator = new ShardedOrchestrator(4, [atom('Seed_A'), atom('Seed_B')], tempDb('bulk'));
         await orchestrator.init();
         try {
             const stats = await runIngestionDriver(dataset, {
@@ -61,7 +62,7 @@ describe('Harness ingestion driver (Story 9.2)', () => {
             seed: 202,
         });
 
-        const orchestrator = new ShardedOrchestrator(4, ['Seed_X', 'Seed_Y'], tempDb('stream'));
+        const orchestrator = new ShardedOrchestrator(4, [atom('Seed_X'), atom('Seed_Y')], tempDb('stream'));
         await orchestrator.init();
         try {
             const stats = await runIngestionDriver(dataset, {
@@ -94,7 +95,7 @@ describe('Harness ingestion driver (Story 9.2)', () => {
 
         const port = 3411;
         const dbPath = tempDb('api-stream');
-        const app = buildApp({ data: ['Boot_A', 'Boot_B'], dbBasePath: dbPath, numShards: 4 });
+        const app = buildApp({ data: [atom('Boot_A'), atom('Boot_B')], dbBasePath: dbPath, numShards: 4 });
         await app.orchestrator.init();
         app.pipeline.start();
         await app.server.listen({ port, host: '127.0.0.1' });
@@ -135,7 +136,7 @@ describe('Harness ingestion driver (Story 9.2)', () => {
 
         const port = 3413;
         const dbPath = tempDb('api-delayed-ready');
-        const app = buildApp({ data: ['Boot_X', 'Boot_Y'], dbBasePath: dbPath, numShards: 4 });
+        const app = buildApp({ data: [atom('Boot_X'), atom('Boot_Y')], dbBasePath: dbPath, numShards: 4 });
         await app.server.listen({ port, host: '127.0.0.1' });
 
         const delayedInit = setTimeout(async () => {

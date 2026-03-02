@@ -7,6 +7,7 @@ import { buildApp } from '../server';
 import { generateStructuredDataset } from '../../tools/harness/generator';
 import { runIngestionDriver } from '../../tools/harness/ingest_driver';
 import { runRecallBenchmark } from '../../tools/harness/recall_bench';
+const atom = (value: string) => `v1.other.${value}`;
 
 const dirs: string[] = [];
 
@@ -33,7 +34,7 @@ describe('Harness recall benchmark engine (Story 9.3)', () => {
             seed: 303,
         });
 
-        const orchestrator = new ShardedOrchestrator(4, ['Seed_A', 'Seed_B'], tempDb('profile'));
+        const orchestrator = new ShardedOrchestrator(4, [atom('Seed_A'), atom('Seed_B')], tempDb('profile'));
         await orchestrator.init();
 
         try {
@@ -89,7 +90,7 @@ describe('Harness recall benchmark engine (Story 9.3)', () => {
         });
 
         const port = 3412;
-        const app = buildApp({ data: ['Seed_API_A', 'Seed_API_B'], dbBasePath: tempDb('api-recall'), numShards: 4 });
+        const app = buildApp({ data: [atom('Seed_API_A'), atom('Seed_API_B')], dbBasePath: tempDb('api-recall'), numShards: 4 });
         await app.orchestrator.init();
         app.pipeline.start();
         await app.server.listen({ port, host: '127.0.0.1' });

@@ -5,6 +5,7 @@ import { rmSync } from 'fs';
 
 const dbDirs: string[] = [];
 let counter = 0;
+const atom = (value: string) => `v1.other.${value}`;
 
 function freshDb(): string {
     const path = `./test-shard-db-${Date.now()}-${counter++}`;
@@ -22,7 +23,7 @@ afterAll(() => {
 describe('ShardWorker', () => {
     // --- Basic structure ---
     it('getKernelRoot returns a valid 64-char hex string for non-empty data', async () => {
-        const worker = new ShardWorker(['A', 'B', 'C'], freshDb());
+        const worker = new ShardWorker([atom('A'), atom('B'), atom('C')], freshDb());
         await worker.init();
         expect(worker.getKernelRoot()).toMatch(/^[a-f0-9]{64}$/);
         await worker.close();
@@ -37,8 +38,8 @@ describe('ShardWorker', () => {
     });
 
     it('getKernelRoot is deterministic for the same data', async () => {
-        const workerA = new ShardWorker(['X', 'Y'], freshDb());
-        const workerB = new ShardWorker(['X', 'Y'], freshDb());
+        const workerA = new ShardWorker([atom('X'), atom('Y')], freshDb());
+        const workerB = new ShardWorker([atom('X'), atom('Y')], freshDb());
         await workerA.init();
         await workerB.init();
         expect(workerA.getKernelRoot()).toBe(workerB.getKernelRoot());
@@ -48,35 +49,35 @@ describe('ShardWorker', () => {
 
     // --- getHash ---
     it('getHash returns a valid 64-char hex string for a known item', async () => {
-        const worker = new ShardWorker(['hello', 'world'], freshDb());
+        const worker = new ShardWorker([atom('hello'), atom('world')], freshDb());
         await worker.init();
-        expect(worker.getHash('hello')).toMatch(/^[a-f0-9]{64}$/);
-        expect(worker.getHash('world')).toMatch(/^[a-f0-9]{64}$/);
+        expect(worker.getHash(atom('hello'))).toMatch(/^[a-f0-9]{64}$/);
+        expect(worker.getHash(atom('world'))).toMatch(/^[a-f0-9]{64}$/);
         await worker.close();
     });
 
     it('getHash returns undefined for an unknown item', async () => {
-        const worker = new ShardWorker(['A', 'B'], freshDb());
+        const worker = new ShardWorker([atom('A'), atom('B')], freshDb());
         await worker.init();
-        expect(worker.getHash('NOT_IN_SHARD')).toBeUndefined();
+        expect(worker.getHash(atom('NOT_IN_SHARD'))).toBeUndefined();
         await worker.close();
     });
 
     it('getHash matches the leaf hash from a standalone MerkleKernel', async () => {
-        const data = ['alpha', 'beta'];
+        const data = [atom('alpha'), atom('beta')];
         const worker = new ShardWorker(data, freshDb());
         await worker.init();
         const kernel = new MerkleKernel(data);
-        expect(worker.getHash('alpha')).toBe(kernel.getLeafHash(0));
-        expect(worker.getHash('beta')).toBe(kernel.getLeafHash(1));
+        expect(worker.getHash(atom('alpha'))).toBe(kernel.getLeafHash(0));
+        expect(worker.getHash(atom('beta'))).toBe(kernel.getLeafHash(1));
         await worker.close();
     });
 
     // --- access ---
     it('access returns proof, hash, and null prediction for untrained item', async () => {
-        const worker = new ShardWorker(['A', 'B', 'C'], freshDb());
+        const worker = new ShardWorker([atom('A'), atom('B'), atom('C')], freshDb());
         await worker.init();
-        const result = await worker.access('A');
+        const result = await worker.access(atom('A'));
         expect(result.proof.leaf).toMatch(/^[a-f0-9]{64}$/);
         expect(result.proof.root).toBe(worker.getKernelRoot());
         expect(result.hash).toMatch(/^[a-f0-9]{64}$/);
@@ -86,58 +87,58 @@ describe('ShardWorker', () => {
     });
 
     it('access throws for an item not in the shard', async () => {
-        const worker = new ShardWorker(['A', 'B'], freshDb());
+        const worker = new ShardWorker([atom('A'), atom('B')], freshDb());
         await worker.init();
-        await expect(worker.access('UNKNOWN')).rejects.toThrow();
+        await expect(worker.access(atom('UNKNOWN'))).rejects.toThrow();
         await worker.close();
     });
 
     it('access proof is valid via MerkleKernel.verifyProof', async () => {
-        const worker = new ShardWorker(['A', 'B', 'C', 'D'], freshDb());
+        const worker = new ShardWorker([atom('A'), atom('B'), atom('C'), atom('D')], freshDb());
         await worker.init();
-        const result = await worker.access('C');
+        const result = await worker.access(atom('C'));
         expect(MerkleKernel.verifyProof(result.proof)).toBe(true);
         await worker.close();
     });
 
     // --- recordTransition + prediction ---
     it('recordTransition makes access predict the next item', async () => {
-        const worker = new ShardWorker(['A', 'B', 'C'], freshDb());
+        const worker = new ShardWorker([atom('A'), atom('B'), atom('C')], freshDb());
         await worker.init();
-        const hashA = worker.getHash('A')!;
-        const hashB = worker.getHash('B')!;
+        const hashA = worker.getHash(atom('A'))!;
+        const hashB = worker.getHash(atom('B'))!;
         await worker.recordTransition(hashA, hashB);
-        const result = await worker.access('A');
-        expect(result.next).toBe('B');
+        const result = await worker.access(atom('A'));
+        expect(result.next).toBe(atom('B'));
         expect(result.nextProof).not.toBeNull();
         expect(MerkleKernel.verifyProof(result.nextProof!)).toBe(true);
         await worker.close();
     });
 
     it('recordTransition with more weight wins prediction', async () => {
-        const worker = new ShardWorker(['A', 'B', 'C'], freshDb());
+        const worker = new ShardWorker([atom('A'), atom('B'), atom('C')], freshDb());
         await worker.init();
-        const hashA = worker.getHash('A')!;
-        const hashB = worker.getHash('B')!;
-        const hashC = worker.getHash('C')!;
+        const hashA = worker.getHash(atom('A'))!;
+        const hashB = worker.getHash(atom('B'))!;
+        const hashC = worker.getHash(atom('C'))!;
         // Record A→C 3 times vs A→B 1 time
         for (let i = 0; i < 3; i++) await worker.recordTransition(hashA, hashC);
         await worker.recordTransition(hashA, hashB);
-        const result = await worker.access('A');
-        expect(result.next).toBe('C'); // C has higher accumulated weight
+        const result = await worker.access(atom('A'));
+        expect(result.next).toBe(atom('C')); // C has higher accumulated weight
         await worker.close();
     });
 
     // --- LevelDB persistence ---
     it('persists transitions across close/reopen', async () => {
         const db = freshDb();
-        const data = ['P', 'Q', 'R'];
+        const data = [atom('P'), atom('Q'), atom('R')];
 
         // Write
         const w1 = new ShardWorker(data, db);
         await w1.init();
-        const hp = w1.getHash('P')!;
-        const hq = w1.getHash('Q')!;
+        const hp = w1.getHash(atom('P'))!;
+        const hq = w1.getHash(atom('Q'))!;
         await w1.recordTransition(hp, hq);
         await new Promise(r => setTimeout(r, 30)); // let async persist settle
         await w1.close();
@@ -145,20 +146,20 @@ describe('ShardWorker', () => {
         // Reopen
         const w2 = new ShardWorker(data, db);
         await w2.init(); // loads from LevelDB
-        const result = await w2.access('P');
-        expect(result.next).toBe('Q');
+        const result = await w2.access(atom('P'));
+        expect(result.next).toBe(atom('Q'));
         await w2.close();
     });
 
     // --- close ---
     it('close() resolves without error', async () => {
-        const worker = new ShardWorker(['A'], freshDb());
+        const worker = new ShardWorker([atom('A')], freshDb());
         await worker.init();
         await expect(worker.close()).resolves.not.toThrow();
     });
 
     it('close() can be called on a freshly constructed (uninitialised) worker', async () => {
-        const worker = new ShardWorker(['A'], freshDb());
+        const worker = new ShardWorker([atom('A')], freshDb());
         await expect(worker.close()).resolves.not.toThrow();
     });
 });
@@ -171,7 +172,7 @@ describe('ShardWorker — commit scheduling', () => {
         await worker.init();
         const vBefore = worker.snapshotVersion;
         // addAtoms() internally triggers commit when pending.size >= threshold
-        await worker.addAtoms(['AutoCommitAtom']);
+        await worker.addAtoms([atom('AutoCommitAtom')]);
         const vAfter = worker.snapshotVersion;
         expect(vAfter).toBeGreaterThan(vBefore);
         expect(worker.pendingCount).toBe(0); // pending queue flushed by auto-commit
@@ -181,12 +182,12 @@ describe('ShardWorker — commit scheduling', () => {
     it('commitThreshold=2: no auto-commit after 1 atom, auto-commits after 2nd', async () => {
         const worker = new ShardWorker([], freshDb(), { commitThreshold: 2 });
         await worker.init();
-        await worker.addAtoms(['First']);
+        await worker.addAtoms([atom('First')]);
         // 1 atom — threshold not yet reached
         expect(worker.pendingCount).toBe(1);
         expect(worker.snapshotVersion).toBe(0);
 
-        await worker.addAtoms(['Second']);
+        await worker.addAtoms([atom('Second')]);
         // 2 atoms — threshold reached, auto-commit fires
         expect(worker.pendingCount).toBe(0);
         expect(worker.snapshotVersion).toBeGreaterThan(0);
@@ -197,8 +198,8 @@ describe('ShardWorker — commit scheduling', () => {
         // Default threshold = Infinity
         const worker = new ShardWorker([], freshDb());
         await worker.init();
-        await worker.addAtoms(['A']);
-        await worker.addAtoms(['B']);
+        await worker.addAtoms([atom('A')]);
+        await worker.addAtoms([atom('B')]);
         expect(worker.pendingCount).toBe(2);
         expect(worker.snapshotVersion).toBe(0);
         await worker.commit();
@@ -212,7 +213,7 @@ describe('ShardWorker — commit scheduling', () => {
         // between vi.advanceTimersByTimeAsync and in-flight WAL I/O.
         const worker = new ShardWorker([], freshDb(), { commitIntervalMs: 30 });
         await worker.init();
-        await worker.addAtoms(['TimedAtom']);
+        await worker.addAtoms([atom('TimedAtom')]);
         expect(worker.pendingCount).toBe(1);
 
         // Wait long enough for the interval to fire and the async commit to finish
@@ -224,7 +225,7 @@ describe('ShardWorker — commit scheduling', () => {
     });
 
     it('commitIntervalMs: no pending writes — timer fires but version does not change', async () => {
-        const worker = new ShardWorker(['A'], freshDb(), { commitIntervalMs: 30 });
+        const worker = new ShardWorker([atom('A')], freshDb(), { commitIntervalMs: 30 });
         await worker.init();
         // Wait for init-implicit commit (none — no pending writes at start)
         await worker.commit(); // explicit commit of any init-time pending writes

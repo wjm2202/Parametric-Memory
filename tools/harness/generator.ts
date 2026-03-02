@@ -53,25 +53,25 @@ function buildAtom(domain: HarnessDomain, ordinal: number, vocabularySize: numbe
             const subject = `s${pad(Math.floor(ordinal / 9), 6)}`;
             const predicate = `p${Math.floor(rnd() * 32)}`;
             const object = `o${pad((ordinal * 7 + Math.floor(rnd() * 97)) % (vocabularySize * 3), 6)}`;
-            return `kg|${subject}|${predicate}|${object}|${vocab}`;
+            return `v1.other.kg|${subject}|${predicate}|${object}|${vocab}`;
         }
         case 'conversation': {
             const thread = `t${pad(Math.floor(ordinal / 20), 5)}`;
             const turn = `m${pad(ordinal % 200, 4)}`;
             const role = rnd() < 0.5 ? 'user' : 'assistant';
-            return `conv|${thread}|${turn}|${role}|${vocab}`;
+            return `v1.other.conv|${thread}|${turn}|${role}|${vocab}`;
         }
         case 'tool_call': {
             const agent = `agent${(ordinal % 16) + 1}`;
             const action = `action_${(ordinal * 3) % 64}`;
             const result = `result_${(ordinal * 11 + Math.floor(rnd() * 17)) % 128}`;
-            return `tool|${agent}|${action}|${result}|${vocab}`;
+            return `v1.other.tool|${agent}|${action}|${result}|${vocab}`;
         }
         case 'document': {
             const doc = `doc${pad(Math.floor(ordinal / 30), 5)}`;
             const para = `p${pad(ordinal % 300, 4)}`;
             const section = `sec${(ordinal % 12) + 1}`;
-            return `doc|${doc}|${section}|${para}|${vocab}`;
+            return `v1.other.doc|${doc}|${section}|${para}|${vocab}`;
         }
     }
 }

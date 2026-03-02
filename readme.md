@@ -29,6 +29,16 @@ API default: `http://localhost:3000`
 - `GET /ready` — strict readiness probe (`200` ready, `503` not ready)
 - `GET /metrics` — Prometheus metrics
 
+## Atom Schema (Strict v1)
+
+- Strict enforcement is enabled now (no legacy atom fallback).
+- Allowed types in schema v1: `fact`, `event`, `relation`, `state`, `other`.
+- Canonical atom format: `v1.<type>.<value>` (single-line, non-empty value).
+- Endpoints that accept atoms (`/access`, `/train`, `/atoms`) accept either:
+  - canonical string form, or
+  - object form: `{ "type": "event", "value": "checkout.started" }`
+- Existing DBs with legacy atom strings must be reset before startup.
+
 When `MMPM_API_KEY` is set, bearer auth is required for non-probe routes.
 Probe routes (`/metrics`, `/health`, `/ready`) are intentionally unauthenticated.
 
@@ -47,6 +57,14 @@ Probe routes (`/metrics`, `/health`, `/ready`) are intentionally unauthenticated
 - Embedded benchmark: `npm run bench:run`
 - API benchmark (expects running server): `npm run bench:run:api`
 - Concurrent benchmark preset: `npm run bench:run:concurrent`
+- Real-world shard stress (large related dataset + validation queries):
+  - `npm run bench:run:realworld`
+  - `npm run bench:run:realworld:large`
+- Atom content + sparse tree inspection:
+  - Show stored atom text from LevelDB shard: `npm run bench:inspect:db`
+  - Render sparse transition tree (Mermaid): `npm run bench:inspect:tree`
+  - Custom example:
+    - `ts-node tools/harness/inspect_db.ts --db ./mmpm-db --shard 3 --atom "user|u000001|region:na|tier:free" --depth 2 --branch 5 --out tools/harness/results/my-tree.mmd`
 - CI-style benchmark gate:
   - `npm run bench:ci:api`
   - Starts Docker Compose, waits for `mmpm-service` health, runs benchmark, tears down.

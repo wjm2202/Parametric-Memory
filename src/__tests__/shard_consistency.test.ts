@@ -29,11 +29,12 @@ import { ShardRouter } from '../router';
 import { MerkleKernel } from '../merkle';
 
 // ─── Test fixtures ────────────────────────────────────────────────────────────
+const atom = (value: string) => `v1.other.${value}`;
 
 /** Atoms chosen to guarantee cross-shard placement under 2 and 4 shards */
-const ATOMS_4 = ['Alpha', 'Beta', 'Gamma', 'Delta'];
-const ATOMS_8 = ['Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon', 'Zeta', 'Eta', 'Theta'];
-const SEQUENCE = ['Alpha', 'Beta', 'Gamma', 'Delta'];
+const ATOMS_4 = ['Alpha', 'Beta', 'Gamma', 'Delta'].map(atom);
+const ATOMS_8 = ['Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon', 'Zeta', 'Eta', 'Theta'].map(atom);
+const SEQUENCE = ['Alpha', 'Beta', 'Gamma', 'Delta'].map(atom);
 
 /** Shard counts to test across */
 const SHARD_COUNTS = [1, 2, 4, 8] as const;
@@ -118,14 +119,14 @@ describe('Shard Consistency — prediction is invariant across shard count', () 
             await orch.init();
             // Train 3× to build definitive weight
             for (let i = 0; i < 3; i++) await orch.train(SEQUENCE);
-            const report = await orch.access('Alpha');
+            const report = await orch.access(atom('Alpha'));
             predictions.push(report.predictedNext);
             await orch.close();
         }
 
         // All shard counts must agree
         const first = predictions[0];
-        expect(first).toBe('Beta'); // ground truth: Alpha trained → Beta
+        expect(first).toBe(atom('Beta')); // ground truth: Alpha trained → Beta
         for (const p of predictions) {
             expect(p).toBe(first);
         }
@@ -138,7 +139,10 @@ describe('Shard Consistency — prediction is invariant across shard count', () 
             await orch.train(SEQUENCE);
 
             const expected: Record<string, string | null> = {
-                Alpha: 'Beta', Beta: 'Gamma', Gamma: 'Delta', Delta: null,
+                [atom('Alpha')]: atom('Beta'),
+                [atom('Beta')]: atom('Gamma'),
+                [atom('Gamma')]: atom('Delta'),
+                [atom('Delta')]: null,
             };
 
             for (const [atom, expectedNext] of Object.entries(expected)) {
@@ -281,19 +285,19 @@ describe('Shard Consistency — Merkle proof integrity for all shard counts', ()
 
 describe('Shard Consistency — empty shards do not break the cluster', () => {
     it('8 shards with 2 atoms (most shards empty): init and access succeed', async () => {
-        const orch = new ShardedOrchestrator(8, ['P', 'Q'], tempDb('sparse'));
+        const orch = new ShardedOrchestrator(8, [atom('P'), atom('Q')], tempDb('sparse'));
         await orch.init();
-        await orch.train(['P', 'Q']);
-        const report = await orch.access('P');
-        expect(report.predictedNext).toBe('Q');
+        await orch.train([atom('P'), atom('Q')]);
+        const report = await orch.access(atom('P'));
+        expect(report.predictedNext).toBe(atom('Q'));
         await orch.close();
     });
 
     it('shard count greater than atom count: zero empty-shard crashes', async () => {
         // 4 shards for 2 atoms means at least 2 shards are empty
-        const orch = new ShardedOrchestrator(4, ['X', 'Y'], tempDb('sparse-4'));
+        const orch = new ShardedOrchestrator(4, [atom('X'), atom('Y')], tempDb('sparse-4'));
         await expect(orch.init()).resolves.not.toThrow();
-        await expect(orch.access('X')).resolves.toBeDefined();
+        await expect(orch.access(atom('X'))).resolves.toBeDefined();
         await orch.close();
     });
 
@@ -394,8 +398,8 @@ describe('Shard Consistency — getClusterStats accuracy', () => {
         const orch = new ShardedOrchestrator(2, ATOMS_4, tempDb('stats-branch'));
         await orch.init();
 
-        await orch.train(['Alpha', 'Beta']);   // 1 edge
-        await orch.train(['Alpha', 'Gamma']);  // 1 new edge (Alpha now has 2)
+        await orch.train([atom('Alpha'), atom('Beta')]);   // 1 edge
+        await orch.train([atom('Alpha'), atom('Gamma')]);  // 1 new edge (Alpha now has 2)
 
         const stats = orch.getClusterStats();
         expect(stats.trainedAtoms).toBe(1);   // only Alpha has outgoing transitions
