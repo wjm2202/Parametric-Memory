@@ -1,0 +1,461 @@
+{
+    "__inputs": [
+        {
+            "name": "DS_PROMETHEUS",
+            "label": "Prometheus",
+            "description": "",
+            "type": "datasource",
+            "pluginId": "prometheus",
+            "pluginName": "Prometheus"
+        }
+    ],
+    "__requires": [
+        {
+            "type": "grafana",
+            "id": "grafana",
+            "name": "Grafana",
+            "version": "9.0.0"
+        },
+        {
+            "type": "datasource",
+            "id": "prometheus",
+            "name": "Prometheus",
+            "version": "1.0.0"
+        },
+        {
+            "type": "panel",
+            "id": "stat",
+            "name": "Stat",
+            "version": ""
+        },
+        {
+            "type": "panel",
+            "id": "timeseries",
+            "name": "Time series",
+            "version": ""
+        }
+    ],
+    "annotations": {
+        "list": []
+    },
+    "editable": true,
+    "fiscalYearStartMonth": 0,
+    "graphTooltip": 1,
+    "id": null,
+    "links": [],
+    "panels": [
+        {
+            "id": 1,
+            "title": "Harness Throughput (ops/sec)",
+            "description": "Total harness operations per second",
+            "type": "stat",
+            "gridPos": {
+                "h": 4,
+                "w": 6,
+                "x": 0,
+                "y": 0
+            },
+            "datasource": "Prometheus",
+            "targets": [
+                {
+                    "refId": "A",
+                    "expr": "max(mmpm_harness_throughput_ops_per_sec)",
+                    "legendFormat": "ops/sec"
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "ops",
+                    "color": {
+                        "mode": "thresholds"
+                    },
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "red",
+                                "value": null
+                            },
+                            {
+                                "color": "yellow",
+                                "value": 250
+                            },
+                            {
+                                "color": "green",
+                                "value": 1000
+                            }
+                        ]
+                    }
+                },
+                "overrides": []
+            },
+            "options": {
+                "reduceOptions": {
+                    "calcs": [
+                        "lastNotNull"
+                    ]
+                },
+                "orientation": "auto",
+                "textMode": "auto",
+                "colorMode": "background",
+                "graphMode": "none"
+            }
+        },
+        {
+            "id": 2,
+            "title": "Read / Write Throughput",
+            "description": "Reads/sec and writes/sec from harness report",
+            "type": "timeseries",
+            "gridPos": {
+                "h": 4,
+                "w": 12,
+                "x": 6,
+                "y": 0
+            },
+            "datasource": "Prometheus",
+            "targets": [
+                {
+                    "refId": "A",
+                    "expr": "max(mmpm_harness_throughput_reads_per_sec)",
+                    "legendFormat": "reads/sec"
+                },
+                {
+                    "refId": "B",
+                    "expr": "max(mmpm_harness_throughput_writes_per_sec)",
+                    "legendFormat": "writes/sec"
+                },
+                {
+                    "refId": "C",
+                    "expr": "max(mmpm_harness_throughput_commits_per_sec)",
+                    "legendFormat": "commits/sec"
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "ops",
+                    "custom": {
+                        "lineWidth": 2,
+                        "fillOpacity": 10,
+                        "showPoints": "never"
+                    }
+                },
+                "overrides": []
+            },
+            "options": {
+                "legend": {
+                    "displayMode": "table",
+                    "placement": "bottom"
+                }
+            }
+        },
+        {
+            "id": 3,
+            "title": "Prediction Hit Rate",
+            "description": "Prediction hit rate from recall benchmark",
+            "type": "stat",
+            "gridPos": {
+                "h": 4,
+                "w": 6,
+                "x": 18,
+                "y": 0
+            },
+            "datasource": "Prometheus",
+            "targets": [
+                {
+                    "refId": "A",
+                    "expr": "100 * max(mmpm_harness_prediction_hit_rate_ratio)",
+                    "legendFormat": "hit %"
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "percent",
+                    "min": 0,
+                    "max": 100,
+                    "color": {
+                        "mode": "thresholds"
+                    },
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "red",
+                                "value": null
+                            },
+                            {
+                                "color": "yellow",
+                                "value": 40
+                            },
+                            {
+                                "color": "green",
+                                "value": 70
+                            }
+                        ]
+                    }
+                },
+                "overrides": []
+            },
+            "options": {
+                "reduceOptions": {
+                    "calcs": [
+                        "lastNotNull"
+                    ]
+                },
+                "orientation": "auto",
+                "textMode": "auto",
+                "colorMode": "background",
+                "graphMode": "none"
+            }
+        },
+        {
+            "id": 4,
+            "title": "Access Latency p95",
+            "description": "Overall access latency p95 from report",
+            "type": "stat",
+            "gridPos": {
+                "h": 4,
+                "w": 8,
+                "x": 0,
+                "y": 4
+            },
+            "datasource": "Prometheus",
+            "targets": [
+                {
+                    "refId": "A",
+                    "expr": "max(mmpm_harness_latency_access_p95_ms)",
+                    "legendFormat": "p95 ms"
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "ms",
+                    "color": {
+                        "mode": "thresholds"
+                    },
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": null
+                            },
+                            {
+                                "color": "yellow",
+                                "value": 20
+                            },
+                            {
+                                "color": "red",
+                                "value": 100
+                            }
+                        ]
+                    }
+                },
+                "overrides": []
+            },
+            "options": {
+                "reduceOptions": {
+                    "calcs": [
+                        "lastNotNull"
+                    ]
+                },
+                "orientation": "auto",
+                "textMode": "auto",
+                "colorMode": "background",
+                "graphMode": "none"
+            }
+        },
+        {
+            "id": 5,
+            "title": "Pattern Latency p95 by Pattern",
+            "description": "Per recall pattern p95 latency",
+            "type": "timeseries",
+            "gridPos": {
+                "h": 8,
+                "w": 16,
+                "x": 8,
+                "y": 4
+            },
+            "datasource": "Prometheus",
+            "targets": [
+                {
+                    "refId": "A",
+                    "expr": "max by (pattern) (mmpm_harness_pattern_latency_p95_ms)",
+                    "legendFormat": "{{pattern}}"
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "ms",
+                    "custom": {
+                        "lineWidth": 2,
+                        "fillOpacity": 12,
+                        "showPoints": "never"
+                    }
+                },
+                "overrides": []
+            },
+            "options": {
+                "legend": {
+                    "displayMode": "table",
+                    "placement": "bottom"
+                }
+            }
+        },
+        {
+            "id": 6,
+            "title": "Prediction Latency Effect",
+            "description": "Saved latency and miss penalty",
+            "type": "timeseries",
+            "gridPos": {
+                "h": 8,
+                "w": 8,
+                "x": 0,
+                "y": 8
+            },
+            "datasource": "Prometheus",
+            "targets": [
+                {
+                    "refId": "A",
+                    "expr": "max(mmpm_harness_prediction_avg_latency_saved_ms)",
+                    "legendFormat": "saved ms"
+                },
+                {
+                    "refId": "B",
+                    "expr": "max(mmpm_harness_prediction_miss_penalty_ms)",
+                    "legendFormat": "miss penalty ms"
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "ms",
+                    "custom": {
+                        "lineWidth": 2,
+                        "fillOpacity": 10,
+                        "showPoints": "never"
+                    }
+                },
+                "overrides": []
+            },
+            "options": {
+                "legend": {
+                    "displayMode": "table",
+                    "placement": "bottom"
+                }
+            }
+        },
+        {
+            "id": 7,
+            "title": "Correctness Failures",
+            "description": "Proof failures, stale reads, and version mismatches",
+            "type": "timeseries",
+            "gridPos": {
+                "h": 6,
+                "w": 12,
+                "x": 0,
+                "y": 16
+            },
+            "datasource": "Prometheus",
+            "targets": [
+                {
+                    "refId": "A",
+                    "expr": "max(mmpm_harness_correctness_proof_failures_total)",
+                    "legendFormat": "proof failures"
+                },
+                {
+                    "refId": "B",
+                    "expr": "max(mmpm_harness_correctness_stale_reads_total)",
+                    "legendFormat": "stale reads"
+                },
+                {
+                    "refId": "C",
+                    "expr": "max(mmpm_harness_correctness_version_mismatches_total)",
+                    "legendFormat": "version mismatches"
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "short",
+                    "custom": {
+                        "lineWidth": 2,
+                        "fillOpacity": 8,
+                        "showPoints": "always"
+                    }
+                },
+                "overrides": []
+            },
+            "options": {
+                "legend": {
+                    "displayMode": "table",
+                    "placement": "bottom"
+                }
+            }
+        },
+        {
+            "id": 8,
+            "title": "Ingestion Pressure",
+            "description": "Backpressure events and ingestion totals",
+            "type": "timeseries",
+            "gridPos": {
+                "h": 6,
+                "w": 12,
+                "x": 12,
+                "y": 16
+            },
+            "datasource": "Prometheus",
+            "targets": [
+                {
+                    "refId": "A",
+                    "expr": "max(mmpm_harness_backpressure_events_total)",
+                    "legendFormat": "backpressure events"
+                },
+                {
+                    "refId": "B",
+                    "expr": "max(mmpm_harness_atoms_queued_total)",
+                    "legendFormat": "atoms queued"
+                },
+                {
+                    "refId": "C",
+                    "expr": "max(mmpm_harness_atoms_committed_total)",
+                    "legendFormat": "atoms committed"
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "short",
+                    "custom": {
+                        "lineWidth": 2,
+                        "fillOpacity": 8,
+                        "showPoints": "never"
+                    }
+                },
+                "overrides": []
+            },
+            "options": {
+                "legend": {
+                    "displayMode": "table",
+                    "placement": "bottom"
+                }
+            }
+        }
+    ],
+    "schemaVersion": 38,
+    "style": "dark",
+    "tags": [
+        "mmpm",
+        "sprint7",
+        "harness"
+    ],
+    "templating": {
+        "list": []
+    },
+    "time": {
+        "from": "now-24h",
+        "to": "now"
+    },
+    "timepicker": {},
+    "timezone": "",
+    "title": "MMPM Sprint 7 Harness",
+    "uid": "mmpm-sprint7-harness",
+    "version": 1,
+    "weekStart": ""
+}

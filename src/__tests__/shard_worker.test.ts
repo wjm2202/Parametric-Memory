@@ -1,4 +1,4 @@
-import { describe, it, expect, afterAll } from 'vitest';
+import { describe, it, expect, afterAll, vi } from 'vitest';
 import { ShardWorker } from '../shard_worker';
 import { MerkleKernel } from '../merkle';
 import { rmSync } from 'fs';
@@ -15,6 +15,7 @@ function freshDb(): string {
 afterAll(() => {
     for (const dir of dbDirs) {
         try { rmSync(dir, { recursive: true, force: true }); } catch { }
+        try { rmSync(`${dir}.wal`, { force: true }); } catch { }
     }
 });
 
@@ -159,5 +160,91 @@ describe('ShardWorker', () => {
     it('close() can be called on a freshly constructed (uninitialised) worker', async () => {
         const worker = new ShardWorker(['A'], freshDb());
         await expect(worker.close()).resolves.not.toThrow();
+    });
+});
+
+// ─── Commit scheduling policy (Story 3.3) ────────────────────────────────────
+
+describe('ShardWorker — commit scheduling', () => {
+    it('commitThreshold=1: addAtoms auto-commits without an explicit commit() call', async () => {
+        const worker = new ShardWorker([], freshDb(), { commitThreshold: 1 });
+        await worker.init();
+        const vBefore = worker.snapshotVersion;
+        // addAtoms() internally triggers commit when pending.size >= threshold
+        await worker.addAtoms(['AutoCommitAtom']);
+        const vAfter = worker.snapshotVersion;
+        expect(vAfter).toBeGreaterThan(vBefore);
+        expect(worker.pendingCount).toBe(0); // pending queue flushed by auto-commit
+        await worker.close();
+    });
+
+    it('commitThreshold=2: no auto-commit after 1 atom, auto-commits after 2nd', async () => {
+        const worker = new ShardWorker([], freshDb(), { commitThreshold: 2 });
+        await worker.init();
+        await worker.addAtoms(['First']);
+        // 1 atom — threshold not yet reached
+        expect(worker.pendingCount).toBe(1);
+        expect(worker.snapshotVersion).toBe(0);
+
+        await worker.addAtoms(['Second']);
+        // 2 atoms — threshold reached, auto-commit fires
+        expect(worker.pendingCount).toBe(0);
+        expect(worker.snapshotVersion).toBeGreaterThan(0);
+        await worker.close();
+    });
+
+    it('no commitThreshold: pending writes accumulate until explicit commit', async () => {
+        // Default threshold = Infinity
+        const worker = new ShardWorker([], freshDb());
+        await worker.init();
+        await worker.addAtoms(['A']);
+        await worker.addAtoms(['B']);
+        expect(worker.pendingCount).toBe(2);
+        expect(worker.snapshotVersion).toBe(0);
+        await worker.commit();
+        expect(worker.pendingCount).toBe(0);
+        expect(worker.snapshotVersion).toBe(1);
+        await worker.close();
+    });
+
+    it('commitIntervalMs: timer triggers auto-commit after init', async () => {
+        // Use a short real interval rather than fake timers to avoid races
+        // between vi.advanceTimersByTimeAsync and in-flight WAL I/O.
+        const worker = new ShardWorker([], freshDb(), { commitIntervalMs: 30 });
+        await worker.init();
+        await worker.addAtoms(['TimedAtom']);
+        expect(worker.pendingCount).toBe(1);
+
+        // Wait long enough for the interval to fire and the async commit to finish
+        await new Promise(r => setTimeout(r, 80));
+
+        expect(worker.pendingCount).toBe(0);
+        expect(worker.snapshotVersion).toBeGreaterThan(0);
+        await worker.close();
+    });
+
+    it('commitIntervalMs: no pending writes — timer fires but version does not change', async () => {
+        const worker = new ShardWorker(['A'], freshDb(), { commitIntervalMs: 30 });
+        await worker.init();
+        // Wait for init-implicit commit (none — no pending writes at start)
+        await worker.commit(); // explicit commit of any init-time pending writes
+        const vBefore = worker.snapshotVersion;
+        // Wait for at least one interval to fire
+        await new Promise(r => setTimeout(r, 80));
+        expect(worker.snapshotVersion).toBe(vBefore);
+        await worker.close();
+    });
+
+    it('close() clears the commit interval so it does not fire after close', async () => {
+        vi.useFakeTimers();
+        try {
+            const worker = new ShardWorker([], freshDb(), { commitIntervalMs: 50 });
+            await worker.init();
+            await worker.close(); // clears the interval before it fires
+            // Advancing time should not trigger any disposed timer
+            await expect(vi.advanceTimersByTimeAsync(200)).resolves.not.toThrow();
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });

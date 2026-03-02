@@ -1,6 +1,12 @@
 export type Hash = string;
 export type DataAtom = string;
 
+/**
+ * Sentinel leaf value written into the Merkle tree when an atom is tombstoned.
+ * 64 hex zeros (32 zero bytes) — can never collide with a real SHA-256 hash.
+ */
+export const TOMBSTONE_HASH: Hash = '00'.repeat(32);
+
 export interface MerkleProof {
     leaf: Hash;
     root: Hash;
@@ -15,4 +21,11 @@ export interface PredictionReport {
     predictedNext: DataAtom | null;
     predictedProof: MerkleProof | null;
     latencyMs: number;
+    /**
+     * Master-kernel version at time this report was generated.
+     * Pass this to MMPMValidator (when constructed with a MasterKernel) so it
+     * looks up the authoritative master root for that exact tree state rather
+     * than relying on the current (possibly newer) root.
+     */
+    treeVersion: number;
 }

@@ -99,3 +99,46 @@ export const clusterTrainedAtoms = getOrCreate(
         help: 'Atoms with at least one outgoing trained transition.',
     })
 );
+
+// ─── Commit / epoch metrics (Story 7.1) ──────────────────────────────────────
+
+/** End-to-end snapshot commit latency per shard (ms). */
+export const commitLatency = getOrCreate(
+    'mmpm_commit_latency_ms',
+    () => new Histogram({
+        name: 'mmpm_commit_latency_ms',
+        help: 'Time to complete a snapshot commit per shard (ms)',
+        labelNames: ['shard'] as const,
+        buckets: [0.1, 0.5, 1, 2, 5, 10, 25, 50, 100],
+    })
+);
+
+/** Total committed snapshots per shard. */
+export const commitsTotal = getOrCreate(
+    'mmpm_commits_total',
+    () => new Counter({
+        name: 'mmpm_commits_total',
+        help: 'Total snapshot commits per shard',
+        labelNames: ['shard'] as const,
+    })
+);
+
+/** Total epoch transitions (= successful commits) per shard. */
+export const epochTransitionsTotal = getOrCreate(
+    'mmpm_epoch_transitions_total',
+    () => new Counter({
+        name: 'mmpm_epoch_transitions_total',
+        help: 'Total epoch transitions (commit completions) per shard',
+        labelNames: ['shard'] as const,
+    })
+);
+
+/** Current pending (uncommitted) write count per shard. */
+export const pendingWritesGauge = getOrCreate(
+    'mmpm_pending_writes_count',
+    () => new Gauge({
+        name: 'mmpm_pending_writes_count',
+        help: 'Number of pending (uncommitted) writes per shard',
+        labelNames: ['shard'] as const,
+    })
+);

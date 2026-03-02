@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { Hash, MerkleProof } from './types';
+import { Hash, MerkleProof, TOMBSTONE_HASH } from './types';
 
 export class MerkleKernel {
     private leaves: Buffer[] = [];
@@ -43,6 +43,22 @@ export class MerkleKernel {
 
     getLeafHash(index: number): Hash {
         return this.leaves[index].toString('hex');
+    }
+
+    /**
+     * Replace a leaf with a zero-buffer sentinel (TOMBSTONE_HASH).
+     * The index is preserved — no other indices shift — so all outstanding
+     * proofs for other atoms remain structurally valid against their own roots.
+     * The shard root changes, which propagates to the master kernel and creates
+     * a new treeVersion; old proofs validate against their original treeVersion.
+     *
+     * @throws RangeError if index is out of bounds.
+     */
+    tombstone(index: number): void {
+        if (index < 0 || index >= this.leaves.length) {
+            throw new RangeError(`Leaf index ${index} is out of range (tree has ${this.leaves.length} leaves).`);
+        }
+        this.leaves[index] = Buffer.from(TOMBSTONE_HASH, 'hex');
     }
 
     /**
