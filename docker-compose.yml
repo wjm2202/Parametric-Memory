@@ -5,7 +5,7 @@ services:
       - "3000:3000"
     environment:
       - MMPM_API_KEY=${MMPM_API_KEY:-}
-      - MMPM_INITIAL_DATA=${MMPM_INITIAL_DATA:-NodeA,NodeB,NodeC,NodeD,NodeE,NodeF}
+      - MMPM_INITIAL_DATA=${MMPM_INITIAL_DATA:-v1.other.NodeA,v1.other.NodeB,v1.other.NodeC,v1.other.NodeD,v1.other.NodeE,v1.other.NodeF}
       # Optional: point to a mounted JSON seed file instead of MMPM_INITIAL_DATA.
       # The file must contain a flat JSON array of atom strings:
       #   ["atom1", "atom2", ...]
