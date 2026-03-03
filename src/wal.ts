@@ -56,8 +56,10 @@ function checksum(entry: Omit<WalEntry, 'ck'>): string {
 export class ShardWAL {
     private readonly filePath: string;
     private readonly compactThresholdBytes: number;
+    private readonly statCheckIntervalBytes: number;
     private fd: fsp.FileHandle | null = null;
     private seq: number = 0;
+    private bytesSinceLastStat: number = 0;
 
     /**
      * @param walFilePath  Full path to the WAL file, e.g. "./mmpm-db/shard_0.wal"
@@ -67,10 +69,17 @@ export class ShardWAL {
         walFilePath: string,
         options?: {
             compactThresholdBytes?: number;
+            statCheckIntervalBytes?: number;
         }
     ) {
         this.filePath = walFilePath;
         this.compactThresholdBytes = options?.compactThresholdBytes ?? 256 * 1024;
+        const requestedInterval = options?.statCheckIntervalBytes;
+        if (requestedInterval !== undefined && requestedInterval > 0) {
+            this.statCheckIntervalBytes = requestedInterval;
+        } else {
+            this.statCheckIntervalBytes = Math.max(1, Math.min(4096, this.compactThresholdBytes));
+        }
         const dir = join(walFilePath, '..');
         try { mkdirSync(dir, { recursive: true }); } catch { /* exists */ }
     }
@@ -83,6 +92,7 @@ export class ShardWAL {
         if (this.fd) return;
         // 'a+' = append + read; creates if not exists
         this.fd = await fsp.open(this.filePath, 'a+');
+        this.bytesSinceLastStat = 0;
     }
 
     /**
@@ -164,6 +174,7 @@ export class ShardWAL {
             } catch { /* file may not exist */ }
         }
         this.seq = 0;
+        this.bytesSinceLastStat = 0;
     }
 
     async close(): Promise<void> {
@@ -171,6 +182,7 @@ export class ShardWAL {
             await this.fd.close();
             this.fd = null;
         }
+        this.bytesSinceLastStat = 0;
     }
 
     // ─── Private ────────────────────────────────────────────────────────
@@ -182,6 +194,7 @@ export class ShardWAL {
         // fsync: flush OS page cache to storage device before returning.
         // This is the guarantee that the entry survives a process crash.
         await this.fd!.sync();
+        this.bytesSinceLastStat += Buffer.byteLength(line, 'utf8');
         await this.compactIfNeeded();
     }
 
@@ -259,6 +272,8 @@ export class ShardWAL {
 
     private async compactIfNeeded(): Promise<void> {
         if (!this.fd || this.compactThresholdBytes <= 0) return;
+        if (this.bytesSinceLastStat < this.statCheckIntervalBytes) return;
+        this.bytesSinceLastStat = 0;
 
         const stat = await this.fd.stat();
         if (stat.size <= this.compactThresholdBytes) return;
@@ -274,6 +289,7 @@ export class ShardWAL {
             await this.fd.writeFile(payload, 'utf-8');
         }
         await this.fd.sync();
+        this.bytesSinceLastStat = 0;
 
         const maxSeq = compacted.reduce((mx, e) => Math.max(mx, e.seq), 0);
         if (maxSeq > this.seq) this.seq = maxSeq;

@@ -9,6 +9,8 @@ export class ShardRouter {
         for (let i = 0; i < numShards; i++) {
             this.addShardToRing(i);
         }
+        // Build path optimization: sort once after all virtual nodes are inserted.
+        this.sortedKeys.sort((a, b) => a - b);
     }
 
     private addShardToRing(shardIdx: number) {
@@ -18,7 +20,6 @@ export class ShardRouter {
             this.ring.set(hash, shardIdx);
             this.sortedKeys.push(hash);
         }
-        this.sortedKeys.sort((a, b) => a - b);
     }
 
     public getShardIndex(item: string): number {

@@ -1,16 +1,29 @@
 import { ShardWorker } from './shard_worker';
 import { MasterKernel } from './master';
 import { ShardRouter } from './router';
-import { DataAtom, Hash, PredictionReport } from './types';
+import { DataAtom, Hash, MerkleProof, PredictionReport } from './types';
 import { performance } from 'perf_hooks';
-import { assertAtomV1, assertAtomsV1 } from './atom_schema';
+import { assertAtomV1, assertAtomsV1, ATOM_TYPES, parseAtomV1 } from './atom_schema';
+import { TransitionPolicy } from './transition_policy';
+import { warmPredictionFallbackTotal } from './metrics';
+
+export type BatchAccessResult =
+    | ({ ok: true } & PredictionReport)
+    | {
+        ok: false;
+        item: DataAtom;
+        statusCode: number;
+        error: string;
+    };
 
 export class ShardedOrchestrator {
     private shards: Map<number, ShardWorker> = new Map();
+    private hashToShard: Map<Hash, number> = new Map();
     private master: MasterKernel = new MasterKernel();
     private router: ShardRouter;
     private lastShard: number | null = null;
     private ready = false;
+    private policy: TransitionPolicy = TransitionPolicy.default();
     private readonly pendingHighWaterMark: number;
     private readonly backpressureRetryAfterSec: number;
 
@@ -81,8 +94,20 @@ export class ShardedOrchestrator {
                 commitIntervalMs,
                 shardId: i,
             });
+            worker.setPolicy(this.policy);
             this.shards.set(i, worker);
         }
+    }
+
+    setPolicy(policy: TransitionPolicy): void {
+        this.policy = policy;
+        for (const shard of this.shards.values()) {
+            shard.setPolicy(policy);
+        }
+    }
+
+    getPolicy(): TransitionPolicy {
+        return this.policy;
     }
 
     async init() {
@@ -101,6 +126,7 @@ export class ShardedOrchestrator {
             shardVersions.set(id, shard.snapshotVersion);
         }
         this.master.batchUpdateShardRoots(rootUpdates, shardVersions);
+        this.rebuildHashIndex();
         this.ready = true;
     }
 
@@ -127,15 +153,10 @@ export class ShardedOrchestrator {
         let predictedProof = result.nextProof;
 
         if (predictedNext === null && result.predictedHash !== null) {
-            for (const otherShard of this.shards.values()) {
-                const resolved = otherShard.resolveByHash(result.predictedHash);
-                if (resolved !== null) {
-                    // Skip tombstoned atoms — getHash() returns undefined for tombstoned
-                    if (otherShard.getHash(resolved.atom) === undefined) break;
-                    predictedNext = resolved.atom;
-                    predictedProof = resolved.proof;
-                    break;
-                }
+            const resolved = this.resolveHashAcrossShards(result.predictedHash);
+            if (resolved !== null) {
+                predictedNext = resolved.atom;
+                predictedProof = resolved.proof;
             }
         }
 
@@ -150,6 +171,80 @@ export class ShardedOrchestrator {
         };
     }
 
+    async batchAccess(items: DataAtom[]): Promise<BatchAccessResult[]> {
+        assertAtomsV1(items, 'batchAccess.items');
+        if (items.length === 0) return [];
+
+        const grouped = new Map<number, Array<{ index: number; item: DataAtom }>>();
+        for (let index = 0; index < items.length; index++) {
+            const item = items[index];
+            const shardIdx = this.router.getShardIndex(item);
+            if (!grouped.has(shardIdx)) grouped.set(shardIdx, []);
+            grouped.get(shardIdx)!.push({ index, item });
+        }
+
+        const results: BatchAccessResult[] = new Array(items.length);
+        const treeVersion = this.master.currentVersion;
+
+        await Promise.all(
+            Array.from(grouped.entries()).map(async ([shardIdx, batch]) => {
+                const shard = this.shards.get(shardIdx);
+                if (!shard) {
+                    for (const entry of batch) {
+                        results[entry.index] = {
+                            ok: false,
+                            item: entry.item,
+                            statusCode: 404,
+                            error: `Shard ${shardIdx} not initialized for item ${entry.item}`,
+                        };
+                    }
+                    return;
+                }
+
+                const shardResults = await shard.batchAccess(batch.map(entry => entry.item));
+                for (let i = 0; i < shardResults.length; i++) {
+                    const shardResult = shardResults[i];
+                    const original = batch[i];
+
+                    if (!shardResult.ok) {
+                        results[original.index] = {
+                            ok: false,
+                            item: original.item,
+                            statusCode: shardResult.statusCode,
+                            error: shardResult.error,
+                        };
+                        continue;
+                    }
+
+                    const local = shardResult.result;
+                    let predictedNext = local.next;
+                    let predictedProof = local.nextProof;
+
+                    if (predictedNext === null && local.predictedHash !== null) {
+                        const resolved = this.resolveHashAcrossShards(local.predictedHash);
+                        if (resolved !== null) {
+                            predictedNext = resolved.atom;
+                            predictedProof = resolved.proof;
+                        }
+                    }
+
+                    results[original.index] = {
+                        ok: true,
+                        currentData: original.item,
+                        currentProof: local.proof,
+                        shardRootProof: this.master.getShardProof(shardIdx),
+                        predictedNext,
+                        predictedProof,
+                        latencyMs: 0,
+                        treeVersion,
+                    };
+                }
+            })
+        );
+
+        return results;
+    }
+
     /**
      * Optional warm-read path for pending atoms (Story 5.5).
      * Returns unverified data (no proof) only when the atom exists but has not
@@ -159,11 +254,12 @@ export class ShardedOrchestrator {
         currentData: DataAtom;
         currentProof: null;
         shardRootProof?: undefined;
-        predictedNext: null;
+        predictedNext: DataAtom | null;
         predictedProof: null;
         latencyMs: number;
         treeVersion: number;
         verified: false;
+        shardId: number;
     } | null {
         const start = performance.now();
         const sIdx = this.router.getShardIndex(item);
@@ -171,14 +267,31 @@ export class ShardedOrchestrator {
         if (!shard) return null;
         if (!shard.isPendingAtom(item)) return null;
 
+        let predictedNext: DataAtom | null = null;
+        if (!this.policy.isOpenPolicy()) {
+            const parsed = parseAtomV1(item);
+            if (parsed) {
+                for (const toType of ATOM_TYPES) {
+                    if (!this.policy.isAllowed(parsed.type, toType)) continue;
+                    const candidate = shard.getBestAtomOfType(toType);
+                    if (candidate !== null) {
+                        predictedNext = candidate;
+                        warmPredictionFallbackTotal.inc({ shard: String(sIdx) });
+                        break;
+                    }
+                }
+            }
+        }
+
         return {
             currentData: item,
             currentProof: null,
-            predictedNext: null,
+            predictedNext,
             predictedProof: null,
             latencyMs: performance.now() - start,
             treeVersion: this.master.currentVersion,
             verified: false,
+            shardId: sIdx,
         };
     }
 
@@ -287,10 +400,8 @@ export class ShardedOrchestrator {
 
         return raw.map(entry => {
             if (entry.to !== null) return { to: entry.to, weight: entry.weight };
-            for (const other of this.shards.values()) {
-                const resolved = other.resolveByHash(entry.toHash);
-                if (resolved) return { to: resolved.atom, weight: entry.weight };
-            }
+            const resolved = this.resolveHashAcrossShards(entry.toHash);
+            if (resolved) return { to: resolved.atom, weight: entry.weight };
             return null;
         }).filter((e): e is { to: DataAtom; weight: number } => e !== null);
     }
@@ -338,6 +449,16 @@ export class ShardedOrchestrator {
             }
         }
         this.master.batchUpdateShardRoots(rootUpdates, shardVersions);
+
+        for (const [shardIdx, shardAtoms] of buckets.entries()) {
+            const shard = this.shards.get(shardIdx);
+            if (!shard) continue;
+            for (const atom of shardAtoms) {
+                const hash = shard.getHash(atom);
+                if (hash) this.hashToShard.set(hash, shardIdx);
+            }
+        }
+
         return this.master.currentVersion;
     }
 
@@ -353,9 +474,14 @@ export class ShardedOrchestrator {
         const shardIdx = this.router.getShardIndex(atom);
         const shard = this.shards.get(shardIdx);
         if (!shard) throw new Error(`No shard found for atom '${atom}'.`);
+
+        const record = shard.getAtomRecord(atom);
+        if (!record) throw new Error(`Atom '${atom}' not found in this shard.`);
+
         await shard.tombstoneAtom(atom);
         await shard.commit();
         this.master.updateShardRoot(shardIdx, shard.getKernelRoot(), shard.snapshotVersion);
+        this.hashToShard.delete(record.hash);
         return this.master.currentVersion;
     }
 
@@ -415,8 +541,32 @@ export class ShardedOrchestrator {
     /** Close all shard LevelDB instances gracefully. */
     async close(): Promise<void> {
         this.ready = false;
+        this.hashToShard.clear();
         for (const shard of this.shards.values()) {
             await shard.close();
         }
+    }
+
+    private rebuildHashIndex(): void {
+        this.hashToShard.clear();
+        for (const [shardIdx, shard] of this.shards.entries()) {
+            for (const { atom, status } of shard.getAtoms()) {
+                if (status !== 'active') continue;
+                const hash = shard.getHash(atom);
+                if (hash) this.hashToShard.set(hash, shardIdx);
+            }
+        }
+    }
+
+    private resolveHashAcrossShards(hash: Hash): { atom: DataAtom; proof: MerkleProof } | null {
+        const shardIdx = this.hashToShard.get(hash);
+        if (shardIdx === undefined) return null;
+        const shard = this.shards.get(shardIdx);
+        if (!shard) return null;
+
+        const resolved = shard.resolveByHash(hash);
+        if (!resolved) return null;
+        if (shard.getHash(resolved.atom) === undefined) return null;
+        return resolved;
     }
 }

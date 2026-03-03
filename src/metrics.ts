@@ -142,3 +142,56 @@ export const pendingWritesGauge = getOrCreate(
         labelNames: ['shard'] as const,
     })
 );
+
+// ─── Phase 2 metrics (Stories 12.1 / 12.2) ─────────────────────────────────
+
+/** CSR build time per shard (ms), observed at commit-time rebuild. */
+export const csrBuildMs = getOrCreate(
+    'mmpm_csr_build_ms',
+    () => new Histogram({
+        name: 'mmpm_csr_build_ms',
+        help: 'Time to build CsrTransitionMatrix per shard (ms)',
+        labelNames: ['shard'] as const,
+        buckets: [0.1, 0.5, 1, 2, 5, 10, 25],
+    })
+);
+
+/** Edge count in CSR after each build. */
+export const csrEdgeCount = getOrCreate(
+    'mmpm_csr_edge_count',
+    () => new Gauge({
+        name: 'mmpm_csr_edge_count',
+        help: 'Total edge count in CSR per shard after rebuild',
+        labelNames: ['shard'] as const,
+    })
+);
+
+/** Number of predictions changed/nullified by type policy filtering. */
+export const predictionTypeFilteredTotal = getOrCreate(
+    'mmpm_prediction_type_filtered_total',
+    () => new Counter({
+        name: 'mmpm_prediction_type_filtered_total',
+        help: 'Total predictions altered by type policy filtering',
+        labelNames: ['shard'] as const,
+    })
+);
+
+/** Warm-read fallback predictions returned due to restricted type policy. */
+export const warmPredictionFallbackTotal = getOrCreate(
+    'mmpm_warm_prediction_fallback_total',
+    () => new Counter({
+        name: 'mmpm_warm_prediction_fallback_total',
+        help: 'Total warm-read type-fallback predictions emitted',
+        labelNames: ['shard'] as const,
+    })
+);
+
+/** Transition count matrix by parsed atom types in /train traffic. */
+export const transitionByTypeTotal = getOrCreate(
+    'mmpm_transition_by_type_total',
+    () => new Counter({
+        name: 'mmpm_transition_by_type_total',
+        help: 'Total trained transitions by from/to atom type',
+        labelNames: ['from_type', 'to_type'] as const,
+    })
+);

@@ -1,5 +1,6 @@
 import { describe, it, expect, afterAll, afterEach } from 'vitest';
 import { ShardedOrchestrator } from '../orchestrator';
+import { TransitionPolicy } from '../transition_policy';
 import { rmSync } from 'fs';
 
 const dbDirs: string[] = [];
@@ -112,6 +113,138 @@ describe('ShardedOrchestrator', () => {
     it('close() can be called safely with no activity', async () => {
         const mem = new ShardedOrchestrator(4, [atom('A')], freshDb());
         await expect(mem.close()).resolves.not.toThrow();
+    });
+
+    it('batchAccess() resolves multi-item requests and preserves input order', async () => {
+        const mem = new ShardedOrchestrator(4, [atom('A'), atom('B'), atom('C'), atom('D')], freshDb());
+        await mem.init();
+        await mem.train([atom('A'), atom('B'), atom('C')]);
+
+        const batch = await mem.batchAccess([atom('C'), atom('A'), atom('B')]);
+        expect(batch).toHaveLength(3);
+        expect(batch[0].ok).toBe(true);
+        expect(batch[1].ok).toBe(true);
+        expect(batch[2].ok).toBe(true);
+        if (batch[0].ok && batch[1].ok && batch[2].ok) {
+            expect(batch[0].currentData).toBe(atom('C'));
+            expect(batch[1].currentData).toBe(atom('A'));
+            expect(batch[2].currentData).toBe(atom('B'));
+        }
+        await mem.close();
+    });
+
+    it('batchAccess() partial result: unknown items return 404-style error records', async () => {
+        const mem = new ShardedOrchestrator(4, [atom('A'), atom('B')], freshDb());
+        await mem.init();
+
+        const batch = await mem.batchAccess([atom('A'), atom('UNKNOWN_X')]);
+        expect(batch).toHaveLength(2);
+        expect(batch[0].ok).toBe(true);
+        expect(batch[1].ok).toBe(false);
+        if (!batch[1].ok) {
+            expect(batch[1].statusCode).toBe(404);
+            expect(batch[1].item).toBe(atom('UNKNOWN_X'));
+        }
+        await mem.close();
+    });
+
+    it('batchAccess() result for known items matches individual access() calls', async () => {
+        const mem = new ShardedOrchestrator(4, [atom('A'), atom('B'), atom('C')], freshDb());
+        await mem.init();
+        await mem.train([atom('A'), atom('B'), atom('C')]);
+
+        const batch = await mem.batchAccess([atom('A'), atom('B')]);
+        const singleA = await mem.access(atom('A'));
+        const singleB = await mem.access(atom('B'));
+
+        expect(batch[0].ok).toBe(true);
+        expect(batch[1].ok).toBe(true);
+        if (batch[0].ok && batch[1].ok) {
+            expect(batch[0].predictedNext).toBe(singleA.predictedNext);
+            expect(batch[1].predictedNext).toBe(singleB.predictedNext);
+            expect(batch[0].currentProof.root).toBe(singleA.currentProof.root);
+            expect(batch[1].currentProof.root).toBe(singleB.currentProof.root);
+        }
+        await mem.close();
+    });
+
+    it('setPolicy() propagates to shards and changes prediction on next access', async () => {
+        const mem = new ShardedOrchestrator(1, ['v1.fact.A', 'v1.event.B', 'v1.relation.C'], freshDb());
+        await mem.init();
+        await mem.train(['v1.fact.A', 'v1.event.B']);
+        await mem.train(['v1.fact.A', 'v1.event.B']);
+        await mem.train(['v1.fact.A', 'v1.relation.C']);
+
+        const before = await mem.access('v1.fact.A');
+        expect(before.predictedNext).toBe('v1.event.B');
+
+        mem.setPolicy(TransitionPolicy.fromConfig({ fact: ['relation'] }));
+        const after = await mem.access('v1.fact.A');
+        expect(after.predictedNext).toBe('v1.relation.C');
+        expect(mem.getPolicy().isOpenPolicy()).toBe(false);
+        await mem.close();
+    });
+
+    it('cross-shard prediction respects restrictive policy (disallowed type -> null)', async () => {
+        const mem = new ShardedOrchestrator(4, ['v1.fact.A', 'v1.event.B'], freshDb());
+        await mem.init();
+        await mem.train(['v1.fact.A', 'v1.event.B']);
+
+        mem.setPolicy(TransitionPolicy.fromConfig({ fact: ['relation'] }));
+        const report = await mem.access('v1.fact.A');
+        expect(report.predictedNext).toBeNull();
+        await mem.close();
+    });
+
+    it('tryWarmRead() with default policy returns null predictedNext', async () => {
+        const mem = new ShardedOrchestrator(1, ['v1.fact.Seed', 'v1.relation.R'], freshDb());
+        await mem.init();
+        const shard = (mem as any).shards.get(0);
+        await shard.addAtoms(['v1.fact.Pending']); // pending, uncommitted
+
+        const warm = mem.tryWarmRead('v1.fact.Pending');
+        expect(warm).not.toBeNull();
+        expect(warm?.predictedNext).toBeNull();
+        expect(warm?.verified).toBe(false);
+        await mem.close();
+    });
+
+    it('tryWarmRead() with restricted policy returns type-matched prediction when available', async () => {
+        const mem = new ShardedOrchestrator(1, [
+            'v1.fact.F1',
+            'v1.event.E1',
+            'v1.relation.R1',
+            'v1.relation.R2',
+        ], freshDb());
+        await mem.init();
+
+        // Increase R2 score so it is chosen as best relation fallback.
+        await mem.train(['v1.fact.F1', 'v1.relation.R2']);
+        await mem.train(['v1.event.E1', 'v1.relation.R2']);
+        await mem.train(['v1.fact.F1', 'v1.relation.R1']);
+
+        mem.setPolicy(TransitionPolicy.fromConfig({ fact: ['relation'] }));
+        const shard = (mem as any).shards.get(0);
+        await shard.addAtoms(['v1.fact.Pending2']);
+
+        const warm = mem.tryWarmRead('v1.fact.Pending2');
+        expect(warm).not.toBeNull();
+        expect(warm?.predictedNext).toBe('v1.relation.R2');
+        expect(warm?.verified).toBe(false);
+        await mem.close();
+    });
+
+    it('warm prediction result is always verified: false', async () => {
+        const mem = new ShardedOrchestrator(1, ['v1.fact.A', 'v1.relation.B'], freshDb());
+        await mem.init();
+        mem.setPolicy(TransitionPolicy.fromConfig({ fact: ['relation'] }));
+        const shard = (mem as any).shards.get(0);
+        await shard.addAtoms(['v1.fact.Pending3']);
+
+        const warm = mem.tryWarmRead('v1.fact.Pending3');
+        expect(warm).not.toBeNull();
+        expect(warm?.verified).toBe(false);
+        await mem.close();
     });
 });
 

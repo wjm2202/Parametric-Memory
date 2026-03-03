@@ -60,6 +60,18 @@ Probe routes (`/metrics`, `/health`, `/ready`) are intentionally unauthenticated
 - Real-world shard stress (large related dataset + validation queries):
   - `npm run bench:run:realworld`
   - `npm run bench:run:realworld:large`
+- Continuous scientific load client (ongoing traffic + retrieval quality scoring):
+  - `npm run bench:continuous`
+  - `npm run bench:continuous:policy`
+  - Live exporter mode for Grafana overlays (offered vs served):
+    - `npm run bench:continuous:live`
+    - Exposes `/metrics` and `/health` on `http://127.0.0.1:9470`
+  - Custom profile example:
+    - `ts-node tools/harness/continuous_client.ts --profile read-heavy --duration-ms 180000 --target-ops 200 --concurrency 12 --dataset-flows 48 --strong-repeats 12 --weak-repeats 2 --metrics-port 9470 --metrics-host 0.0.0.0`
+  - Report includes:
+    - ingestion evidence (`writesQueued`, `commits`, `ingestionVerifiedReads`)
+    - retrieval usefulness (`predictionUsefulRate`)
+    - retrieval accuracy (`predictionAccuracy`, `accuracyProbe.accuracy`)
 - Atom content + sparse tree inspection:
   - Show stored atom text from LevelDB shard: `npm run bench:inspect:db`
   - Render sparse transition tree (Mermaid): `npm run bench:inspect:tree`
@@ -76,11 +88,15 @@ Probe routes (`/metrics`, `/health`, `/ready`) are intentionally unauthenticated
   - `npm run bench:grafana`
   - Optional preset: `bash tools/harness/open-grafana.sh concurrent`
   - If dashboard is empty, wait 5-15s and refresh (Prometheus scrape interval is 5s).
+  - For live continuous-client overlays, run `npm run bench:continuous:live` in a separate terminal while Grafana is open.
+  - Or run one-command orchestration with automatic teardown on Ctrl+C:
+    - `bash tools/harness/open-grafana-continuous.sh`
+    - Optional profile: `bash tools/harness/open-grafana-continuous.sh policy-stress`
 
 ## CI Workflows
 
-- `.github/workflows/readiness-fast-tests.yml` — fast readiness/regression suite on push + PR
-- `.github/workflows/bench-ci-api.yml` — health-gated benchmark on push + PR
+- `.github/workflows/readiness-fast-tests.yml` — readiness/regression suite + health-gated API benchmark on push + PR
+- `.github/workflows/bench-ci-api.yml` — manual-only API benchmark runner (`workflow_dispatch`)
 
 To enforce as merge gates, set both workflow checks as required in GitHub branch protection/rulesets.
 

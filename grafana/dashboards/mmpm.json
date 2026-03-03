@@ -875,6 +875,316 @@
                     "sort": "desc"
                 }
             }
+        },
+        {
+            "id": 15,
+            "title": "CSR Build Latency p95 by Shard",
+            "description": "Commit-time CSR rebuild p95 latency per shard.",
+            "type": "timeseries",
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 49
+            },
+            "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+            },
+            "targets": [
+                {
+                    "refId": "A",
+                    "expr": "histogram_quantile(0.95, sum by (le, shard) (rate(mmpm_csr_build_ms_bucket{shard=~\"$shard\"}[5m])))",
+                    "legendFormat": "shard {{shard}}"
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "ms",
+                    "custom": {
+                        "lineWidth": 2,
+                        "fillOpacity": 10,
+                        "showPoints": "never"
+                    }
+                },
+                "overrides": []
+            },
+            "options": {
+                "legend": {
+                    "displayMode": "list",
+                    "placement": "right"
+                }
+            }
+        },
+        {
+            "id": 16,
+            "title": "CSR Edge Count by Shard",
+            "description": "Compiled transition edge count per shard after each commit.",
+            "type": "timeseries",
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 49
+            },
+            "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+            },
+            "targets": [
+                {
+                    "refId": "A",
+                    "expr": "mmpm_csr_edge_count{shard=~\"$shard\"}",
+                    "legendFormat": "shard {{shard}}"
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "short",
+                    "min": 0,
+                    "custom": {
+                        "lineWidth": 2,
+                        "fillOpacity": 8,
+                        "showPoints": "never"
+                    }
+                },
+                "overrides": []
+            },
+            "options": {
+                "legend": {
+                    "displayMode": "list",
+                    "placement": "right"
+                }
+            }
+        },
+        {
+            "id": 17,
+            "title": "Type-Policy Filtered Predictions",
+            "description": "Rate of predictions changed/nullified by policy constraints.",
+            "type": "timeseries",
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 57
+            },
+            "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+            },
+            "targets": [
+                {
+                    "refId": "A",
+                    "expr": "sum by (shard) (rate(mmpm_prediction_type_filtered_total{shard=~\"$shard\"}[5m]))",
+                    "legendFormat": "shard {{shard}}"
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "ops",
+                    "min": 0,
+                    "custom": {
+                        "lineWidth": 2,
+                        "fillOpacity": 10,
+                        "showPoints": "never"
+                    }
+                },
+                "overrides": []
+            },
+            "options": {
+                "legend": {
+                    "displayMode": "list",
+                    "placement": "right"
+                }
+            }
+        },
+        {
+            "id": 18,
+            "title": "Warm-Read Fallback Rate",
+            "description": "Fallback prediction rate under restricted policies.",
+            "type": "timeseries",
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 57
+            },
+            "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+            },
+            "targets": [
+                {
+                    "refId": "A",
+                    "expr": "sum by (shard) (rate(mmpm_warm_prediction_fallback_total{shard=~\"$shard\"}[5m]))",
+                    "legendFormat": "shard {{shard}}"
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "ops",
+                    "min": 0,
+                    "custom": {
+                        "lineWidth": 2,
+                        "fillOpacity": 10,
+                        "showPoints": "never"
+                    }
+                },
+                "overrides": []
+            },
+            "options": {
+                "legend": {
+                    "displayMode": "list",
+                    "placement": "right"
+                }
+            }
+        },
+        {
+            "id": 19,
+            "title": "Client Offered vs Service Access (req/s)",
+            "description": "Overlay continuous-client offered /access load against service /access handling rate.",
+            "type": "timeseries",
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 65
+            },
+            "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+            },
+            "targets": [
+                {
+                    "refId": "A",
+                    "expr": "sum(rate(mmpm_continuous_client_completed_ops_total{profile=~\"$profile\",op=\"access\",status=\"success\"}[1m]))",
+                    "legendFormat": "client offered /access"
+                },
+                {
+                    "refId": "B",
+                    "expr": "sum(rate(mmpm_access_total[1m]))",
+                    "legendFormat": "service handled /access"
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "reqps",
+                    "custom": {
+                        "lineWidth": 2,
+                        "fillOpacity": 8,
+                        "showPoints": "never"
+                    }
+                },
+                "overrides": []
+            },
+            "options": {
+                "legend": {
+                    "displayMode": "table",
+                    "placement": "bottom"
+                }
+            }
+        },
+        {
+            "id": 20,
+            "title": "Client Inflight and Error Rate",
+            "description": "Continuous client pressure and operation failure rate.",
+            "type": "timeseries",
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 65
+            },
+            "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+            },
+            "targets": [
+                {
+                    "refId": "A",
+                    "expr": "sum(mmpm_continuous_client_inflight_requests{profile=~\"$profile\"})",
+                    "legendFormat": "client inflight"
+                },
+                {
+                    "refId": "B",
+                    "expr": "sum(rate(mmpm_continuous_client_completed_ops_total{profile=~\"$profile\",status=\"error\"}[1m]))",
+                    "legendFormat": "client error/sec"
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "short",
+                    "custom": {
+                        "lineWidth": 2,
+                        "fillOpacity": 8,
+                        "showPoints": "never"
+                    }
+                },
+                "overrides": []
+            },
+            "options": {
+                "legend": {
+                    "displayMode": "table",
+                    "placement": "bottom"
+                }
+            }
+        },
+        {
+            "id": 21,
+            "title": "Client Retrieval Quality (ratio)",
+            "description": "Prediction accuracy/usefulness observed by the continuous client and its scientific probe.",
+            "type": "timeseries",
+            "gridPos": {
+                "h": 8,
+                "w": 24,
+                "x": 0,
+                "y": 73
+            },
+            "datasource": {
+                "type": "prometheus",
+                "uid": "${DS_PROMETHEUS}"
+            },
+            "targets": [
+                {
+                    "refId": "A",
+                    "expr": "max(mmpm_continuous_client_prediction_accuracy_ratio{profile=~\"$profile\"})",
+                    "legendFormat": "online accuracy"
+                },
+                {
+                    "refId": "B",
+                    "expr": "max(mmpm_continuous_client_prediction_useful_ratio{profile=~\"$profile\"})",
+                    "legendFormat": "online usefulness"
+                },
+                {
+                    "refId": "C",
+                    "expr": "max(mmpm_continuous_client_probe_accuracy_ratio{profile=~\"$profile\"})",
+                    "legendFormat": "probe accuracy"
+                },
+                {
+                    "refId": "D",
+                    "expr": "max(mmpm_continuous_client_probe_useful_ratio{profile=~\"$profile\"})",
+                    "legendFormat": "probe usefulness"
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                    "unit": "percentunit",
+                    "min": 0,
+                    "max": 1,
+                    "custom": {
+                        "lineWidth": 2,
+                        "fillOpacity": 8,
+                        "showPoints": "never"
+                    }
+                },
+                "overrides": []
+            },
+            "options": {
+                "legend": {
+                    "displayMode": "table",
+                    "placement": "bottom"
+                }
+            }
         }
     ],
     "refresh": "10s",
@@ -897,6 +1207,44 @@
                 "query": "prometheus",
                 "refresh": 1,
                 "type": "datasource"
+            },
+            {
+                "current": {
+                    "selected": true,
+                    "text": "All",
+                    "value": "$__all"
+                },
+                "hide": 0,
+                "includeAll": true,
+                "label": "Shard",
+                "multi": false,
+                "name": "shard",
+                "options": [],
+                "query": {
+                    "query": "label_values(mmpm_pending_writes_count, shard)",
+                    "refId": "PromVarShard"
+                },
+                "refresh": 2,
+                "type": "query"
+            },
+            {
+                "current": {
+                    "selected": true,
+                    "text": "All",
+                    "value": "$__all"
+                },
+                "hide": 0,
+                "includeAll": true,
+                "label": "Client Profile",
+                "multi": false,
+                "name": "profile",
+                "options": [],
+                "query": {
+                    "query": "label_values(mmpm_continuous_client_target_ops_per_sec, profile)",
+                    "refId": "PromVarProfile"
+                },
+                "refresh": 2,
+                "type": "query"
             }
         ]
     },
@@ -908,5 +1256,5 @@
     "timezone": "browser",
     "title": "MMPM — Markov Merkle Predictive Memory",
     "uid": "mmpm-main",
-    "version": 1
+    "version": 3
 }
