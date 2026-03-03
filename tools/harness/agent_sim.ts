@@ -3,6 +3,8 @@ import { ShardedOrchestrator } from '../../src/orchestrator';
 import { DataAtom } from '../../src/types';
 import { AgentSimStats } from './report';
 import { waitForApiReady } from './api_ready';
+import { TypePolicyConfig, TransitionPolicy } from '../../src/transition_policy';
+import { register } from 'prom-client';
 
 export interface AgentSimOptions {
     useApi?: boolean;
@@ -19,6 +21,10 @@ export interface AgentSimOptions {
     initialAtoms?: DataAtom[];
     ensureInitialAtoms?: boolean;
     commitEveryWrites?: number;
+    useBatchAccess?: boolean;
+    batchGroupMin?: number;
+    batchGroupMax?: number;
+    policy?: TypePolicyConfig;
     seed?: number;
 }
 
@@ -37,6 +43,19 @@ interface AccessResponse {
     predictedNext: string | null;
     treeVersion?: number;
 }
+
+type BatchAccessItem =
+    | {
+        ok: true;
+        currentData: string;
+        predictedNext: string | null;
+    }
+    | {
+        ok: false;
+        item: string;
+        statusCode: number;
+        error: string;
+    };
 
 function sleep(ms: number) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -96,6 +115,32 @@ async function enqueueAtomsWithBackpressure(
     throw new Error(`POST /atoms failed with status ${res.status}`);
 }
 
+async function readPolicyFilteredMetricFromApi(baseUrl: string): Promise<number> {
+    const res = await fetch(`${baseUrl}/metrics`);
+    if (!res.ok) return 0;
+    const body = await res.text();
+    let total = 0;
+    for (const line of body.split('\n')) {
+        if (!line.startsWith('mmpm_prediction_type_filtered_total')) continue;
+        if (line.startsWith('#')) continue;
+        const parts = line.trim().split(/\s+/);
+        if (parts.length < 2) continue;
+        const value = Number(parts[parts.length - 1]);
+        if (Number.isFinite(value)) total += value;
+    }
+    return total;
+}
+
+async function readPolicyFilteredMetricFromLocalRegister(): Promise<number> {
+    const metrics = await register.getMetricsAsJSON();
+    const metric = metrics.find(m => m.name === 'mmpm_prediction_type_filtered_total') as any;
+    if (!metric || !Array.isArray(metric.values)) return 0;
+    return metric.values.reduce((sum: number, v: any) => {
+        const n = Number(v?.value ?? 0);
+        return sum + (Number.isFinite(n) ? n : 0);
+    }, 0);
+}
+
 async function ensureSeededAtoms(
     opts: { useApi: boolean; baseUrl: string; apiKey?: string } & {
         orchestrator?: ShardedOrchestrator;
@@ -143,6 +188,9 @@ export async function runAgentSimulation(options: AgentSimOptions = {}): Promise
     const writeRatio = Math.min(1, Math.max(0, options.writeRatio ?? 0.1));
     const trainRatio = Math.min(1, Math.max(0, options.trainRatio ?? 0.2));
     const readRatioRaw = Math.max(0, options.readRatio ?? 0.7);
+    const useBatchAccess = options.useBatchAccess === true;
+    const batchGroupMin = Math.max(1, options.batchGroupMin ?? 3);
+    const batchGroupMax = Math.max(batchGroupMin, options.batchGroupMax ?? 5);
     const totalRatio = readRatioRaw + writeRatio + trainRatio;
     const readRatio = totalRatio > 0 ? readRatioRaw / totalRatio : 1;
     const normWriteRatio = totalRatio > 0 ? writeRatio / totalRatio : 0;
@@ -155,7 +203,26 @@ export async function runAgentSimulation(options: AgentSimOptions = {}): Promise
         await ensureSeededAtoms({ useApi, baseUrl, apiKey, orchestrator }, atomPool);
     }
 
-    const stats: AgentSimulationStats = {
+    if (options.policy) {
+        if (useApi) {
+            const policyRes = await postJson(baseUrl, '/policy', { policy: options.policy }, apiKey);
+            if (policyRes.status !== 200) {
+                throw new Error(`POST /policy failed with status ${policyRes.status}`);
+            }
+        } else if (orchestrator) {
+            orchestrator.setPolicy(TransitionPolicy.fromConfig(options.policy));
+        }
+    }
+
+    const policyMetricBaseline = useApi
+        ? await readPolicyFilteredMetricFromApi(baseUrl)
+        : await readPolicyFilteredMetricFromLocalRegister();
+
+    const stats: AgentSimulationStats & {
+        batchReads: number;
+        avgBatchSize: number;
+        policyFilteredPredictions: number;
+    } = {
         startedAt,
         finishedAt: startedAt,
         durationMs: 0,
@@ -171,8 +238,13 @@ export async function runAgentSimulation(options: AgentSimOptions = {}): Promise
         errors: 0,
         predictionAttempts: 0,
         predictionFollows: 0,
+        batchReads: 0,
+        avgBatchSize: 0,
+        policyFilteredPredictions: 0,
         perAgentOps: Array.from({ length: agents }, () => 0),
     };
+
+    let observedBatchItems = 0;
 
     const deadline = Date.now() + durationMs;
     let pendingApiWrites = 0;
@@ -186,6 +258,19 @@ export async function runAgentSimulation(options: AgentSimOptions = {}): Promise
         }
         if (!orchestrator) throw new Error('Embedded mode requires options.orchestrator');
         return await orchestrator.access(atom);
+    };
+
+    const batchAccessAtoms = async (items: string[]): Promise<BatchAccessItem[]> => {
+        if (items.length === 0) return [];
+        if (useApi) {
+            const res = await postJson(baseUrl, '/batch-access', { items }, apiKey);
+            if (res.status !== 200 || !Array.isArray(res.body?.results)) {
+                throw new Error(`POST /batch-access failed with status ${res.status}`);
+            }
+            return res.body.results as BatchAccessItem[];
+        }
+        if (!orchestrator) throw new Error('Embedded mode requires options.orchestrator');
+        return (await orchestrator.batchAccess(items)) as BatchAccessItem[];
     };
 
     const trainSeq = async (sequence: string[]): Promise<void> => {
@@ -231,24 +316,56 @@ export async function runAgentSimulation(options: AgentSimOptions = {}): Promise
             const roll = rand();
             try {
                 if (roll < readRatio) {
-                    const t0 = performance.now();
-                    const report = await accessAtom(current);
-                    const latency = performance.now() - t0;
-                    stats.accessLatenciesMs.push(latency);
-                    stats.reads++;
-                    stats.totalOps++;
-                    stats.perAgentOps[agentId]++;
+                    if (!useBatchAccess) {
+                        const t0 = performance.now();
+                        const report = await accessAtom(current);
+                        const latency = performance.now() - t0;
+                        stats.accessLatenciesMs.push(latency);
+                        stats.reads++;
+                        stats.totalOps++;
+                        stats.perAgentOps[agentId]++;
 
-                    if (report.predictedNext) {
-                        stats.predictionAttempts++;
-                        if (rand() < followPredictionRatio) {
-                            stats.predictionFollows++;
-                            current = report.predictedNext;
+                        if (report.predictedNext) {
+                            stats.predictionAttempts++;
+                            if (rand() < followPredictionRatio) {
+                                stats.predictionFollows++;
+                                current = report.predictedNext;
+                            } else {
+                                current = pickOne(committedPool, rand);
+                            }
                         } else {
                             current = pickOne(committedPool, rand);
                         }
                     } else {
-                        current = pickOne(committedPool, rand);
+                        const desiredBatchSize = batchGroupMin + Math.floor(rand() * (batchGroupMax - batchGroupMin + 1));
+                        const batchSize = Math.max(1, Math.min(desiredBatchSize, committedPool.length));
+                        const batchItems = Array.from({ length: batchSize }, () => pickOne(committedPool, rand));
+
+                        const t0 = performance.now();
+                        const batchResults = await batchAccessAtoms(batchItems);
+                        const latency = performance.now() - t0;
+                        stats.accessLatenciesMs.push(latency);
+                        stats.batchReads++;
+                        observedBatchItems += batchSize;
+                        stats.reads += batchSize;
+                        stats.totalOps += batchSize;
+                        stats.perAgentOps[agentId] += batchSize;
+
+                        let preferredNext: string | null = null;
+                        for (const item of batchResults) {
+                            if (!item.ok) continue;
+                            if (item.predictedNext) {
+                                stats.predictionAttempts++;
+                                if (preferredNext === null) preferredNext = item.predictedNext;
+                            }
+                        }
+
+                        if (preferredNext && rand() < followPredictionRatio) {
+                            stats.predictionFollows++;
+                            current = preferredNext;
+                        } else {
+                            current = pickOne(committedPool, rand);
+                        }
                     }
                 } else if (roll < readRatio + normTrainRatio) {
                     const a = pickOne(committedPool, rand);
@@ -293,6 +410,12 @@ export async function runAgentSimulation(options: AgentSimOptions = {}): Promise
             stats.commits++;
         }
     }
+
+    stats.avgBatchSize = stats.batchReads > 0 ? observedBatchItems / stats.batchReads : 0;
+    const policyMetricEnd = useApi
+        ? await readPolicyFilteredMetricFromApi(baseUrl)
+        : await readPolicyFilteredMetricFromLocalRegister();
+    stats.policyFilteredPredictions = Math.max(0, policyMetricEnd - policyMetricBaseline);
 
     stats.durationMs = performance.now() - runStart;
     stats.finishedAt = new Date().toISOString();

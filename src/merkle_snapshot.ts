@@ -1,6 +1,8 @@
 import { createHash } from 'crypto';
 import { Hash, MerkleProof, TOMBSTONE_HASH } from './types';
 
+const ZERO_BUFFER = Buffer.alloc(32);
+
 /**
  * MERKLE SNAPSHOT — Immutable, versioned Merkle tree state.
  *
@@ -91,9 +93,13 @@ export class MerkleSnapshot {
         }
         this.buildNodeCache();
 
-        const auditPath: Hash[] = [];
         const n = this.nextPow2(this.leaves.length);
         const nodes = this._nodes!;
+        // n is always a power of two, so proof depth is log2(n).
+        let depth = 0;
+        for (let p = n; p > 1; p >>= 1) depth++;
+        const auditPath = new Array<Hash>(depth);
+        let level = 0;
         let pos = n - 1 + index; // position of leaf in heap array
 
         while (pos > 0) {
@@ -102,13 +108,13 @@ export class MerkleSnapshot {
             // With zero-padding every slot up to 2n-2 is explicitly allocated,
             // so the sibling is always within bounds — fall back to a zero
             // buffer only as a defensive guard.
-            const siblingNode = sibling < nodes.length ? nodes[sibling] : Buffer.alloc(32);
-            auditPath.push(siblingNode.toString('hex'));
+            const siblingNode = sibling < nodes.length ? nodes[sibling] : ZERO_BUFFER;
+            auditPath[level++] = siblingNode.toString('hex');
             pos = Math.floor((pos - 1) / 2); // parent
         }
 
         return {
-            leaf: this.getLeafHash(index),
+            leaf: this.leaves[index].toString('hex'),
             root: this.root,
             auditPath,
             index,

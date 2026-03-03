@@ -9,3 +9,7 @@ scrape_configs:
   - job_name: 'mmpm_harness_exporter'
     static_configs:
       - targets: ['host.docker.internal:9466']
+
+  - job_name: 'mmpm_continuous_client'
+    static_configs:
+      - targets: ['host.docker.internal:9470']

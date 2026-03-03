@@ -4,9 +4,20 @@ import Fastify, { FastifyInstance } from 'fastify';
 import { ShardedOrchestrator } from './orchestrator';
 import { IngestionPipeline } from './ingestion';
 import { collectDefaultMetrics, register } from 'prom-client';
-import { accessCounter, requestDuration, trainCounter, trainSequenceLength, atomDominanceRatio, atomTrainedEdges, clusterTotalEdges, clusterTrainedAtoms } from './metrics';
+import {
+    accessCounter,
+    requestDuration,
+    trainCounter,
+    trainSequenceLength,
+    atomDominanceRatio,
+    atomTrainedEdges,
+    clusterTotalEdges,
+    clusterTrainedAtoms,
+    transitionByTypeTotal,
+} from './metrics';
 import { logger } from './logger';
-import { assertAtomsV1, encodeAtomV1, isAtomV1, normalizeAtomInput } from './atom_schema';
+import { assertAtomsV1, ATOM_TYPES, AtomType, encodeAtomV1, isAtomV1, normalizeAtomInput, parseAtomV1 } from './atom_schema';
+import { TransitionPolicy, TypePolicyConfig } from './transition_policy';
 
 // Collect Node.js / process metrics automatically (visible at GET /metrics)
 collectDefaultMetrics();
@@ -20,6 +31,25 @@ interface BuildAppOpts {
 }
 
 const SCHEMA_ERROR = "schema v1 required: use 'v1.<type>.<value>' or object { type, value } with type in {fact,event,relation,state,other}.";
+
+function isAtomType(value: unknown): value is AtomType {
+    return typeof value === 'string' && (ATOM_TYPES as readonly string[]).includes(value);
+}
+
+function parsePolicyConfig(input: unknown): TypePolicyConfig | null {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+    const raw = input as Record<string, unknown>;
+    const config: TypePolicyConfig = {};
+
+    for (const [fromKey, toList] of Object.entries(raw)) {
+        if (!isAtomType(fromKey)) return null;
+        if (!Array.isArray(toList)) return null;
+        if (!toList.every(isAtomType)) return null;
+        config[fromKey] = toList as AtomType[];
+    }
+
+    return config;
+}
 
 /** Load a JSON seed file and return its atom array, or null on any error. */
 function loadSeedFile(filePath: string): string[] | null {
@@ -156,6 +186,77 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
     });
 
     /**
+     * POST /batch-access  —  Body: { "items": ["v1.other.A", ...] }
+     *
+     * Performs batched reads with shard-level grouping and a single epoch read
+     * ticket per shard batch. Unknown/tombstoned/pending items are returned as
+     * per-item error records; the overall request still returns 200.
+     */
+    server.post('/batch-access', async (request, reply) => {
+        try {
+            const { items } = request.body as { items?: unknown };
+            if (!Array.isArray(items) || items.length === 0) {
+                return reply.status(400).send({ error: "Property 'items' must be a non-empty array." });
+            }
+
+            const normalized = items.map(normalizeAtomInput);
+            if (normalized.some(x => x === null)) {
+                return reply.status(400).send({ error: `Property 'items' invalid — ${SCHEMA_ERROR}` });
+            }
+
+            const results = await orchestrator.batchAccess(normalized as string[]);
+            return { results };
+        } catch (e: any) {
+            return reply.status(500).send({ error: e.message });
+        }
+    });
+
+    /**
+     * GET /policy  —  Return the current transition policy.
+     */
+    server.get('/policy', async () => {
+        const policy = orchestrator.getPolicy();
+        const isDefault = policy.isOpenPolicy();
+        return {
+            policy: isDefault ? 'default' : policy.toConfig(),
+            isDefault,
+        };
+    });
+
+    /**
+     * POST /policy  —  Set restricted policy or reset to default.
+     * Body: { policy: TypePolicyConfig } | { policy: 'default' }
+     */
+    server.post('/policy', async (request, reply) => {
+        const { policy } = (request.body ?? {}) as { policy?: unknown };
+
+        if (policy === 'default') {
+            const next = TransitionPolicy.default();
+            orchestrator.setPolicy(next);
+            return {
+                status: 'PolicyUpdated',
+                isDefault: true,
+                policy: next.toConfig(),
+            };
+        }
+
+        const cfg = parsePolicyConfig(policy);
+        if (!cfg) {
+            return reply.status(400).send({
+                error: "Property 'policy' must be 'default' or an object mapping valid AtomType keys to AtomType[] values.",
+            });
+        }
+
+        const next = TransitionPolicy.fromConfig(cfg);
+        orchestrator.setPolicy(next);
+        return {
+            status: 'PolicyUpdated',
+            isDefault: next.isOpenPolicy(),
+            policy: next.toConfig(),
+        };
+    });
+
+    /**
      * POST /train  —  Body: { "sequence": ["Node_A", "Node_B"] }
      */
     server.post('/train', async (request, reply) => {
@@ -171,6 +272,12 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             await orchestrator.train(normalized as string[]);
             trainCounter.inc();
             trainSequenceLength.observe(normalized.length);
+
+            for (let i = 0; i < normalized.length - 1; i++) {
+                const fromType = parseAtomV1(normalized[i] as string)?.type ?? 'other';
+                const toType = parseAtomV1(normalized[i + 1] as string)?.type ?? 'other';
+                transitionByTypeTotal.inc({ from_type: fromType, to_type: toType });
+            }
 
             // Update per-atom learning metrics.
             // Only iterates atoms that appeared as `from` in this sequence —

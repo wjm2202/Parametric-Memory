@@ -15,6 +15,9 @@ export interface AgentSimStats {
     commitLatenciesMs: number[];
     staleReads?: number;
     versionMismatches?: number;
+    batchReads?: number;
+    avgBatchSize?: number;
+    policyFilteredPredictions?: number;
 }
 
 export interface BenchmarkScalingPoint {

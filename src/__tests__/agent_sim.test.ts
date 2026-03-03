@@ -121,3 +121,115 @@ describe('Harness agent simulator (Story 9.4)', () => {
         }
     }, 120_000);
 });
+
+describe('Harness agent simulator — batch access + policy (Story 12.4)', () => {
+    it('batch access mode produces similar prediction-hit proxy as sequential mode', async () => {
+        const orchestrator = new ShardedOrchestrator(4, [atom('Seed_A'), atom('Seed_B'), atom('Seed_C')], tempDb('batch-parity'));
+        await orchestrator.init();
+        try {
+            const baseOptions = {
+                useApi: false as const,
+                orchestrator,
+                agents: 4,
+                durationMs: 900,
+                readRatio: 1,
+                writeRatio: 0,
+                trainRatio: 0,
+                thinkTimeMs: 1,
+                initialAtoms: [atom('Seed_A'), atom('Seed_B'), atom('Seed_C'), atom('Seed_D'), atom('Seed_E')],
+                seed: 99,
+            };
+
+            const sequential = await runAgentSimulation({
+                ...baseOptions,
+                useBatchAccess: false,
+            });
+
+            const batch = await runAgentSimulation({
+                ...baseOptions,
+                useBatchAccess: true,
+                batchGroupMin: 3,
+                batchGroupMax: 5,
+            });
+
+            const seqProxy = sequential.reads > 0 ? sequential.predictionAttempts / sequential.reads : 0;
+            const batchProxy = batch.reads > 0 ? batch.predictionAttempts / batch.reads : 0;
+
+            expect(batch.batchReads).toBeGreaterThan(0);
+            expect(Math.abs(batchProxy - seqProxy)).toBeLessThanOrEqual(0.05);
+        } finally {
+            await orchestrator.close();
+        }
+    }, 60_000);
+
+    it('policy-constrained simulation tracks policyFilteredPredictions stat', async () => {
+        const prevLogLevel = process.env.LOG_LEVEL;
+        process.env.LOG_LEVEL = 'silent';
+
+        const port = 3415;
+        const app = buildApp({
+            data: ['v1.fact.A', 'v1.event.B', 'v1.event.C', 'v1.other.Z'],
+            dbBasePath: tempDb('policy-filter-api'),
+            numShards: 2,
+        });
+        await app.orchestrator.init();
+        app.pipeline.start();
+        await app.server.listen({ port, host: '127.0.0.1' });
+
+        try {
+            await app.server.inject({ method: 'POST', url: '/train', payload: { sequence: ['v1.fact.A', 'v1.event.B'] } });
+            await app.server.inject({ method: 'POST', url: '/train', payload: { sequence: ['v1.fact.A', 'v1.event.C'] } });
+
+            const stats = await runAgentSimulation({
+                useApi: true,
+                baseUrl: `http://127.0.0.1:${port}`,
+                agents: 4,
+                durationMs: 1000,
+                readRatio: 1,
+                writeRatio: 0,
+                trainRatio: 0,
+                thinkTimeMs: 1,
+                useBatchAccess: true,
+                initialAtoms: ['v1.fact.A', 'v1.event.B', 'v1.event.C'],
+                policy: { fact: ['state'] },
+                seed: 1234,
+            });
+
+            expect(stats.batchReads).toBeGreaterThan(0);
+            expect(stats.policyFilteredPredictions).toBeGreaterThanOrEqual(1);
+        } finally {
+            await app.pipeline.stop();
+            await app.server.close();
+            await app.orchestrator.close();
+            if (prevLogLevel === undefined) delete process.env.LOG_LEVEL;
+            else process.env.LOG_LEVEL = prevLogLevel;
+        }
+    }, 120_000);
+
+    it('batchAccess avgBatchSize reflects configured batch group size', async () => {
+        const orchestrator = new ShardedOrchestrator(2, [atom('S1'), atom('S2'), atom('S3'), atom('S4'), atom('S5')], tempDb('batch-size'));
+        await orchestrator.init();
+        try {
+            const stats = await runAgentSimulation({
+                useApi: false,
+                orchestrator,
+                agents: 3,
+                durationMs: 900,
+                readRatio: 1,
+                writeRatio: 0,
+                trainRatio: 0,
+                thinkTimeMs: 1,
+                useBatchAccess: true,
+                batchGroupMin: 4,
+                batchGroupMax: 4,
+                initialAtoms: [atom('S1'), atom('S2'), atom('S3'), atom('S4'), atom('S5')],
+                seed: 5678,
+            });
+
+            expect(stats.batchReads).toBeGreaterThan(0);
+            expect(stats.avgBatchSize).toBe(4);
+        } finally {
+            await orchestrator.close();
+        }
+    }, 60_000);
+});

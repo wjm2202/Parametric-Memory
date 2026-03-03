@@ -27,6 +27,7 @@ export class PendingWrites {
     /** The snapshot version this buffer was started against. */
     readonly baseVersion: number;
     private ops: PendingOp[] = [];
+    private addCount = 0;
 
     constructor(baseVersion: number) {
         this.baseVersion = baseVersion;
@@ -37,10 +38,10 @@ export class PendingWrites {
      * Returns the expected index it will occupy after commit.
      */
     addLeaf(data: string): number {
-        // Count how many adds we've already queued to compute expected index.
-        // The caller needs this to update their in-memory maps optimistically.
-        const addCount = this.ops.filter(op => op.kind === 'add').length;
+        // Track queued adds incrementally to keep addLeaf O(1).
+        const addCount = this.addCount;
         this.ops.push({ kind: 'add', data });
+        this.addCount++;
         // Expected index = current snapshot leafCount + prior adds in this buffer
         // (actual index is resolved at apply time — this is a hint)
         return addCount;
@@ -130,5 +131,6 @@ export class PendingWrites {
      */
     clear(): void {
         this.ops = [];
+        this.addCount = 0;
     }
 }

@@ -20,7 +20,13 @@ describe('API Integration', () => {
 
     beforeAll(async () => {
         cleanup(DB_PATH);
-        const app = buildApp({ data: [atom('A'), atom('B'), atom('C'), atom('D')], dbBasePath: DB_PATH });
+        const app = buildApp({
+            data: [
+                atom('A'), atom('B'), atom('C'), atom('D'),
+                'v1.fact.A', 'v1.event.B', 'v1.relation.C',
+            ],
+            dbBasePath: DB_PATH
+        });
         server = app.server;
         orchestrator = app.orchestrator;
         await orchestrator.init();
@@ -37,6 +43,31 @@ describe('API Integration', () => {
         const res = await server.inject({ method: 'GET', url: '/metrics' });
         expect(res.statusCode).toBe(200);
         expect(res.headers['content-type']).toContain('text/plain');
+    });
+
+    it('GET /metrics exposes mmpm_csr_build_ms and mmpm_csr_edge_count after /admin/commit', async () => {
+        await server.inject({ method: 'POST', url: '/atoms', payload: { atoms: [atom('CSR_METRIC_1')] } });
+        await server.inject({ method: 'POST', url: '/train', payload: { sequence: [atom('A'), atom('CSR_METRIC_1')] } });
+        await server.inject({ method: 'POST', url: '/admin/commit' });
+
+        const res = await server.inject({ method: 'GET', url: '/metrics' });
+        const payload = res.payload;
+        expect(payload).toContain('mmpm_csr_build_ms_bucket');
+        expect(payload).toContain('mmpm_csr_edge_count');
+    });
+
+    it('POST /train increments mmpm_transition_by_type_total correctly', async () => {
+        const resTrain = await server.inject({
+            method: 'POST',
+            url: '/train',
+            payload: { sequence: ['v1.fact.A', 'v1.relation.C', 'v1.event.B'] },
+        });
+        expect(resTrain.statusCode).toBe(200);
+
+        const resMetrics = await server.inject({ method: 'GET', url: '/metrics' });
+        const payload = resMetrics.payload;
+        expect(payload).toContain('mmpm_transition_by_type_total{from_type="fact",to_type="relation"}');
+        expect(payload).toContain('mmpm_transition_by_type_total{from_type="relation",to_type="event"}');
     });
 
     // --- /access ---
@@ -68,6 +99,96 @@ describe('API Integration', () => {
         });
         expect(res.statusCode).toBe(404);
         expect(JSON.parse(res.payload).error).toBeDefined();
+    });
+
+    it('POST /batch-access with valid items returns 200 with results array', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/batch-access',
+            payload: { items: [atom('A'), atom('B')] }
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(Array.isArray(body.results)).toBe(true);
+        expect(body.results.length).toBe(2);
+        expect(body.results[0].ok).toBe(true);
+        expect(body.results[1].ok).toBe(true);
+    });
+
+    it('POST /batch-access includes per-item 404-style error record for unknown atom', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/batch-access',
+            payload: { items: [atom('A'), atom('DOES_NOT_EXIST')] }
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.results[0].ok).toBe(true);
+        expect(body.results[1].ok).toBe(false);
+        expect(body.results[1].statusCode).toBe(404);
+    });
+
+    it('POST /batch-access empty items returns 400', async () => {
+        const res = await server.inject({ method: 'POST', url: '/batch-access', payload: { items: [] } });
+        expect(res.statusCode).toBe(400);
+    });
+
+    it('POST /batch-access non-schema items returns 400', async () => {
+        const res = await server.inject({ method: 'POST', url: '/batch-access', payload: { items: [1, 2] } });
+        expect(res.statusCode).toBe(400);
+    });
+
+    it('GET /policy returns default policy on startup', async () => {
+        const res = await server.inject({ method: 'GET', url: '/policy' });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.isDefault).toBe(true);
+        expect(body.policy).toBe('default');
+    });
+
+    it('POST /policy sets restricted policy and access respects new constraints', async () => {
+        await server.inject({
+            method: 'POST',
+            url: '/train',
+            payload: { sequence: ['v1.fact.A', 'v1.event.B'] },
+        });
+
+        const setRes = await server.inject({
+            method: 'POST',
+            url: '/policy',
+            payload: { policy: { fact: ['state'] } },
+        });
+        expect(setRes.statusCode).toBe(200);
+
+        const accessRes = await server.inject({
+            method: 'POST',
+            url: '/access',
+            payload: { data: 'v1.fact.A' },
+        });
+        expect(accessRes.statusCode).toBe(200);
+        expect(JSON.parse(accessRes.payload).predictedNext).toBeNull();
+    });
+
+    it('POST /policy "default" resets policy', async () => {
+        const res = await server.inject({
+            method: 'POST',
+            url: '/policy',
+            payload: { policy: 'default' },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.isDefault).toBe(true);
+
+        const getRes = await server.inject({ method: 'GET', url: '/policy' });
+        const getBody = JSON.parse(getRes.payload);
+        expect(getBody.isDefault).toBe(true);
+    });
+
+    it('POST /policy invalid type name returns 400', async () => {
+        const res = await server.inject({
+            method: 'POST',
+            url: '/policy',
+            payload: { policy: { bogus: ['fact'] } },
+        });
+        expect(res.statusCode).toBe(400);
     });
 
     // --- /train ---
@@ -151,6 +272,40 @@ describe('API Auth', () => {
             headers: { authorization: 'Bearer test-secret' }
         });
         expect(res.statusCode).toBe(200);
+    });
+
+    it('requires auth for /batch-access when API key is set', async () => {
+        const unauth = await authServer.inject({
+            method: 'POST',
+            url: '/batch-access',
+            payload: { items: [atom('X')] },
+        });
+        expect(unauth.statusCode).toBe(401);
+
+        const auth = await authServer.inject({
+            method: 'POST',
+            url: '/batch-access',
+            payload: { items: [atom('X')] },
+            headers: { authorization: 'Bearer test-secret' }
+        });
+        expect(auth.statusCode).toBe(200);
+    });
+
+    it('POST /policy requires auth when API key is set', async () => {
+        const unauth = await authServer.inject({
+            method: 'POST',
+            url: '/policy',
+            payload: { policy: { fact: ['fact'] } },
+        });
+        expect(unauth.statusCode).toBe(401);
+
+        const auth = await authServer.inject({
+            method: 'POST',
+            url: '/policy',
+            payload: { policy: { fact: ['fact'] } },
+            headers: { authorization: 'Bearer test-secret' },
+        });
+        expect(auth.statusCode).toBe(200);
     });
 
     it('rejects wrong token with 401', async () => {

@@ -188,7 +188,7 @@ async function runCli() {
     let orchestrator: ShardedOrchestrator | undefined;
     if (!useApi) {
         const dbPath = resolve(`./mmpm-harness-cli-db-${Date.now()}`);
-        orchestrator = new ShardedOrchestrator(4, ['CLI_Boot_A', 'CLI_Boot_B'], dbPath);
+        orchestrator = new ShardedOrchestrator(4, ['v1.other.CLI_Boot_A', 'v1.other.CLI_Boot_B'], dbPath);
         await orchestrator.init();
     } else {
         await waitForApiReady(baseUrl, {

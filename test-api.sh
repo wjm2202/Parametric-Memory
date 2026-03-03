@@ -45,31 +45,31 @@ echo "=== MMPM Smoke Test: $BASE ==="
 echo ""
 
 # ── 1. Train a known sequence ───────────────────────────────────────────────
-echo "[1] POST /train  (NodeA → NodeB → NodeC → NodeD)"
+echo "[1] POST /train  (v1.other.NodeA → v1.other.NodeB → v1.other.NodeC → v1.other.NodeD)"
 RES=$(curl -s -X POST "$BASE/train" \
     -H "Content-Type: application/json" \
     "${AUTH_ARGS[@]}" \
-    -d '{"sequence":["NodeA","NodeB","NodeC","NodeD"]}')
+    -d '{"sequence":["v1.other.NodeA","v1.other.NodeB","v1.other.NodeC","v1.other.NodeD"]}')
 check "status is Success"     '"status":"Success"' "$RES"
 check "message field present" '"message"'          "$RES"
 
 # ── 2. Access — verify report shape ─────────────────────────────────────────
-echo "[2] POST /access  (NodeA — report shape)"
+echo "[2] POST /access  (v1.other.NodeA — report shape)"
 RES=$(curl -s -X POST "$BASE/access" \
     -H "Content-Type: application/json" \
     "${AUTH_ARGS[@]}" \
-    -d '{"data":"NodeA"}')
-check "currentData returned"  '"currentData":"NodeA"' "$RES"
+    -d '{"data":"v1.other.NodeA"}')
+check "currentData returned"  '"currentData":"v1.other.NodeA"' "$RES"
 check "currentProof present"  '"currentProof"'        "$RES"
 check "latencyMs present"     '"latencyMs"'           "$RES"
 
 # ── 3. Access — Markov prediction fires after training ──────────────────────
-echo "[3] POST /access  (NodeA — prediction after training)"
+echo "[3] POST /access  (v1.other.NodeA — prediction after training)"
 RES=$(curl -s -X POST "$BASE/access" \
     -H "Content-Type: application/json" \
     "${AUTH_ARGS[@]}" \
-    -d '{"data":"NodeA"}')
-check "predictedNext is NodeB"  '"predictedNext":"NodeB"' "$RES"
+    -d '{"data":"v1.other.NodeA"}')
+check "predictedNext is v1.other.NodeB"  '"predictedNext":"v1.other.NodeB"' "$RES"
 check "predictedProof present"  '"predictedProof"'        "$RES"
 
 # ── 4. Validation — missing data field returns 400 ──────────────────────────
@@ -85,7 +85,7 @@ echo "[5] POST /access  (unknown atom → 404)"
 RES=$(curl -s -X POST "$BASE/access" \
     -H "Content-Type: application/json" \
     "${AUTH_ARGS[@]}" \
-    -d '{"data":"DOES_NOT_EXIST_XYZ"}')
+    -d '{"data":"v1.other.DOES_NOT_EXIST_XYZ"}')
 check "error field present" '"error"' "$RES"
 
 # ── 6. Validation — /train with non-array sequence returns 400 ───────────────

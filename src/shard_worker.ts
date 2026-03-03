@@ -7,8 +7,39 @@ import { ShardWAL } from './wal';
 import { createHash } from 'crypto';
 import { performance } from 'perf_hooks';
 import { logger } from './logger';
-import { commitLatency, commitsTotal, epochTransitionsTotal, pendingWritesGauge } from './metrics';
-import { assertAtomV1, isAtomV1 } from './atom_schema';
+import {
+    commitLatency,
+    commitsTotal,
+    csrBuildMs,
+    csrEdgeCount,
+    epochTransitionsTotal,
+    pendingWritesGauge,
+    predictionTypeFilteredTotal,
+} from './metrics';
+import { assertAtomV1, AtomType, parseAtomV1 } from './atom_schema';
+import { CsrTransitionMatrix } from './csr_matrix';
+import { TransitionPolicy } from './transition_policy';
+
+export type ShardAccessResult = {
+    proof: MerkleProof;
+    next: DataAtom | null;
+    nextProof: MerkleProof | null;
+    hash: Hash;
+    predictedHash: Hash | null;
+};
+
+export type ShardBatchAccessItemResult =
+    | {
+        ok: true;
+        item: DataAtom;
+        result: ShardAccessResult;
+    }
+    | {
+        ok: false;
+        item: DataAtom;
+        statusCode: number;
+        error: string;
+    };
 
 /**
  * SHARD WORKER — v3 (Snapshot + Epoch + WAL)
@@ -50,6 +81,8 @@ import { assertAtomV1, isAtomV1 } from './atom_schema';
 export class ShardWorker {
     // ─── Atom state ─────────────────────────────────────────────────────
     private data: DataAtom[];
+    private atomTypes: AtomType[];
+    private atomHashes: Map<DataAtom, Hash>;
     private dataIndex: Map<DataAtom, number>;
     private hashToIndex: Map<Hash, number> = new Map();
 
@@ -60,6 +93,9 @@ export class ShardWorker {
 
     // ─── Markov transitions ─────────────────────────────────────────────
     private transitions: Map<number, Map<Hash, number>> = new Map();
+    private csrMatrix: CsrTransitionMatrix = CsrTransitionMatrix.empty(0);
+    private csrDirty = false;
+    private policy: TransitionPolicy = TransitionPolicy.default();
 
     // ─── Tombstone tracking ─────────────────────────────────────────────
     private tombstoned: Set<number> = new Set();
@@ -73,6 +109,7 @@ export class ShardWorker {
     private commitThreshold: number;
     private commitIntervalMs: number;
     private commitTimer: ReturnType<typeof setInterval> | null = null;
+    private lastPendingMutationAtMs: number = 0;
     /** Metric label — e.g. '0', '1', '2', '3'. Defaults to dbPath suffix. */
     private readonly _shardId: string;
 
@@ -88,6 +125,11 @@ export class ShardWorker {
     ) {
         this.dbPath = dbPath;
         this.data = dataBlocks.slice();
+        this.atomTypes = dataBlocks.map(atom => this.getAtomTypeOrThrow(atom));
+        this.atomHashes = new Map();
+        for (const atom of dataBlocks) {
+            this.atomHashes.set(atom, createHash('sha256').update(atom).digest().toString('hex'));
+        }
         this.dataIndex = new Map(dataBlocks.map((d, i) => [d, i]));
 
         this.activeSnapshot = MerkleSnapshot.fromData(dataBlocks, 0);
@@ -154,16 +196,21 @@ export class ShardWorker {
 
             // ── 2. Load ALL atoms from LevelDB ───────────────────────────
             this.data = [];
+            this.atomTypes = [];
+            this.atomHashes = new Map();
             this.dataIndex = new Map();
             for await (const [, value] of this.db.iterator({ gte: 'ai:', lte: 'ai:~' })) {
                 const atom = value as string;
-                if (!isAtomV1(atom)) {
+                const parsed = parseAtomV1(atom);
+                if (!parsed) {
                     throw new Error(
                         `Legacy atom '${atom}' found in ${this.dbPath}. Strict schema v1 is enabled; start with a fresh DB.`
                     );
                 }
                 this.dataIndex.set(atom, this.data.length);
                 this.data.push(atom);
+                this.atomTypes.push(parsed.type);
+                this.atomHashes.set(atom, this.hashAtom(atom));
             }
 
             // ── 3. Collect tombstone hashes ──────────────────────────────
@@ -186,8 +233,16 @@ export class ShardWorker {
             const uncommitted = await this.wal.readUncommitted();
             for (const entry of uncommitted) {
                 if (entry.op === 'ADD' && entry.data && !this.dataIndex.has(entry.data)) {
+                    const parsed = parseAtomV1(entry.data);
+                    if (!parsed) {
+                        throw new Error(
+                            `Invalid atom '${entry.data}' encountered during WAL recovery in ${this.dbPath}.`
+                        );
+                    }
                     const idx = this.data.length;
                     this.data.push(entry.data);
+                    this.atomTypes.push(parsed.type);
+                    this.atomHashes.set(entry.data, this.hashAtom(entry.data));
                     this.dataIndex.set(entry.data, idx);
                     await this.db
                         .put(`ai:${String(idx).padStart(10, '0')}`, entry.data)
@@ -236,6 +291,10 @@ export class ShardWorker {
                 this.transitions.get(fromIdx)!.set(toHash, weight);
             }
 
+            // Build CSR projection once on startup so read path is warm.
+            this.rebuildCsrMatrix();
+            this.csrDirty = false;
+
             // ── 9. Truncate WAL ──────────────────────────────────────────
             if (uncommitted.length > 0) await this.wal.truncate();
 
@@ -247,6 +306,8 @@ export class ShardWorker {
         if (this.commitIntervalMs > 0) {
             this.commitTimer = setInterval(async () => {
                 if (!this.pending.isEmpty() && !this.epoch.isCommitting) {
+                    const sinceLastMutation = Date.now() - this.lastPendingMutationAtMs;
+                    if (sinceLastMutation < this.commitIntervalMs) return;
                     await this.commit().catch((err: unknown) => logger.error({ err }, 'Auto-commit failed'));
                 }
             }, this.commitIntervalMs);
@@ -260,7 +321,13 @@ export class ShardWorker {
      * Writes the COMMIT marker and truncates the WAL after the swap.
      */
     async commit(): Promise<number> {
-        if (this.pending.isEmpty()) return this.activeSnapshot.version;
+        if (this.pending.isEmpty()) {
+            if (this.csrDirty) {
+                this.rebuildCsrMatrix();
+                this.csrDirty = false;
+            }
+            return this.activeSnapshot.version;
+        }
         const version = await this.commitInternal();
         // Record the commit in the WAL and clear it — the snapshot is now durable
         await this.wal.writeCommit();
@@ -278,11 +345,22 @@ export class ShardWorker {
         const start = performance.now();
         await this.epoch.beginCommit();
         try {
+            const hasTombstones = this.pending.getOps().some(op => op.kind === 'tombstone');
             const { snapshot: newSnapshot, addedIndices } = this.pending.apply(this.activeSnapshot);
             for (const idx of addedIndices) {
                 this.hashToIndex.set(newSnapshot.getLeafHash(idx), idx);
             }
             this.activeSnapshot = newSnapshot;
+            if (hasTombstones || this.csrDirty) {
+                const csrBuildStart = performance.now();
+                this.rebuildCsrMatrix();
+                csrBuildMs.observe({ shard: this._shardId }, performance.now() - csrBuildStart);
+                this.csrDirty = false;
+            } else {
+                // Keep metric series present even when rebuild is intentionally
+                // skipped for add-only commits.
+                csrBuildMs.observe({ shard: this._shardId }, 0);
+            }
             this.pending = new PendingWrites(newSnapshot.version);
         } finally {
             this.epoch.endCommit();
@@ -323,10 +401,13 @@ export class ShardWorker {
 
             // 2. In-memory state
             this.data.push(atom);
+            this.atomTypes.push(this.getAtomTypeOrThrow(atom));
+            this.atomHashes.set(atom, this.hashAtom(atom));
             this.dataIndex.set(atom, idx);
 
             // 3. Queue for snapshot commit
             this.pending.addLeaf(atom);
+            this.lastPendingMutationAtMs = Date.now();
 
             // 4. LevelDB persist
             await this.db
@@ -353,7 +434,7 @@ export class ShardWorker {
 
         const hash = this.activeSnapshot.leafCount > idx
             ? this.activeSnapshot.getLeafHash(idx)
-            : createHash('sha256').update(atom).digest().toString('hex');
+            : this.hashAtom(atom);
 
         // 1. WAL first
         await this.wal.writeTombstone(idx);
@@ -363,6 +444,8 @@ export class ShardWorker {
 
         // 3. Queue for snapshot commit
         this.pending.tombstone(idx);
+        this.csrDirty = true;
+        this.lastPendingMutationAtMs = Date.now();
 
         // 4. LevelDB persist
         await this.db
@@ -393,7 +476,7 @@ export class ShardWorker {
             atom: item,
             index: idx,
             status: this.tombstoned.has(idx) ? 'tombstoned' : 'active',
-            hash: createHash('sha256').update(item).digest().toString('hex'),
+            hash: this.hashAtom(item),
             committed: idx < this.activeSnapshot.leafCount,
         };
     }
@@ -420,7 +503,7 @@ export class ShardWorker {
         const idx = this.dataIndex.get(item);
         if (idx === undefined || this.tombstoned.has(idx)) return undefined;
         if (idx >= this.activeSnapshot.leafCount) {
-            return createHash('sha256').update(item).digest().toString('hex');
+            return this.hashAtom(item);
         }
         return this.activeSnapshot.getLeafHash(idx);
     }
@@ -438,6 +521,39 @@ export class ShardWorker {
     }
 
     getKernelRoot(): Hash { return this.activeSnapshot.root; }
+    getCsrMatrix(): CsrTransitionMatrix { return this.csrMatrix; }
+    setPolicy(policy: TransitionPolicy): void { this.policy = policy; }
+    getPolicy(): TransitionPolicy { return this.policy; }
+
+    getBestAtomOfType(type: AtomType): DataAtom | null {
+        const snapshot = this.activeSnapshot;
+        const incomingWeightByIndex = new Map<number, number>();
+
+        for (const targets of this.transitions.values()) {
+            for (const [toHash, weight] of targets) {
+                const toIdx = this.hashToIndex.get(toHash);
+                if (toIdx === undefined) continue;
+                if (!this.isCandidateIndexReadable(snapshot, toIdx)) continue;
+                incomingWeightByIndex.set(toIdx, (incomingWeightByIndex.get(toIdx) ?? 0) + weight);
+            }
+        }
+
+        let bestIdx = -1;
+        let bestScore = -Infinity;
+
+        for (let idx = 0; idx < snapshot.leafCount; idx++) {
+            if (this.tombstoned.has(idx)) continue;
+            if (this.atomTypes[idx] !== type) continue;
+
+            const score = incomingWeightByIndex.get(idx) ?? 0;
+            if (score > bestScore) {
+                bestScore = score;
+                bestIdx = idx;
+            }
+        }
+
+        return bestIdx >= 0 ? this.data[bestIdx] : null;
+    }
 
     async recordTransition(from: Hash, to: Hash) {
         const fromIdx = this.hashToIndex.get(from);
@@ -446,18 +562,13 @@ export class ShardWorker {
         const targets = this.transitions.get(fromIdx)!;
         const newWeight = (targets.get(to) || 0) + 1;
         targets.set(to, newWeight);
+        this.csrDirty = true;
         await this.db
             .put(`w:${from}:${to}`, newWeight.toString())
             .catch((err: unknown) => logger.error({ err }, 'Shard persistence error'));
     }
 
-    async access(item: DataAtom): Promise<{
-        proof: MerkleProof;
-        next: DataAtom | null;
-        nextProof: MerkleProof | null;
-        hash: Hash;
-        predictedHash: Hash | null;
-    }> {
+    async access(item: DataAtom): Promise<ShardAccessResult> {
         const idx = this.dataIndex.get(item);
         if (idx === undefined) throw new Error(`Item ${item} not found in this shard.`);
         if (this.tombstoned.has(idx)) throw new Error(`Atom '${item}' has been tombstoned.`);
@@ -471,36 +582,224 @@ export class ShardWorker {
                 );
             }
 
-            const hash = snapshot.getLeafHash(idx);
-            const proof = snapshot.getProof(idx);
-
-            const targets = this.transitions.get(idx);
-            let predictedHash: Hash | null = null;
-            if (targets && targets.size > 0) {
-                let bestHash: Hash | null = null;
-                let bestWeight = -Infinity;
-                for (const [h, w] of targets) {
-                    const tIdx = this.hashToIndex.get(h);
-                    if (tIdx !== undefined && this.tombstoned.has(tIdx)) continue;
-                    if (w > bestWeight) { bestWeight = w; bestHash = h; }
-                }
-                predictedHash = bestHash;
-            }
-
-            let next: DataAtom | null = null;
-            let nextProof: MerkleProof | null = null;
-            if (predictedHash !== null) {
-                const nIdx = this.hashToIndex.get(predictedHash);
-                if (nIdx !== undefined && !this.tombstoned.has(nIdx) && nIdx < snapshot.leafCount) {
-                    next = this.data[nIdx];
-                    nextProof = snapshot.getProof(nIdx);
-                }
-            }
-
-            return { proof, next, nextProof, hash, predictedHash };
+            return this.buildAccessResult(snapshot, idx);
         } finally {
             this.epoch.endRead(ticket);
         }
+    }
+
+    async batchAccess(items: DataAtom[]): Promise<ShardBatchAccessItemResult[]> {
+        if (items.length === 0) return [];
+
+        const ticket: ReadTicket = this.epoch.beginRead();
+        try {
+            const snapshot = this.activeSnapshot;
+            const results: ShardBatchAccessItemResult[] = [];
+
+            for (const item of items) {
+                const idx = this.dataIndex.get(item);
+                if (idx === undefined) {
+                    results.push({
+                        ok: false,
+                        item,
+                        statusCode: 404,
+                        error: `Item ${item} not found in this shard.`,
+                    });
+                    continue;
+                }
+                if (this.tombstoned.has(idx)) {
+                    results.push({
+                        ok: false,
+                        item,
+                        statusCode: 404,
+                        error: `Atom '${item}' has been tombstoned.`,
+                    });
+                    continue;
+                }
+                if (idx >= snapshot.leafCount) {
+                    results.push({
+                        ok: false,
+                        item,
+                        statusCode: 404,
+                        error: `Atom '${item}' is pending commit (index ${idx}, snapshot has ${snapshot.leafCount} leaves). Call commit() first.`,
+                    });
+                    continue;
+                }
+
+                results.push({
+                    ok: true,
+                    item,
+                    result: this.buildAccessResult(snapshot, idx),
+                });
+            }
+
+            return results;
+        } finally {
+            this.epoch.endRead(ticket);
+        }
+    }
+
+    private buildAccessResult(snapshot: MerkleSnapshot, idx: number): ShardAccessResult {
+        const hash = snapshot.getLeafHash(idx);
+        const proof = snapshot.getProof(idx);
+
+        let predictedHash: Hash | null = null;
+        let predictedIdx = -1;
+        let policyFiltered = false;
+
+        if (this.policy.isOpenPolicy()) {
+            if (this.csrMatrix.atomCount === 0) {
+                predictedHash = this.getPredictedHashFromMap(idx);
+            } else {
+                const topIdx = this.csrMatrix.getTopPrediction(idx);
+                if (topIdx >= 0 && !this.tombstoned.has(topIdx) && topIdx < snapshot.leafCount) {
+                    predictedHash = snapshot.getLeafHash(topIdx);
+                    predictedIdx = topIdx;
+                } else {
+                    predictedHash = this.getPredictedHashFromMap(idx);
+                }
+            }
+
+            if (predictedIdx < 0 && predictedHash !== null) {
+                const localIdx = this.hashToIndex.get(predictedHash);
+                if (localIdx !== undefined && this.isCandidateIndexReadable(snapshot, localIdx)) {
+                    predictedIdx = localIdx;
+                }
+            }
+        } else {
+            const policySelection = this.selectPolicyConstrainedIndex(snapshot, idx);
+            predictedIdx = policySelection.index;
+            policyFiltered = policySelection.filtered;
+            predictedHash = predictedIdx >= 0 ? snapshot.getLeafHash(predictedIdx) : null;
+        }
+
+        if (policyFiltered) {
+            predictionTypeFilteredTotal.inc({ shard: this._shardId });
+        }
+
+        let next: DataAtom | null = null;
+        let nextProof: MerkleProof | null = null;
+        if (predictedIdx >= 0) {
+            next = this.data[predictedIdx];
+            nextProof = snapshot.getProof(predictedIdx);
+        }
+
+        return { proof, next, nextProof, hash, predictedHash };
+    }
+
+    private selectPolicyConstrainedIndex(snapshot: MerkleSnapshot, fromIdx: number): { index: number; filtered: boolean } {
+        const fromType = this.atomTypes[fromIdx];
+        if (!fromType) return { index: -1, filtered: false };
+
+        let firstCandidatePos = 0;
+        let sawCandidate = false;
+
+        if (this.csrMatrix.atomCount > 0) {
+            for (const edge of this.csrMatrix.getEdges(fromIdx)) {
+                const candidateIdx = edge.toIdx;
+                if (!this.isCandidateIndexReadable(snapshot, candidateIdx)) continue;
+
+                sawCandidate = true;
+                const toType = this.atomTypes[candidateIdx];
+                if (toType && this.policy.isAllowed(fromType, toType)) {
+                    return { index: candidateIdx, filtered: firstCandidatePos > 0 };
+                }
+                firstCandidatePos++;
+            }
+            if (sawCandidate) return { index: -1, filtered: true };
+        }
+
+        const targets = this.transitions.get(fromIdx);
+        if (!targets || targets.size === 0) return { index: -1, filtered: false };
+
+        let bestOverallIdx = -1;
+        let bestOverallWeight = -Infinity;
+        let bestAllowedIdx = -1;
+        let bestAllowedWeight = -Infinity;
+        let hasReadableCandidate = false;
+
+        for (const [candidateHash, weight] of targets) {
+            const candidateIdx = this.hashToIndex.get(candidateHash);
+            if (candidateIdx === undefined) continue;
+            if (!this.isCandidateIndexReadable(snapshot, candidateIdx)) continue;
+            hasReadableCandidate = true;
+
+            if (
+                weight > bestOverallWeight ||
+                (weight === bestOverallWeight && (bestOverallIdx < 0 || candidateIdx < bestOverallIdx))
+            ) {
+                bestOverallWeight = weight;
+                bestOverallIdx = candidateIdx;
+            }
+
+            const toType = this.atomTypes[candidateIdx];
+            if (!toType || !this.policy.isAllowed(fromType, toType)) continue;
+
+            if (
+                weight > bestAllowedWeight ||
+                (weight === bestAllowedWeight && (bestAllowedIdx < 0 || candidateIdx < bestAllowedIdx))
+            ) {
+                bestAllowedWeight = weight;
+                bestAllowedIdx = candidateIdx;
+            }
+        }
+
+        if (!hasReadableCandidate) return { index: -1, filtered: false };
+        if (bestAllowedIdx < 0) return { index: -1, filtered: true };
+        return { index: bestAllowedIdx, filtered: bestAllowedIdx !== bestOverallIdx };
+    }
+
+    private isCandidateIndexReadable(snapshot: MerkleSnapshot, idx: number): boolean {
+        return idx >= 0 && idx < snapshot.leafCount && !this.tombstoned.has(idx);
+    }
+
+    private getPredictedHashFromMap(fromIdx: number): Hash | null {
+        const targets = this.transitions.get(fromIdx);
+        if (!targets || targets.size === 0) return null;
+
+        let bestHash: Hash | null = null;
+        let bestWeight = -Infinity;
+        for (const [candidateHash, weight] of targets) {
+            const toIdx = this.hashToIndex.get(candidateHash);
+            if (toIdx !== undefined && this.tombstoned.has(toIdx)) continue;
+            if (weight > bestWeight) {
+                bestWeight = weight;
+                bestHash = candidateHash;
+            }
+        }
+        return bestHash;
+    }
+
+    private rebuildCsrMatrix(): void {
+        if (this.data.length === 0) {
+            this.csrMatrix = CsrTransitionMatrix.empty(0);
+            csrEdgeCount.set({ shard: this._shardId }, 0);
+            return;
+        }
+
+        const filteredTransitions = new Map<number, Map<Hash, number>>();
+        for (const [fromIdx, targets] of this.transitions) {
+            if (this.tombstoned.has(fromIdx)) continue;
+
+            let filteredTargets: Map<Hash, number> | null = null;
+            for (const [toHash, weight] of targets) {
+                const toIdx = this.hashToIndex.get(toHash);
+                if (toIdx !== undefined && this.tombstoned.has(toIdx)) continue;
+                if (!filteredTargets) filteredTargets = new Map<Hash, number>();
+                filteredTargets.set(toHash, weight);
+            }
+
+            if (filteredTargets && filteredTargets.size > 0) {
+                filteredTransitions.set(fromIdx, filteredTargets);
+            }
+        }
+
+        this.csrMatrix = CsrTransitionMatrix.build(
+            filteredTransitions,
+            this.hashToIndex,
+            this.data.length,
+        );
+        csrEdgeCount.set({ shard: this._shardId }, this.csrMatrix.edgeCount);
     }
 
     getStats(): { trainedAtoms: number; totalEdges: number } {
@@ -531,5 +830,21 @@ export class ShardWorker {
         }
         await this.wal.close();
         await this.db.close();
+    }
+
+    private getAtomTypeOrThrow(atom: DataAtom): AtomType {
+        const parsed = parseAtomV1(atom);
+        if (!parsed) {
+            throw new Error(`Invalid atom '${atom}' in shard ${this.dbPath}. Expected schema v1.`);
+        }
+        return parsed.type;
+    }
+
+    private hashAtom(atom: DataAtom): Hash {
+        const cached = this.atomHashes.get(atom);
+        if (cached !== undefined) return cached;
+        const computed = createHash('sha256').update(atom).digest().toString('hex');
+        this.atomHashes.set(atom, computed);
+        return computed;
     }
 }
