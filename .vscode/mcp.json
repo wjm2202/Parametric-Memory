@@ -1,0 +1,16 @@
+{
+  "servers": {
+    "mmpm-memory": {
+      "command": "bash",
+      "args": [
+        "tools/mcp/start-mmpm-mcp.sh"
+      ],
+      "cwd": ".",
+      "env": {
+        "MMPM_MCP_BASE_URL": "http://127.0.0.1:3000",
+        "MMPM_MCP_ENABLE_MUTATIONS": "1",
+        "MMPM_MCP_ENABLE_SEMANTIC_TOOLS": "1"
+      }
+    }
+  }
+}

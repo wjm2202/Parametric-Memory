@@ -78,6 +78,7 @@ const API_KEY = 'super-secret-key';
 // Open server (no API key)
 let openServer: FastifyInstance;
 let openOrch: ShardedOrchestrator;
+const AUTH_HEADER = `Bearer ${API_KEY}`;
 
 beforeAll(async () => {
     {
@@ -98,6 +99,7 @@ beforeAll(async () => {
             data: ATOMS,
             dbBasePath: tempDb('open'),
             numShards: 4,
+            apiKey: API_KEY,
         });
         await orchestrator.init();
         openServer = server;
@@ -233,14 +235,14 @@ describe('Security — /metrics is always unauthenticated', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('Security — open server requires no authentication', () => {
-    it('POST /access → 200 with no token on open server', async () => {
+    it('POST /access → 200 with token on open server', async () => {
         const res = await inject(openServer, 'POST', '/access',
-            { payload: { data: atom('Alpha') } });
+            { payload: { data: atom('Alpha') }, token: AUTH_HEADER });
         expect(res.statusCode).toBe(200);
     });
 
-    it('GET /weights/Alpha → 200 with no token on open server', async () => {
-        const res = await inject(openServer, 'GET', weightsUrl(atom('Alpha')));
+    it('GET /weights/Alpha → 200 with token on open server', async () => {
+        const res = await inject(openServer, 'GET', weightsUrl(atom('Alpha')), { token: AUTH_HEADER });
         expect(res.statusCode).toBe(200);
     });
 });
@@ -251,16 +253,16 @@ describe('Security — open server requires no authentication', () => {
 
 describe('Security — Merkle proof integrity at the API level', () => {
     it('currentProof in /access response independently verifies', async () => {
-        const res = await inject(openServer, 'POST', '/access',
-            { payload: { data: atom('Alpha') } });
+        const res = await inject(guardedServer, 'POST', '/access',
+            { payload: { data: atom('Alpha') }, token: AUTH_HEADER });
         expect(res.statusCode).toBe(200);
         const body = JSON.parse(res.payload);
         expect(MerkleKernel.verifyProof(body.currentProof)).toBe(true);
     });
 
     it('predictedProof, when present, independently verifies', async () => {
-        const res = await inject(openServer, 'POST', '/access',
-            { payload: { data: atom('Alpha') } });
+        const res = await inject(guardedServer, 'POST', '/access',
+            { payload: { data: atom('Alpha') }, token: AUTH_HEADER });
         const body = JSON.parse(res.payload);
         if (body.predictedProof) {
             expect(MerkleKernel.verifyProof(body.predictedProof)).toBe(true);
@@ -268,8 +270,8 @@ describe('Security — Merkle proof integrity at the API level', () => {
     });
 
     it('shardRootProof, when present, independently verifies', async () => {
-        const res = await inject(openServer, 'POST', '/access',
-            { payload: { data: atom('Alpha') } });
+        const res = await inject(guardedServer, 'POST', '/access',
+            { payload: { data: atom('Alpha') }, token: AUTH_HEADER });
         const body = JSON.parse(res.payload);
         if (body.shardRootProof) {
             expect(MerkleKernel.verifyProof(body.shardRootProof)).toBe(true);
@@ -277,30 +279,30 @@ describe('Security — Merkle proof integrity at the API level', () => {
     });
 
     it('proof root is a 64-char hex SHA-256 digest', async () => {
-        const res = await inject(openServer, 'POST', '/access',
-            { payload: { data: atom('Beta') } });
+        const res = await inject(guardedServer, 'POST', '/access',
+            { payload: { data: atom('Beta') }, token: AUTH_HEADER });
         const body = JSON.parse(res.payload);
         expect(body.currentProof.root).toMatch(/^[a-f0-9]{64}$/);
     });
 
     it('proof survives JSON round-trip and still verifies', async () => {
-        const res = await inject(openServer, 'POST', '/access',
-            { payload: { data: atom('Gamma') } });
+        const res = await inject(guardedServer, 'POST', '/access',
+            { payload: { data: atom('Gamma') }, token: AUTH_HEADER });
         const proof: MerkleProof = JSON.parse(JSON.stringify(JSON.parse(res.payload).currentProof));
         expect(MerkleKernel.verifyProof(proof)).toBe(true);
     });
 
     it('mutating the leaf in a serialised proof breaks verification', async () => {
-        const res = await inject(openServer, 'POST', '/access',
-            { payload: { data: atom('Delta') } });
+        const res = await inject(guardedServer, 'POST', '/access',
+            { payload: { data: atom('Delta') }, token: AUTH_HEADER });
         const proof: MerkleProof = JSON.parse(res.payload).currentProof;
         proof.leaf = 'ff'.repeat(32); // tamper
         expect(MerkleKernel.verifyProof(proof)).toBe(false);
     });
 
     it('mutating the first audit path node breaks verification', async () => {
-        const res = await inject(openServer, 'POST', '/access',
-            { payload: { data: atom('Alpha') } });
+        const res = await inject(guardedServer, 'POST', '/access',
+            { payload: { data: atom('Alpha') }, token: AUTH_HEADER });
         const proof: MerkleProof = JSON.parse(res.payload).currentProof;
         if (proof.auditPath.length > 0) {
             proof.auditPath[0] = '00'.repeat(32); // tamper
@@ -310,8 +312,8 @@ describe('Security — Merkle proof integrity at the API level', () => {
 
     it('every atom in the dataset has a verifiable proof', async () => {
         for (const atom of ATOMS) {
-            const res = await inject(openServer, 'POST', '/access',
-                { payload: { data: atom } });
+            const res = await inject(guardedServer, 'POST', '/access',
+                { payload: { data: atom }, token: AUTH_HEADER });
             expect(res.statusCode).toBe(200);
             const body = JSON.parse(res.payload);
             expect(
@@ -346,11 +348,11 @@ describe('Security — cross-shard prediction proof integrity', () => {
         expect(to).not.toBeNull();
 
         // Train the cross-shard edge
-        await inject(openServer, 'POST', '/train',
-            { payload: { sequence: [from!, to!] } });
+        await inject(guardedServer, 'POST', '/train',
+            { payload: { sequence: [from!, to!] }, token: AUTH_HEADER });
 
-        const res = await inject(openServer, 'POST', '/access',
-            { payload: { data: from! } });
+        const res = await inject(guardedServer, 'POST', '/access',
+            { payload: { data: from! }, token: AUTH_HEADER });
         const body = JSON.parse(res.payload);
 
         expect(body.predictedNext).toBe(to!);

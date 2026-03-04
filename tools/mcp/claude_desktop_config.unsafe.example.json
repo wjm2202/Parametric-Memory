@@ -1,0 +1,17 @@
+{
+    "mcpServers": {
+        "mmpm-memory": {
+            "command": "npm",
+            "args": [
+                "run",
+                "mcp:serve:unsafe"
+            ],
+            "cwd": "/Users/glenosborne/Documents/code/mm-memory/markov-merkle-memory",
+            "env": {
+                "MMPM_MCP_BASE_URL": "http://127.0.0.1:3000",
+                "MMPM_MCP_API_KEY": "REPLACE_WITH_YOUR_API_KEY",
+                "MMPM_MCP_ENABLE_MUTATIONS": "1"
+            }
+        }
+    }
+}

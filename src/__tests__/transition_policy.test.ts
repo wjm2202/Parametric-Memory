@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ATOM_TYPES } from '../atom_schema';
-import { TransitionPolicy } from '../transition_policy';
+import { TransitionPolicy, TypePolicyConfig } from '../transition_policy';
 
 describe('TransitionPolicy', () => {
     it('default() allows all 25 type pairs', () => {
@@ -34,11 +34,11 @@ describe('TransitionPolicy', () => {
     });
 
     it('toConfig() round-trips through fromConfig()', () => {
-        const cfg = {
+        const cfg: TypePolicyConfig = {
             fact: ['fact', 'relation'],
             event: ['state'],
             other: [],
-        } as const;
+        };
         const policy = TransitionPolicy.fromConfig(cfg);
         const roundTrip = TransitionPolicy.fromConfig(policy.toConfig());
         for (const from of ATOM_TYPES) {

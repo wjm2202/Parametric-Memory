@@ -24,6 +24,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Run TypeScript typechecks (app + tests)
+        run: npm run typecheck:all
+
       - name: Run readiness-focused test suite
         run: npm run test -- src/__tests__/api_ready.test.ts src/__tests__/server.test.ts src/__tests__/ingest_driver.test.ts src/__tests__/recall_bench.test.ts
 

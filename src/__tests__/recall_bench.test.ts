@@ -8,6 +8,7 @@ import { generateStructuredDataset } from '../../tools/harness/generator';
 import { runIngestionDriver } from '../../tools/harness/ingest_driver';
 import { runRecallBenchmark } from '../../tools/harness/recall_bench';
 const atom = (value: string) => `v1.other.${value}`;
+const API_KEY = 'test-recall-bench-key';
 
 const dirs: string[] = [];
 
@@ -64,6 +65,7 @@ describe('Harness recall benchmark engine (Story 9.3)', () => {
             expect(stats.patterns.predicted.requests).toBeGreaterThan(0);
             expect(stats.patterns.hotspot.requests).toBeGreaterThan(0);
             expect(stats.patterns.cross_shard.requests).toBeGreaterThan(0);
+            expect(stats.contextLoad.requests).toBe(0);
 
             expect(stats.proofVerification.attempts).toBeGreaterThan(0);
             expect(stats.proofVerification.failures).toBe(0);
@@ -90,7 +92,7 @@ describe('Harness recall benchmark engine (Story 9.3)', () => {
         });
 
         const port = 3412;
-        const app = buildApp({ data: [atom('Seed_API_A'), atom('Seed_API_B')], dbBasePath: tempDb('api-recall'), numShards: 4 });
+        const app = buildApp({ data: [atom('Seed_API_A'), atom('Seed_API_B')], dbBasePath: tempDb('api-recall'), numShards: 4, apiKey: API_KEY });
         await app.orchestrator.init();
         app.pipeline.start();
         await app.server.listen({ port, host: '127.0.0.1' });
@@ -100,6 +102,7 @@ describe('Harness recall benchmark engine (Story 9.3)', () => {
                 mode: 'streaming',
                 useApi: true,
                 baseUrl: `http://127.0.0.1:${port}`,
+                apiKey: API_KEY,
                 chunkSize: 120,
                 atomsPerSecond: 6000,
                 maxAccessProbes: 0,
@@ -108,6 +111,7 @@ describe('Harness recall benchmark engine (Story 9.3)', () => {
             const stats = await runRecallBenchmark(dataset, {
                 useApi: true,
                 baseUrl: `http://127.0.0.1:${port}`,
+                apiKey: API_KEY,
                 sequentialHops: 50,
                 randomSamples: 50,
                 predictedSamples: 40,
@@ -118,6 +122,7 @@ describe('Harness recall benchmark engine (Story 9.3)', () => {
 
             expect(stats.patterns.sequential.requests).toBeGreaterThan(0);
             expect(stats.patterns.random.requests).toBeGreaterThan(0);
+            expect(stats.contextLoad.requests).toBeGreaterThan(0);
             expect(stats.proofVerification.attempts).toBeGreaterThan(0);
             expect(stats.proofVerification.failures).toBe(0);
             expect(stats.predictionAttempts).toBeGreaterThan(0);

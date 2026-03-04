@@ -164,6 +164,142 @@ describe('ShardWorker', () => {
         const worker = new ShardWorker([atom('A')], freshDb());
         await expect(worker.close()).resolves.not.toThrow();
     });
+
+    it('seed atoms get a creation timestamp that is persisted across restart', async () => {
+        const db = freshDb();
+
+        const w1 = new ShardWorker([atom('SeedA'), atom('SeedB')], db);
+        await w1.init();
+        const firstTs = w1.getAtomRecord(atom('SeedA'))!.createdAtMs;
+        expect(firstTs).toBeGreaterThan(0);
+        await w1.close();
+
+        const w2 = new ShardWorker([atom('SeedA'), atom('SeedB')], db);
+        await w2.init();
+        const secondTs = w2.getAtomRecord(atom('SeedA'))!.createdAtMs;
+        expect(secondTs).toBe(firstTs);
+        await w2.close();
+    });
+
+    it('addAtoms assigns and persists a creation timestamp', async () => {
+        const db = freshDb();
+
+        const w1 = new ShardWorker([], db);
+        await w1.init();
+        await w1.addAtoms([atom('RuntimeX')]);
+        const firstTs = w1.getAtomRecord(atom('RuntimeX'))!.createdAtMs;
+        expect(firstTs).toBeGreaterThan(0);
+        await w1.close();
+
+        const w2 = new ShardWorker([], db);
+        await w2.init();
+        const secondTs = w2.getAtomRecord(atom('RuntimeX'))!.createdAtMs;
+        expect(secondTs).toBe(firstTs);
+        await w2.close();
+    });
+
+    it('releases active snapshot references after access() completes', async () => {
+        const worker = new ShardWorker([atom('A'), atom('B')], freshDb());
+        await worker.init();
+
+        const before = worker.getSnapshotRefStatus();
+        expect(before.activeRefCount).toBe(0);
+
+        await worker.access(atom('A'));
+
+        const after = worker.getSnapshotRefStatus();
+        expect(after.activeRefCount).toBe(0);
+        expect(after.retired).toEqual([]);
+        await worker.close();
+    });
+
+    it('retired snapshots are removed once their refcount reaches zero', async () => {
+        const worker = new ShardWorker([atom('A')], freshDb());
+        await worker.init();
+
+        const internal = worker as unknown as { activeSnapshot: { version: number; acquireRef(): void; releaseRef(): number } };
+        const heldSnapshot = internal.activeSnapshot;
+        heldSnapshot.acquireRef();
+
+        await worker.addAtoms([atom('B')]);
+        await worker.commit();
+
+        const duringHold = worker.getSnapshotRefStatus();
+        expect(duringHold.retired.some(s => s.version === heldSnapshot.version && s.refCount === 1)).toBe(true);
+
+        heldSnapshot.releaseRef();
+
+        const afterRelease = worker.getSnapshotRefStatus();
+        expect(afterRelease.retired.some(s => s.version === heldSnapshot.version)).toBe(false);
+        await worker.close();
+    });
+
+    it('confidence lifecycle: stale edge decays and recent edge becomes dominant', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-03-04T00:00:00.000Z'));
+
+        const worker = new ShardWorker([atom('A'), atom('B'), atom('C')], freshDb(), {
+            confidenceHalfLifeMs: 1000,
+        });
+        await worker.init();
+
+        const hashA = worker.getHash(atom('A'))!;
+        const hashB = worker.getHash(atom('B'))!;
+        const hashC = worker.getHash(atom('C'))!;
+
+        await worker.recordTransition(hashA, hashB); // older edge
+
+        vi.setSystemTime(new Date('2026-03-04T00:00:03.000Z'));
+        await worker.recordTransition(hashA, hashC); // fresher edge
+
+        const result = await worker.access(atom('A'));
+        expect(result.next).toBe(atom('C'));
+
+        const weights = worker.getWeights(atom('A'))!;
+        const toB = weights.find(w => w.to === atom('B'))!;
+        const toC = weights.find(w => w.to === atom('C'))!;
+        expect(toB.weight).toBe(1);
+        expect(toC.weight).toBe(1);
+        expect(toB.effectiveWeight).toBeLessThan(toC.effectiveWeight);
+
+        await worker.close();
+        vi.useRealTimers();
+    });
+
+    it('confidence lifecycle: reinforcement increases confidence and updates timestamp', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-03-04T00:00:00.000Z'));
+
+        const worker = new ShardWorker([atom('A'), atom('B'), atom('C')], freshDb(), {
+            confidenceHalfLifeMs: 1000,
+        });
+        await worker.init();
+
+        const hashA = worker.getHash(atom('A'))!;
+        const hashB = worker.getHash(atom('B'))!;
+        const hashC = worker.getHash(atom('C'))!;
+
+        await worker.recordTransition(hashA, hashB);
+        vi.setSystemTime(new Date('2026-03-04T00:00:02.000Z'));
+        await worker.recordTransition(hashA, hashC);
+
+        let first = await worker.access(atom('A'));
+        expect(first.next).toBe(atom('C'));
+
+        vi.setSystemTime(new Date('2026-03-04T00:00:03.000Z'));
+        await worker.recordTransition(hashA, hashB); // reinforcement of B
+
+        const second = await worker.access(atom('A'));
+        expect(second.next).toBe(atom('B'));
+
+        const weights = worker.getWeights(atom('A'))!;
+        const reinforced = weights.find(w => w.to === atom('B'))!;
+        expect(reinforced.weight).toBe(2);
+        expect(reinforced.lastUpdatedMs).toBe(Date.now());
+
+        await worker.close();
+        vi.useRealTimers();
+    });
 });
 
 describe('ShardWorker — CSR integration (Sprint 8)', () => {

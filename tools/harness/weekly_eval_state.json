@@ -1,0 +1,8 @@
+{
+  "lastCompletedAt": "2026-03-04T07:42:21.905Z",
+  "lastReportFile": "tools/harness/results/weekly-2026-03-04T07-42-21Z.json",
+  "lastPromFile": "tools/harness/results/weekly-2026-03-04T07-42-21Z.prom",
+  "lastRunId": "2026-03-04T07-42-21Z",
+  "lastProfile": "concurrent",
+  "notes": "Auto-updated by tools/harness/weekly-memory-eval.sh"
+}

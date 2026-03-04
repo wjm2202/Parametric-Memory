@@ -44,6 +44,9 @@ export interface BenchmarkReport {
         accessP50Ms: number;
         accessP95Ms: number;
         accessP99Ms: number;
+        contextLoadP50Ms: number;
+        contextLoadP95Ms: number;
+        contextLoadP99Ms: number;
         commitP50Ms: number;
         commitP95Ms: number;
         commitP99Ms: number;
@@ -81,6 +84,20 @@ export interface BuildReportInput {
         latencyVsAtomCount?: BenchmarkScalingPoint[];
         latencyVsWritePressure?: BenchmarkScalingPoint[];
     };
+}
+
+export interface LatencySloProfile {
+    accessP95MaxMs: number;
+    contextLoadP95MaxMs: number;
+}
+
+export interface LatencySloEvaluation {
+    pass: boolean;
+    accessP95Ms: number;
+    accessP95MaxMs: number;
+    contextLoadP95Ms: number;
+    contextLoadP95MaxMs: number;
+    failures: string[];
 }
 
 function percentile(values: number[], p: number): number {
@@ -153,6 +170,9 @@ export function buildBenchmarkReport(input: BuildReportInput): BenchmarkReport {
             accessP50Ms: percentile(accessLatencies, 50),
             accessP95Ms: percentile(accessLatencies, 95),
             accessP99Ms: percentile(accessLatencies, 99),
+            contextLoadP50Ms: input.recall.contextLoad.p50,
+            contextLoadP95Ms: input.recall.contextLoad.p95,
+            contextLoadP99Ms: input.recall.contextLoad.p99,
             commitP50Ms: percentile(commitLatencies, 50),
             commitP95Ms: percentile(commitLatencies, 95),
             commitP99Ms: percentile(commitLatencies, 99),
@@ -195,6 +215,7 @@ export function renderTerminalReport(report: BenchmarkReport): string {
         '',
         'Latency (ms)',
         `  access p50/p95/p99: ${num(report.latency.accessP50Ms)} / ${num(report.latency.accessP95Ms)} / ${num(report.latency.accessP99Ms)}`,
+        `  context load p50/p95/p99: ${num(report.latency.contextLoadP50Ms)} / ${num(report.latency.contextLoadP95Ms)} / ${num(report.latency.contextLoadP99Ms)}`,
         `  commit p50/p95/p99: ${num(report.latency.commitP50Ms)} / ${num(report.latency.commitP95Ms)} / ${num(report.latency.commitP99Ms)}`,
         `  proof verify avg: ${num(report.latency.proofVerifyAvgMs)}`,
         '',
@@ -236,6 +257,7 @@ export function toPrometheusMetrics(report: BenchmarkReport): string {
     gauge('mmpm_harness_latency_access_p50_ms', 'Access latency p50 in milliseconds', report.latency.accessP50Ms, runLabels);
     gauge('mmpm_harness_latency_access_p95_ms', 'Access latency p95 in milliseconds', report.latency.accessP95Ms, runLabels);
     gauge('mmpm_harness_latency_access_p99_ms', 'Access latency p99 in milliseconds', report.latency.accessP99Ms, runLabels);
+    gauge('mmpm_harness_latency_context_load_p95_ms', 'Context-load latency p95 in milliseconds', report.latency.contextLoadP95Ms, runLabels);
     gauge('mmpm_harness_latency_commit_p95_ms', 'Commit latency p95 in milliseconds', report.latency.commitP95Ms, runLabels);
     gauge('mmpm_harness_latency_proof_verify_avg_ms', 'Average proof verification time in milliseconds', report.latency.proofVerifyAvgMs, runLabels);
 
@@ -319,6 +341,25 @@ export async function startHarnessMetricsExporter(options: ExporterOptions): Pro
     });
 
     return server;
+}
+
+export function evaluateLatencySlo(report: BenchmarkReport, profile: LatencySloProfile): LatencySloEvaluation {
+    const failures: string[] = [];
+    if (report.latency.accessP95Ms > profile.accessP95MaxMs) {
+        failures.push(`accessP95Ms ${report.latency.accessP95Ms.toFixed(3)} exceeds ${profile.accessP95MaxMs.toFixed(3)}`);
+    }
+    if (report.latency.contextLoadP95Ms > profile.contextLoadP95MaxMs) {
+        failures.push(`contextLoadP95Ms ${report.latency.contextLoadP95Ms.toFixed(3)} exceeds ${profile.contextLoadP95MaxMs.toFixed(3)}`);
+    }
+
+    return {
+        pass: failures.length === 0,
+        accessP95Ms: report.latency.accessP95Ms,
+        accessP95MaxMs: profile.accessP95MaxMs,
+        contextLoadP95Ms: report.latency.contextLoadP95Ms,
+        contextLoadP95MaxMs: profile.contextLoadP95MaxMs,
+        failures,
+    };
 }
 
 function argValue(argv: string[], key: string): string | null {

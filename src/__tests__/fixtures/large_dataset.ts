@@ -67,12 +67,14 @@ export interface LargeDatasetAppResult {
  */
 export async function buildLargeOrchestrator(
     dbBasePath: string,
-    repetitions = 5
+    repetitions = 5,
+    apiKey?: string
 ): Promise<LargeDatasetAppResult> {
     const { server, orchestrator } = buildApp({
         data: LARGE_ATOMS,
         dbBasePath,
         numShards: 4,
+        apiKey,
     });
 
     await orchestrator.init();

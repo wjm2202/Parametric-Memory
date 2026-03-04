@@ -51,6 +51,9 @@ Probe routes (`/metrics`, `/health`, `/ready`) are intentionally unauthenticated
 ## Test & Benchmark Commands
 
 - Full tests: `npm test`
+- Production typecheck only: `npm run typecheck`
+- Test/harness typecheck (no emit): `npm run typecheck:test`
+- Combined check: `npm run typecheck:all`
 - Smoke API test: `npm run test:smoke`
 - Fast readiness-focused tests:
   - `npm run test -- src/__tests__/api_ready.test.ts src/__tests__/server.test.ts src/__tests__/ingest_driver.test.ts src/__tests__/recall_bench.test.ts`
@@ -60,6 +63,10 @@ Probe routes (`/metrics`, `/health`, `/ready`) are intentionally unauthenticated
 - Real-world shard stress (large related dataset + validation queries):
   - `npm run bench:run:realworld`
   - `npm run bench:run:realworld:large`
+- Domain pilot pack (E2, ecommerce refund workflow):
+  - `npm run bench:pilot:ecommerce`
+  - Produces before/after utility + audit-trace report at `tools/harness/results/domain-pilot-ecommerce.json`
+  - Exits non-zero when expected pilot outcome is not met (CI-friendly)
 - Continuous scientific load client (ongoing traffic + retrieval quality scoring):
   - `npm run bench:continuous`
   - `npm run bench:continuous:policy`
@@ -80,6 +87,10 @@ Probe routes (`/metrics`, `/health`, `/ready`) are intentionally unauthenticated
 - CI-style benchmark gate:
   - `npm run bench:ci:api`
   - Starts Docker Compose, waits for `mmpm-service` health, runs benchmark, tears down.
+  - Also runs latency SLO gate (`npm run bench:slo:check`) against latest report.
+  - Default SLO thresholds (overridable via env):
+    - `MMPM_SLO_ACCESS_P95_MS=250`
+    - `MMPM_SLO_CONTEXT_P95_MS=750`
 - Benchmark tracking:
   - Save latest snapshot: `npm run bench:track:save`
   - Compare two snapshots: `npm run bench:track -- compare tools/harness/results/base.json tools/harness/results/latest.json --threshold 0.10`
