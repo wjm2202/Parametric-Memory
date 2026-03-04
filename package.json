@@ -55,6 +55,7 @@
     "vitest": "^4.0.18"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
     "classic-level": "^3.0.0",
     "dotenv": "^17.3.1",
     "fastify": "^5.7.4",
