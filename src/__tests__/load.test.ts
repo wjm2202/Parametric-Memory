@@ -26,6 +26,7 @@ import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { FastifyInstance } from 'fastify';
+import type { InjectOptions } from 'light-my-request';
 import type { ShardedOrchestrator } from '../orchestrator';
 import { buildLargeOrchestrator, LARGE_ATOMS, LARGE_CHAINS, EXPECTED_NEXT } from './fixtures/large_dataset';
 
@@ -34,10 +35,25 @@ import { buildLargeOrchestrator, LARGE_ATOMS, LARGE_CHAINS, EXPECTED_NEXT } from
 let server: FastifyInstance;
 let orchestrator: ShardedOrchestrator;
 let dbDir: string;
+const API_KEY = 'test-load-suite-key';
+
+function authedInject(opts: string | InjectOptions) {
+    if (typeof opts === 'string') {
+        return server.inject({ method: 'GET', url: opts, headers: { authorization: `Bearer ${API_KEY}` } });
+    }
+    const normalized: InjectOptions = opts;
+    return server.inject({
+        ...normalized,
+        headers: {
+            authorization: `Bearer ${API_KEY}`,
+            ...(normalized.headers ?? {}),
+        },
+    });
+}
 
 beforeAll(async () => {
     dbDir = mkdtempSync(join(tmpdir(), 'mmpm-load-'));
-    const app = await buildLargeOrchestrator(dbDir, 5);
+    const app = await buildLargeOrchestrator(dbDir, 5, API_KEY);
     server = app.server;
     orchestrator = app.orchestrator;
 }, 60_000);
@@ -92,7 +108,7 @@ describe('Load — sequential /access throughput (500 requests)', () => {
         for (let i = 0; i < 500; i++) {
             const atom = LARGE_ATOMS[i % LARGE_ATOMS.length];
             const t0 = performance.now();
-            const res = await server.inject({
+            const res = await authedInject({
                 method: 'POST', url: '/access',
                 payload: { data: atom },
             });
@@ -118,7 +134,7 @@ describe('Load — concurrent /access burst (100 parallel requests)', () => {
 
         const results = await Promise.all(
             atoms.map(atom =>
-                server.inject({ method: 'POST', url: '/access', payload: { data: atom } })
+                authedInject({ method: 'POST', url: '/access', payload: { data: atom } })
             )
         );
 
@@ -151,8 +167,8 @@ describe('Load — mixed /train + /access interleaved (200 rounds)', () => {
             // Fire access and train simultaneously
             const t0 = performance.now();
             const [accessRes, trainRes] = await Promise.all([
-                server.inject({ method: 'POST', url: '/access', payload: { data: atom } }),
-                server.inject({ method: 'POST', url: '/train', payload: { sequence: chain.slice(0, 3) } }),
+                authedInject({ method: 'POST', url: '/access', payload: { data: atom } }),
+                authedInject({ method: 'POST', url: '/train', payload: { sequence: chain.slice(0, 3) } }),
             ]);
             const elapsed = performance.now() - t0;
             accessLatencies.push(elapsed);
@@ -179,7 +195,7 @@ describe('Load — large sequence training (full 10-atom chain repeated 50×)', 
         const t0 = performance.now();
         for (let i = 0; i < 50; i++) {
             const t1 = performance.now();
-            const res = await server.inject({
+            const res = await authedInject({
                 method: 'POST', url: '/train',
                 payload: { sequence: chain },
             });
@@ -206,7 +222,7 @@ describe('Load — predictive hit rate on reinforced chains (design claim: >80%)
         let total = 0;
 
         for (const { from, expectedNext } of heads) {
-            const res = await server.inject({
+            const res = await authedInject({
                 method: 'POST', url: '/access',
                 payload: { data: from },
             });
@@ -233,7 +249,7 @@ describe('Load — predictive hit rate on reinforced chains (design claim: >80%)
         let total = 0;
 
         for (const { from, expectedNext } of mids) {
-            const res = await server.inject({
+            const res = await authedInject({
                 method: 'POST', url: '/access',
                 payload: { data: from },
             });
@@ -266,7 +282,7 @@ describe('Load — write-heavy concurrent burst (100 parallel /train calls)', ()
         const t0 = performance.now();
         const results = await Promise.all(
             payloads.map(payload =>
-                server.inject({ method: 'POST', url: '/train', payload })
+                authedInject({ method: 'POST', url: '/train', payload })
             )
         );
         const wallMs = performance.now() - t0;
@@ -289,14 +305,14 @@ describe('Load — verification latency claim: <0.1ms per access (in-process)', 
         const latencies: number[] = [];
         // Warm up
         for (let i = 0; i < 20; i++) {
-            await server.inject({ method: 'POST', url: '/access', payload: { data: LARGE_ATOMS[i] } });
+            await authedInject({ method: 'POST', url: '/access', payload: { data: LARGE_ATOMS[i] } });
         }
 
         // Measure 200 requests
         for (let i = 0; i < 200; i++) {
             const atom = LARGE_ATOMS[i % LARGE_ATOMS.length];
             const t0 = performance.now();
-            await server.inject({ method: 'POST', url: '/access', payload: { data: atom } });
+            await authedInject({ method: 'POST', url: '/access', payload: { data: atom } });
             latencies.push(performance.now() - t0);
         }
 

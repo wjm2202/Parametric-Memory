@@ -186,6 +186,24 @@ This is a statistical property of frequency estimators, not a deterministic guar
 
 ---
 
+## 6.1 Observed Benchmark Snapshot (Story 4.3)
+
+The following values were observed on a local run of:
+
+`MMPM_BENCH_INCLUDE_1M=1 npm test -- src/__tests__/benchmark_merkle.test.ts`
+
+For the 1,000,000-leaf case in `benchmark_merkle.test.ts`:
+
+- `full_p50_ms`: `1439.466`
+- `incr_p50_ms`: `16.241`
+- `speedup_p50`: `88.63x`
+- `approx_leaf_mib`: `30.52`
+- `approx_node_mib`: `64.00`
+
+These are empirical measurements from one environment and should be treated as observed characteristics, not universal guarantees.
+
+---
+
 ## 7. Operational Guarantees and Limits
 
 ### Guarantees (from implementation)

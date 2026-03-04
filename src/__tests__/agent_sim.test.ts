@@ -8,6 +8,7 @@ import { runIngestionDriver } from '../../tools/harness/ingest_driver';
 import { generateStructuredDataset } from '../../tools/harness/generator';
 import { runAgentSimulation } from '../../tools/harness/agent_sim';
 const atom = (value: string) => `v1.other.${value}`;
+const API_KEY = 'test-agent-sim-key';
 
 const dirs: string[] = [];
 
@@ -80,7 +81,7 @@ describe('Harness agent simulator (Story 9.4)', () => {
         });
 
         const port = 3414;
-        const app = buildApp({ data: [atom('Seed_X'), atom('Seed_Y')], dbBasePath: tempDb('api'), numShards: 4 });
+        const app = buildApp({ data: [atom('Seed_X'), atom('Seed_Y')], dbBasePath: tempDb('api'), numShards: 4, apiKey: API_KEY });
         await app.orchestrator.init();
         app.pipeline.start();
         await app.server.listen({ port, host: '127.0.0.1' });
@@ -90,6 +91,7 @@ describe('Harness agent simulator (Story 9.4)', () => {
                 mode: 'streaming',
                 useApi: true,
                 baseUrl: `http://127.0.0.1:${port}`,
+                apiKey: API_KEY,
                 chunkSize: 80,
                 atomsPerSecond: 5000,
                 maxAccessProbes: 0,
@@ -98,6 +100,7 @@ describe('Harness agent simulator (Story 9.4)', () => {
             const stats = await runAgentSimulation({
                 useApi: true,
                 baseUrl: `http://127.0.0.1:${port}`,
+                apiKey: API_KEY,
                 agents: 5,
                 durationMs: 900,
                 readRatio: 0.7,
@@ -171,18 +174,20 @@ describe('Harness agent simulator — batch access + policy (Story 12.4)', () =>
             data: ['v1.fact.A', 'v1.event.B', 'v1.event.C', 'v1.other.Z'],
             dbBasePath: tempDb('policy-filter-api'),
             numShards: 2,
+            apiKey: API_KEY,
         });
         await app.orchestrator.init();
         app.pipeline.start();
         await app.server.listen({ port, host: '127.0.0.1' });
 
         try {
-            await app.server.inject({ method: 'POST', url: '/train', payload: { sequence: ['v1.fact.A', 'v1.event.B'] } });
-            await app.server.inject({ method: 'POST', url: '/train', payload: { sequence: ['v1.fact.A', 'v1.event.C'] } });
+            await app.server.inject({ method: 'POST', url: '/train', headers: { authorization: `Bearer ${API_KEY}` }, payload: { sequence: ['v1.fact.A', 'v1.event.B'] } });
+            await app.server.inject({ method: 'POST', url: '/train', headers: { authorization: `Bearer ${API_KEY}` }, payload: { sequence: ['v1.fact.A', 'v1.event.C'] } });
 
             const stats = await runAgentSimulation({
                 useApi: true,
                 baseUrl: `http://127.0.0.1:${port}`,
+                apiKey: API_KEY,
                 agents: 4,
                 durationMs: 1000,
                 readRatio: 1,

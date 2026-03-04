@@ -390,7 +390,7 @@ export class ShardedOrchestrator {
     /**
      * Return the outgoing weight map for an atom.
      */
-    getWeights(item: DataAtom): { to: DataAtom; weight: number }[] | null {
+    getWeights(item: DataAtom): { to: DataAtom; weight: number; effectiveWeight: number; lastUpdatedMs: number | null }[] | null {
         const shardIdx = this.router.getShardIndex(item);
         const shard = this.shards.get(shardIdx);
         if (!shard) return null;
@@ -399,11 +399,25 @@ export class ShardedOrchestrator {
         if (raw === null) return null;
 
         return raw.map(entry => {
-            if (entry.to !== null) return { to: entry.to, weight: entry.weight };
+            if (entry.to !== null) {
+                return {
+                    to: entry.to,
+                    weight: entry.weight,
+                    effectiveWeight: entry.effectiveWeight,
+                    lastUpdatedMs: entry.lastUpdatedMs,
+                };
+            }
             const resolved = this.resolveHashAcrossShards(entry.toHash);
-            if (resolved) return { to: resolved.atom, weight: entry.weight };
+            if (resolved) {
+                return {
+                    to: resolved.atom,
+                    weight: entry.weight,
+                    effectiveWeight: entry.effectiveWeight,
+                    lastUpdatedMs: entry.lastUpdatedMs,
+                };
+            }
             return null;
-        }).filter((e): e is { to: DataAtom; weight: number } => e !== null);
+        }).filter((e): e is { to: DataAtom; weight: number; effectiveWeight: number; lastUpdatedMs: number | null } => e !== null);
     }
 
     /**
@@ -506,8 +520,9 @@ export class ShardedOrchestrator {
         status: 'active' | 'tombstoned';
         hash: Hash;
         committed: boolean;
+        createdAtMs: number;
         treeVersion: number;
-        outgoingTransitions: { to: DataAtom; weight: number }[];
+        outgoingTransitions: { to: DataAtom; weight: number; effectiveWeight: number; lastUpdatedMs: number | null }[];
     } | null {
         const shardIdx = this.router.getShardIndex(atom);
         const shard = this.shards.get(shardIdx);
@@ -523,6 +538,7 @@ export class ShardedOrchestrator {
             status: record.status,
             hash: record.hash,
             committed: record.committed,
+            createdAtMs: record.createdAtMs,
             treeVersion: this.master.currentVersion,
             outgoingTransitions: this.getWeights(atom) ?? [],
         };
@@ -531,6 +547,16 @@ export class ShardedOrchestrator {
     /** Current master-tree version. */
     getMasterVersion(): number {
         return this.master.currentVersion;
+    }
+
+    /** Root hash recorded for a historical master version, if retained. */
+    getMasterRootAtVersion(version: number): Hash | undefined {
+        return this.master.getRootAtVersion(version);
+    }
+
+    /** Commit timestamp (Unix ms) recorded for a historical master version, if retained. */
+    getMasterVersionTimestamp(version: number): number | undefined {
+        return this.master.getVersionTimestamp(version);
     }
 
     /** Readiness state used by orchestrator probes and startup guards. */

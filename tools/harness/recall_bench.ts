@@ -19,6 +19,8 @@ export interface RecallBenchOptions {
     hotspotSetSize?: number;
     hotspotRepeats?: number;
     crossShardSamples?: number;
+    contextSamples?: number;
+    contextMaxTokens?: number;
 }
 
 interface AccessResponse {
@@ -47,6 +49,7 @@ export interface RecallBenchStats {
     finishedAt: string;
     durationMs: number;
     patterns: Record<PatternName, PatternMetrics>;
+    contextLoad: PatternMetrics;
     predictionHitRate: number;
     predictionAttempts: number;
     predictionHits: number;
@@ -126,6 +129,29 @@ async function postJson(
     return { status: res.status, body };
 }
 
+async function getJson(
+    baseUrl: string,
+    path: string,
+    apiKey?: string
+): Promise<{ status: number; body: any }> {
+    const headers: Record<string, string> = {};
+    if (apiKey) headers.authorization = `Bearer ${apiKey}`;
+
+    const res = await fetch(`${baseUrl}${path}`, {
+        method: 'GET',
+        headers,
+    });
+
+    let body: any = null;
+    try {
+        body = await res.json();
+    } catch {
+        body = null;
+    }
+
+    return { status: res.status, body };
+}
+
 function randomInt(max: number): number {
     return Math.floor(Math.random() * max);
 }
@@ -147,6 +173,8 @@ export async function runRecallBenchmark(
     const hotspotSetSize = Math.max(1, options.hotspotSetSize ?? 10);
     const hotspotRepeats = Math.max(1, options.hotspotRepeats ?? 40);
     const crossShardSamples = Math.max(1, options.crossShardSamples ?? 100);
+    const contextSamples = Math.max(1, options.contextSamples ?? 20);
+    const contextMaxTokens = Math.max(1, options.contextMaxTokens ?? 512);
 
     const patternLatencies: Record<PatternName, number[]> = {
         sequential: [],
@@ -155,6 +183,7 @@ export async function runRecallBenchmark(
         hotspot: [],
         cross_shard: [],
     };
+    const contextLoadLatencies: number[] = [];
 
     let predictionAttempts = 0;
     let predictionHits = 0;
@@ -293,6 +322,17 @@ export async function runRecallBenchmark(
         }
     }
 
+    if (useApi) {
+        for (let i = 0; i < contextSamples; i++) {
+            const t0 = performance.now();
+            const res = await getJson(baseUrl, `/memory/context?maxTokens=${contextMaxTokens}`, options.apiKey);
+            if (res.status !== 200) {
+                throw new Error(`Context load failed with status ${res.status}`);
+            }
+            contextLoadLatencies.push(performance.now() - t0);
+        }
+    }
+
     const finishedAt = new Date().toISOString();
     const durationMs = performance.now() - runStart;
 
@@ -307,6 +347,7 @@ export async function runRecallBenchmark(
             hotspot: summarisePattern(patternLatencies.hotspot),
             cross_shard: summarisePattern(patternLatencies.cross_shard),
         },
+        contextLoad: summarisePattern(contextLoadLatencies),
         predictionHitRate: predictionAttempts > 0 ? predictionHits / predictionAttempts : 0,
         predictionAttempts,
         predictionHits,

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { buildApp } from '../server';
 import { rmSync } from 'fs';
 import type { FastifyInstance } from 'fastify';
+import type { InjectOptions } from 'light-my-request';
 import type { ShardedOrchestrator } from '../orchestrator';
 
 function cleanup(path: string) {
@@ -10,6 +11,36 @@ function cleanup(path: string) {
 
 const atom = (value: string) => `v1.other.${value}`;
 const atomPath = (value: string) => encodeURIComponent(atom(value));
+
+function withEnvAuth(server: FastifyInstance): FastifyInstance {
+    const apiKey = process.env.MMPM_API_KEY;
+    if (!apiKey) return server;
+
+    const rawInject = server.inject.bind(server);
+    const authHeader = { authorization: `Bearer ${apiKey}` };
+
+    const injectWithAuth = (opts?: string | InjectOptions) => {
+        if (typeof opts === 'string') {
+            return rawInject({ method: 'GET', url: opts, headers: authHeader });
+        }
+        const normalized: InjectOptions = opts ?? {};
+        const requestWithAuth: InjectOptions = {
+            ...normalized,
+            headers: {
+                ...authHeader,
+                ...(normalized.headers ?? {}),
+            },
+        };
+        return rawInject(requestWithAuth);
+    };
+
+    return new Proxy(server, {
+        get(target, prop, receiver) {
+            if (prop === 'inject') return injectWithAuth;
+            return Reflect.get(target, prop, receiver);
+        },
+    }) as FastifyInstance;
+}
 
 // --- Integration Suite ---
 
@@ -27,7 +58,7 @@ describe('API Integration', () => {
             ],
             dbBasePath: DB_PATH
         });
-        server = app.server;
+        server = withEnvAuth(app.server);
         orchestrator = app.orchestrator;
         await orchestrator.init();
     });
@@ -191,6 +222,62 @@ describe('API Integration', () => {
         expect(res.statusCode).toBe(400);
     });
 
+    it('GET /write-policy returns default write policy on startup', async () => {
+        const res = await server.inject({ method: 'GET', url: '/write-policy' });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.isDefault).toBe(true);
+        expect(body.policy.defaultTier).toBe('auto-write');
+        expect(body.policy.byType).toEqual({});
+    });
+
+    it('POST /write-policy sets and resets policy tiers', async () => {
+        const setRes = await server.inject({
+            method: 'POST',
+            url: '/write-policy',
+            payload: {
+                policy: {
+                    defaultTier: 'auto-write',
+                    byType: {
+                        fact: 'review-required',
+                        state: 'never-store',
+                    },
+                },
+            },
+        });
+        expect(setRes.statusCode).toBe(200);
+        const setBody = JSON.parse(setRes.payload);
+        expect(setBody.policy.byType.fact).toBe('review-required');
+        expect(setBody.policy.byType.state).toBe('never-store');
+        expect(setBody.isDefault).toBe(false);
+
+        const resetRes = await server.inject({
+            method: 'POST',
+            url: '/write-policy',
+            payload: { policy: 'default' },
+        });
+        expect(resetRes.statusCode).toBe(200);
+        const resetBody = JSON.parse(resetRes.payload);
+        expect(resetBody.isDefault).toBe(true);
+        expect(resetBody.policy.defaultTier).toBe('auto-write');
+        expect(resetBody.policy.byType).toEqual({});
+    });
+
+    it('POST /write-policy invalid tier name returns 400', async () => {
+        const res = await server.inject({
+            method: 'POST',
+            url: '/write-policy',
+            payload: {
+                policy: {
+                    byType: {
+                        fact: 'needs-human',
+                    },
+                },
+            },
+        });
+        expect(res.statusCode).toBe(400);
+    });
+
     // --- /train ---
     it('POST /train with valid sequence returns success', async () => {
         const res = await server.inject({
@@ -236,6 +323,392 @@ describe('API Integration', () => {
             payload: { sequence: [1, 2, 3] }
         });
         expect(res.statusCode).toBe(400);
+    });
+
+    it('GET /memory/context returns additive context summary payload', async () => {
+        await server.inject({
+            method: 'POST',
+            url: '/train',
+            payload: { sequence: [atom('A'), atom('B')] },
+        });
+
+        const res = await server.inject({ method: 'GET', url: '/memory/context' });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.mode).toBe('context');
+        expect(typeof body.context).toBe('string');
+        expect(Array.isArray(body.entries)).toBe(true);
+        expect(typeof body.includedAtoms).toBe('number');
+        expect(typeof body.estimatedTokens).toBe('number');
+        expect(typeof body.maxTokens).toBe('number');
+        expect(typeof body.treeVersion).toBe('number');
+        expect(typeof body.generatedAtMs).toBe('number');
+    });
+
+    it('GET /memory/context respects maxTokens budget', async () => {
+        const res = await server.inject({ method: 'GET', url: '/memory/context?maxTokens=12' });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.maxTokens).toBe(12);
+        expect(body.estimatedTokens).toBeLessThanOrEqual(12);
+    });
+
+    it('GET /memory/context invalid maxTokens returns 400', async () => {
+        const res = await server.inject({ method: 'GET', url: '/memory/context?maxTokens=0' });
+        expect(res.statusCode).toBe(400);
+        expect(JSON.parse(res.payload).error).toMatch(/maxTokens/i);
+    });
+
+    it('POST /memory/bootstrap returns goals/constraints/preferences and decision evidence bundles', async () => {
+        const res = await server.inject({
+            method: 'POST',
+            url: '/memory/bootstrap',
+            payload: {
+                objective: 'current focus and policy requirements',
+                maxTokens: 256,
+                limit: 8,
+            },
+        });
+
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.mode).toBe('session_bootstrap');
+        expect(Array.isArray(body.goals)).toBe(true);
+        expect(Array.isArray(body.constraints)).toBe(true);
+        expect(Array.isArray(body.preferences)).toBe(true);
+        expect(Array.isArray(body.topMemories)).toBe(true);
+        expect(body.topMemories.length).toBeLessThanOrEqual(8);
+        expect(body.decisionEvidence).toBeDefined();
+        expect(Array.isArray(body.decisionEvidence.memoryIds)).toBe(true);
+        expect(Array.isArray(body.decisionEvidence.proofReferences)).toBe(true);
+        expect(Array.isArray(body.decisionEvidence.retrievalRationale)).toBe(true);
+        expect(body.decisionEvidence.coverage).toBeDefined();
+        expect(typeof body.decisionEvidence.coverage.complete).toBe('boolean');
+        expect(body.decisionEvidence.coverage.memoryIds).toBe(body.topMemories.length);
+        expect(body.decisionEvidence.coverage.proofReferences).toBe(body.topMemories.length);
+        expect(body.decisionEvidence.coverage.retrievalRationale).toBe(body.topMemories.length);
+        expect(typeof body.treeVersion).toBe('number');
+        expect(typeof body.generatedAtMs).toBe('number');
+        if (body.topMemories.length > 0) {
+            expect(body.topMemories[0].proof).toBeDefined();
+            expect(typeof body.topMemories[0].atom).toBe('string');
+            expect(typeof body.topMemories[0].category).toBe('string');
+            expect(typeof body.decisionEvidence.proofReferences[0].memoryId).toBe('string');
+            expect(typeof body.decisionEvidence.proofReferences[0].proofRoot).toBe('string');
+            expect(typeof body.decisionEvidence.proofReferences[0].proofIndex).toBe('number');
+            expect(typeof body.decisionEvidence.retrievalRationale[0].memoryId).toBe('string');
+            expect(Array.isArray(body.decisionEvidence.retrievalRationale[0].reasons)).toBe(true);
+        }
+    });
+
+    it('POST /memory/bootstrap supports no-objective fallback', async () => {
+        const res = await server.inject({
+            method: 'POST',
+            url: '/memory/bootstrap',
+            payload: { limit: 5 },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.objective).toBeNull();
+        expect(body.includedAtoms).toBeLessThanOrEqual(5);
+    });
+
+    it('POST /memory/bootstrap invalid inputs return 400', async () => {
+        const res = await server.inject({
+            method: 'POST',
+            url: '/memory/bootstrap',
+            payload: { objective: '', maxTokens: 0, limit: 0 },
+        });
+        expect(res.statusCode).toBe(400);
+        expect(JSON.parse(res.payload).error).toBeDefined();
+    });
+
+    it('POST /memory/bootstrap applies evidence threshold gating for high-impact outputs', async () => {
+        const res = await server.inject({
+            method: 'POST',
+            url: '/memory/bootstrap',
+            payload: {
+                objective: 'current focus and policy requirements',
+                highImpact: true,
+                evidenceThreshold: 0.25,
+                limit: 10,
+            },
+        });
+
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.highImpact).toBe(true);
+        expect(body.evidenceGate.applied).toBe(true);
+        expect(body.evidenceGate.threshold).toBe(0.25);
+        expect(typeof body.evidenceGate.lowEvidenceUsageRate).toBe('number');
+        expect(Array.isArray(body.decisionEvidence.retrievalRationale)).toBe(true);
+        if (body.decisionEvidence.retrievalRationale.length > 0) {
+            expect(typeof body.decisionEvidence.retrievalRationale[0].evidenceScore).toBe('number');
+            expect(body.decisionEvidence.retrievalRationale[0].reasons.some((r: string) => r.startsWith('threshold_gate='))).toBe(true);
+        }
+    });
+
+    it('POST /memory/bootstrap falls back when high-impact threshold excludes all evidence', async () => {
+        const res = await server.inject({
+            method: 'POST',
+            url: '/memory/bootstrap',
+            payload: {
+                objective: 'completely unrelated phrase to force low relevance',
+                highImpact: true,
+                evidenceThreshold: 0.95,
+                limit: 10,
+            },
+        });
+
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.highImpact).toBe(true);
+        expect(body.evidenceGate.applied).toBe(true);
+        expect(body.evidenceGate.lowEvidenceFallback).toBe(true);
+        expect(body.evidenceGate.includedCount).toBe(0);
+        expect(body.includedAtoms).toBe(0);
+        expect(Array.isArray(body.topMemories)).toBe(true);
+        expect(body.topMemories.length).toBe(0);
+        expect(typeof body.evidenceGate.fallbackReason).toBe('string');
+    });
+
+    it('namespace isolation filters /search, /memory/context, and /memory/bootstrap', async () => {
+        await server.inject({
+            method: 'POST',
+            url: '/atoms',
+            payload: {
+                atoms: [
+                    'v1.fact.goal_alpha_ns_project_alpha',
+                    'v1.fact.goal_beta_ns_project_beta',
+                    'v1.fact.goal_global_unscoped',
+                ],
+            },
+        });
+        await server.inject({ method: 'POST', url: '/admin/commit' });
+
+        const searchRes = await server.inject({
+            method: 'POST',
+            url: '/search',
+            payload: {
+                query: 'goal',
+                threshold: 0,
+                limit: 20,
+                namespace: { project: 'alpha' },
+                includeGlobal: false,
+            },
+        });
+        expect(searchRes.statusCode).toBe(200);
+        const searchBody = JSON.parse(searchRes.payload);
+        const searchAtoms = (searchBody.results as Array<{ atom: string }>).map(r => r.atom);
+        expect(searchAtoms.some(a => a.includes('ns_project_alpha'))).toBe(true);
+        expect(searchAtoms.some(a => a.includes('ns_project_beta'))).toBe(false);
+        expect(searchAtoms.some(a => a.includes('goal_global_unscoped'))).toBe(false);
+
+        const contextRes = await server.inject({
+            method: 'GET',
+            url: '/memory/context?maxTokens=300&namespaceProject=alpha&includeGlobal=false',
+        });
+        expect(contextRes.statusCode).toBe(200);
+        const contextBody = JSON.parse(contextRes.payload);
+        const contextAtoms = (contextBody.entries as Array<{ atom: string }>).map(e => e.atom);
+        expect(contextAtoms.some(a => a.includes('ns_project_alpha'))).toBe(true);
+        expect(contextAtoms.some(a => a.includes('ns_project_beta'))).toBe(false);
+        expect(contextAtoms.some(a => a.includes('goal_global_unscoped'))).toBe(false);
+
+        const bootstrapRes = await server.inject({
+            method: 'POST',
+            url: '/memory/bootstrap',
+            payload: {
+                objective: 'goal',
+                limit: 20,
+                namespace: { project: 'alpha' },
+                includeGlobal: false,
+            },
+        });
+        expect(bootstrapRes.statusCode).toBe(200);
+        const bootstrapBody = JSON.parse(bootstrapRes.payload);
+        const bootstrapAtoms = (bootstrapBody.topMemories as Array<{ atom: string }>).map(e => e.atom);
+        expect(bootstrapAtoms.some(a => a.includes('ns_project_alpha'))).toBe(true);
+        expect(bootstrapAtoms.some(a => a.includes('ns_project_beta'))).toBe(false);
+        expect(bootstrapAtoms.some(a => a.includes('goal_global_unscoped'))).toBe(false);
+    });
+
+    it('contradiction-aware facts are preserved and surfaced as competing claims', async () => {
+        await server.inject({
+            method: 'POST',
+            url: '/atoms',
+            payload: {
+                atoms: [
+                    'v1.fact.payment_mode_live_src_human_conf_high_scope_project_dt_2026_03_04',
+                    'v1.fact.payment_mode_test_src_api_conf_medium_scope_project_dt_2026_03_04',
+                ],
+            },
+        });
+        await server.inject({ method: 'POST', url: '/admin/commit' });
+
+        const searchRes = await server.inject({
+            method: 'POST',
+            url: '/search',
+            payload: { query: 'payment mode', threshold: 0, limit: 10 },
+        });
+        expect(searchRes.statusCode).toBe(200);
+        const searchBody = JSON.parse(searchRes.payload);
+        const contradicted = (searchBody.results as Array<any>).find(r =>
+            typeof r.atom === 'string' && r.atom.includes('v1.fact.payment_mode_')
+        );
+        expect(contradicted).toBeDefined();
+        expect(contradicted.contradiction.hasConflict).toBe(true);
+        expect(contradicted.contradiction.conflictingClaims).toBeUndefined();
+        expect(Array.isArray(contradicted.contradiction.competingClaims)).toBe(true);
+        expect(contradicted.contradiction.competingClaims.length).toBeGreaterThanOrEqual(2);
+
+        const bootstrapRes = await server.inject({
+            method: 'POST',
+            url: '/memory/bootstrap',
+            payload: { objective: 'payment mode', limit: 10 },
+        });
+        expect(bootstrapRes.statusCode).toBe(200);
+        const bootstrapBody = JSON.parse(bootstrapRes.payload);
+        expect(Array.isArray(bootstrapBody.conflictingFacts)).toBe(true);
+        const paymentConflict = (bootstrapBody.conflictingFacts as Array<any>).find(g => g.key === 'payment_mode');
+        expect(paymentConflict).toBeDefined();
+        expect(Array.isArray(paymentConflict.claims)).toBe(true);
+        expect(paymentConflict.claims).toContain('live');
+        expect(paymentConflict.claims).toContain('test');
+
+        const inspectRes = await server.inject({
+            method: 'GET',
+            url: '/atoms/' + encodeURIComponent('v1.fact.payment_mode_live_src_human_conf_high_scope_project_dt_2026_03_04'),
+        });
+        expect(inspectRes.statusCode).toBe(200);
+        const inspectBody = JSON.parse(inspectRes.payload);
+        expect(inspectBody.contradiction.hasConflict).toBe(true);
+        expect(inspectBody.contradiction.conflictKey).toBe('payment_mode');
+    });
+
+    it('supports time/version pinned retrieval via asOfVersion/asOfMs', async () => {
+        const beforeRes = await server.inject({ method: 'GET', url: '/atoms' });
+        expect(beforeRes.statusCode).toBe(200);
+        const beforeBody = JSON.parse(beforeRes.payload);
+        const beforeVersion = beforeBody.treeVersion as number;
+
+        const beforeMs = Date.now();
+        await server.inject({
+            method: 'POST',
+            url: '/atoms',
+            payload: { atoms: ['v1.fact.temporal_probe_visible_after_commit_src_test_conf_high_scope_project_dt_2026_03_04'] },
+        });
+        await server.inject({ method: 'POST', url: '/admin/commit' });
+
+        const afterRes = await server.inject({ method: 'GET', url: '/atoms' });
+        const afterBody = JSON.parse(afterRes.payload);
+        const afterVersion = afterBody.treeVersion as number;
+        expect(afterVersion).toBeGreaterThanOrEqual(beforeVersion);
+
+        const searchBefore = await server.inject({
+            method: 'POST',
+            url: '/search',
+            payload: { query: 'temporal probe visible', threshold: 0, asOfVersion: beforeVersion },
+        });
+        expect(searchBefore.statusCode).toBe(200);
+        const searchBeforeAtoms = (JSON.parse(searchBefore.payload).results as Array<{ atom: string }>).map(r => r.atom);
+        expect(searchBeforeAtoms.some(a => a.includes('temporal_probe_visible_after_commit'))).toBe(false);
+
+        const searchAfter = await server.inject({
+            method: 'POST',
+            url: '/search',
+            payload: { query: 'temporal probe visible', threshold: 0, asOfVersion: afterVersion },
+        });
+        expect(searchAfter.statusCode).toBe(200);
+        const searchAfterAtoms = (JSON.parse(searchAfter.payload).results as Array<{ atom: string }>).map(r => r.atom);
+        expect(searchAfterAtoms.some(a => a.includes('temporal_probe_visible_after_commit'))).toBe(true);
+
+        const contextTimePinned = await server.inject({
+            method: 'GET',
+            url: `/memory/context?maxTokens=300&asOfMs=${Math.max(1, beforeMs - 1)}`,
+        });
+        expect(contextTimePinned.statusCode).toBe(200);
+        const contextAtoms = (JSON.parse(contextTimePinned.payload).entries as Array<{ atom: string }>).map(e => e.atom);
+        expect(contextAtoms.some(a => a.includes('temporal_probe_visible_after_commit'))).toBe(false);
+
+        const atomBefore = await server.inject({
+            method: 'GET',
+            url: '/atoms/' + encodeURIComponent('v1.fact.temporal_probe_visible_after_commit_src_test_conf_high_scope_project_dt_2026_03_04') + `?asOfVersion=${beforeVersion}`,
+        });
+        expect(atomBefore.statusCode).toBe(404);
+
+        const atomAfter = await server.inject({
+            method: 'GET',
+            url: '/atoms/' + encodeURIComponent('v1.fact.temporal_probe_visible_after_commit_src_test_conf_high_scope_project_dt_2026_03_04') + `?asOfVersion=${afterVersion}`,
+        });
+        expect(atomAfter.statusCode).toBe(200);
+        const atomAfterBody = JSON.parse(atomAfter.payload);
+        expect(atomAfterBody.temporal.asOfVersion).toBe(afterVersion);
+    });
+
+    it('POST /search returns semantic results with ranking and proofs', async () => {
+        const res = await server.inject({
+            method: 'POST',
+            url: '/search',
+            payload: { query: atom('A'), limit: 5, threshold: 0 },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.mode).toBe('semantic');
+        expect(body.query).toBe(atom('A'));
+        expect(Array.isArray(body.results)).toBe(true);
+        expect(body.results.length).toBeGreaterThan(0);
+        expect(typeof body.searchTimeMs).toBe('number');
+        expect(typeof body.treeVersion).toBe('number');
+        const first = body.results[0];
+        expect(typeof first.atom).toBe('string');
+        expect(typeof first.similarity).toBe('number');
+        expect(typeof first.rank).toBe('number');
+        expect(typeof first.shardId).toBe('number');
+        expect(first.proof).toBeDefined();
+    });
+
+    it('POST /search respects limit and threshold', async () => {
+        const res = await server.inject({
+            method: 'POST',
+            url: '/search',
+            payload: { query: atom('A'), limit: 1, threshold: 0.2 },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.results.length).toBeLessThanOrEqual(1);
+        for (const row of body.results) {
+            expect(row.similarity).toBeGreaterThanOrEqual(0.2);
+        }
+    });
+
+    it('POST /search with invalid payload returns 400', async () => {
+        const res = await server.inject({
+            method: 'POST',
+            url: '/search',
+            payload: { query: '', limit: 0, threshold: 2 },
+        });
+        expect(res.statusCode).toBe(400);
+        expect(JSON.parse(res.payload).error).toBeDefined();
+    });
+
+    it('GET /weights includes effective confidence fields', async () => {
+        await server.inject({
+            method: 'POST',
+            url: '/train',
+            payload: { sequence: [atom('A'), atom('B')] },
+        });
+
+        const res = await server.inject({ method: 'GET', url: `/weights/${encodeURIComponent(atom('A'))}` });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(typeof body.totalWeight).toBe('number');
+        expect(typeof body.totalEffectiveWeight).toBe('number');
+        if (Array.isArray(body.transitions) && body.transitions.length > 0) {
+            expect(typeof body.transitions[0].weight).toBe('number');
+            expect(typeof body.transitions[0].effectiveWeight).toBe('number');
+            expect(body.transitions[0]).toHaveProperty('lastUpdatedMs');
+        }
     });
 });
 
@@ -308,6 +781,40 @@ describe('API Auth', () => {
         expect(auth.statusCode).toBe(200);
     });
 
+    it('POST /write-policy requires auth when API key is set', async () => {
+        const unauth = await authServer.inject({
+            method: 'POST',
+            url: '/write-policy',
+            payload: { policy: { byType: { fact: 'review-required' } } },
+        });
+        expect(unauth.statusCode).toBe(401);
+
+        const auth = await authServer.inject({
+            method: 'POST',
+            url: '/write-policy',
+            payload: { policy: { byType: { fact: 'review-required' } } },
+            headers: { authorization: 'Bearer test-secret' },
+        });
+        expect(auth.statusCode).toBe(200);
+    });
+
+    it('POST /search requires auth when API key is set', async () => {
+        const unauth = await authServer.inject({
+            method: 'POST',
+            url: '/search',
+            payload: { query: atom('X') },
+        });
+        expect(unauth.statusCode).toBe(401);
+
+        const auth = await authServer.inject({
+            method: 'POST',
+            url: '/search',
+            payload: { query: atom('X') },
+            headers: { authorization: 'Bearer test-secret' },
+        });
+        expect(auth.statusCode).toBe(200);
+    });
+
     it('rejects wrong token with 401', async () => {
         const res = await authServer.inject({
             method: 'POST', url: '/access',
@@ -345,7 +852,7 @@ describe('API — /atoms (dynamic atom management)', () => {
     beforeAll(async () => {
         cleanup(ATOMS_DB);
         const app = buildApp({ data: [atom('A'), atom('B'), atom('C')], dbBasePath: ATOMS_DB });
-        server = app.server;
+        server = withEnvAuth(app.server);
         orchestrator = app.orchestrator;
         pipeline = app.pipeline;
         await orchestrator.init();
@@ -406,6 +913,84 @@ describe('API — /atoms (dynamic atom management)', () => {
         expect(res.statusCode).toBe(400);
     });
 
+    it('POST /atoms returns review-required when policy gate requires approval', async () => {
+        await server.inject({
+            method: 'POST',
+            url: '/write-policy',
+            payload: {
+                policy: {
+                    byType: { fact: 'review-required' },
+                },
+            },
+        });
+
+        const res = await server.inject({
+            method: 'POST',
+            url: '/atoms',
+            payload: { atoms: ['v1.fact.requires_review_gate'] },
+        });
+        expect(res.statusCode).toBe(202);
+        const body = JSON.parse(res.payload);
+        expect(body.status).toBe('ReviewRequired');
+        expect(body.queued).toBe(0);
+        expect(body.writePolicyOutcome.decision).toBe('review-required');
+        expect(body.writePolicyOutcome.reviewRequiredAtoms).toContain('v1.fact.requires_review_gate');
+
+        await server.inject({ method: 'POST', url: '/write-policy', payload: { policy: 'default' } });
+    });
+
+    it('POST /atoms accepts review-required atoms when reviewApproved=true', async () => {
+        await server.inject({
+            method: 'POST',
+            url: '/write-policy',
+            payload: {
+                policy: {
+                    byType: { fact: 'review-required' },
+                },
+            },
+        });
+
+        const res = await server.inject({
+            method: 'POST',
+            url: '/atoms',
+            payload: { atoms: ['v1.fact.review_approved_atom'], reviewApproved: true },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.status).toBe('Queued');
+        expect(body.writePolicyOutcome.decision).toBe('allow');
+        expect(body.writePolicyOutcome.reviewApproved).toBe(true);
+        expect(body.writePolicyOutcome.allowedAtoms).toContain('v1.fact.review_approved_atom');
+
+        await server.inject({ method: 'POST', url: '/write-policy', payload: { policy: 'default' } });
+    });
+
+    it('POST /atoms denies never-store atoms with observable outcome', async () => {
+        await server.inject({
+            method: 'POST',
+            url: '/write-policy',
+            payload: {
+                policy: {
+                    byType: { state: 'never-store' },
+                },
+            },
+        });
+
+        const res = await server.inject({
+            method: 'POST',
+            url: '/atoms',
+            payload: { atoms: ['v1.state.do_not_store_this'] },
+        });
+        expect(res.statusCode).toBe(403);
+        const body = JSON.parse(res.payload);
+        expect(body.status).toBe('Denied');
+        expect(body.queued).toBe(0);
+        expect(body.writePolicyOutcome.decision).toBe('deny');
+        expect(body.writePolicyOutcome.deniedAtoms).toContain('v1.state.do_not_store_this');
+
+        await server.inject({ method: 'POST', url: '/write-policy', payload: { policy: 'default' } });
+    });
+
     // ── DELETE /atoms/:atom ──────────────────────────────────────────────────
 
     it('DELETE /atoms/:atom tombstones the atom and returns treeVersion', async () => {
@@ -421,6 +1006,24 @@ describe('API — /atoms (dynamic atom management)', () => {
         await server.inject({ method: 'DELETE', url: `/atoms/${atomPath('C')}` });
         const res = await server.inject({ method: 'POST', url: '/access', payload: { data: atom('C') } });
         expect(res.statusCode).toBe(404);
+    });
+
+    it('DELETE /atoms/:atom accepts empty JSON body with content-type header', async () => {
+        const target = 'v1.other.DELETE_HEADER_EMPTY';
+        await server.inject({ method: 'POST', url: '/atoms', payload: { atoms: [target] } });
+        await server.inject({ method: 'POST', url: '/admin/commit' });
+
+        const res = await server.inject({
+            method: 'DELETE',
+            url: `/atoms/${encodeURIComponent(target)}`,
+            headers: { 'content-type': 'application/json' },
+            payload: '',
+        });
+
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.status).toBe('Success');
+        expect(body.tombstonedAtom).toBe(target);
     });
 
     it('DELETE /atoms/:atom for unknown atom returns 404', async () => {
@@ -453,6 +1056,53 @@ describe('API — /atoms (dynamic atom management)', () => {
         expect(find(atom('C'))?.status).toBe('tombstoned');
     });
 
+    it('GET /atoms supports type filter', async () => {
+        await server.inject({ method: 'POST', url: '/atoms', payload: { atoms: ['v1.fact.FilterFact1', 'v1.event.FilterEvent1'] } });
+        await server.inject({ method: 'POST', url: '/admin/commit' });
+
+        const res = await server.inject({ method: 'GET', url: '/atoms?type=fact' });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(Array.isArray(body.atoms)).toBe(true);
+        for (const entry of body.atoms) {
+            expect(entry.atom.startsWith('v1.fact.')).toBe(true);
+        }
+    });
+
+    it('GET /atoms supports prefix filter', async () => {
+        await server.inject({ method: 'POST', url: '/atoms', payload: { atoms: ['v1.other.PrefixMatch1', 'v1.other.PrefixMiss1'] } });
+        await server.inject({ method: 'POST', url: '/admin/commit' });
+
+        const res = await server.inject({ method: 'GET', url: '/atoms?prefix=v1.other.PrefixMatch' });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.atoms.length).toBeGreaterThan(0);
+        for (const entry of body.atoms) {
+            expect(entry.atom.startsWith('v1.other.PrefixMatch')).toBe(true);
+        }
+    });
+
+    it('GET /atoms supports pagination via limit and offset', async () => {
+        const baseline = await server.inject({ method: 'GET', url: '/atoms' });
+        const full = JSON.parse(baseline.payload).atoms as Array<{ atom: string; status: string }>;
+
+        const res = await server.inject({ method: 'GET', url: '/atoms?offset=1&limit=2' });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.atoms).toEqual(full.slice(1, 3));
+    });
+
+    it('GET /atoms invalid query params return 400', async () => {
+        const badType = await server.inject({ method: 'GET', url: '/atoms?type=bogus' });
+        expect(badType.statusCode).toBe(400);
+
+        const badOffset = await server.inject({ method: 'GET', url: '/atoms?offset=-1' });
+        expect(badOffset.statusCode).toBe(400);
+
+        const badLimit = await server.inject({ method: 'GET', url: '/atoms?limit=0' });
+        expect(badLimit.statusCode).toBe(400);
+    });
+
     it('GET /atoms/:atom returns atom-level record for active atom', async () => {
         const res = await server.inject({ method: 'GET', url: `/atoms/${atomPath('A')}` });
         expect(res.statusCode).toBe(200);
@@ -463,6 +1113,8 @@ describe('API — /atoms (dynamic atom management)', () => {
         expect(body.status).toBe('active');
         expect(body.hash).toMatch(/^[a-f0-9]{64}$/);
         expect(typeof body.committed).toBe('boolean');
+        expect(typeof body.createdAtMs).toBe('number');
+        expect(body.createdAtMs).toBeGreaterThan(0);
         expect(typeof body.treeVersion).toBe('number');
         expect(Array.isArray(body.outgoingTransitions)).toBe(true);
     });
@@ -474,6 +1126,8 @@ describe('API — /atoms (dynamic atom management)', () => {
         expect(body.atom).toBe(atom('B'));
         expect(body.status).toBe('tombstoned');
         expect(body.hash).toMatch(/^[a-f0-9]{64}$/);
+        expect(typeof body.createdAtMs).toBe('number');
+        expect(body.createdAtMs).toBeGreaterThan(0);
     });
 
     it('GET /atoms/:atom returns 404 for unknown atom', async () => {
@@ -644,7 +1298,7 @@ describe('API — /atoms backpressure (Story 3.4)', () => {
         process.env.MMPM_PENDING_HIGH_WATER_MARK = '1';
         process.env.MMPM_BACKPRESSURE_RETRY_AFTER_SEC = '2';
         const app = buildApp({ data: [atom('A'), atom('B')], dbBasePath: BP_DB });
-        server = app.server;
+        server = withEnvAuth(app.server);
         orchestrator = app.orchestrator;
         pipeline = app.pipeline;
         await orchestrator.init();
@@ -700,7 +1354,7 @@ describe('API readiness guard', () => {
     beforeAll(async () => {
         cleanup(READY_DB);
         const app = buildApp({ data: [atom('R1'), atom('R2')], dbBasePath: READY_DB });
-        server = app.server;
+        server = withEnvAuth(app.server);
         orchestrator = app.orchestrator;
         pipeline = app.pipeline;
         // Intentionally do not call orchestrator.init() in this suite.

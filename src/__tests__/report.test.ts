@@ -4,6 +4,7 @@ import path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
     buildBenchmarkReport,
+    evaluateLatencySlo,
     renderTerminalReport,
     startHarnessMetricsExporter,
     toPrometheusMetrics,
@@ -48,6 +49,7 @@ function makeRecallStats(): RecallBenchStats {
             hotspot: { requests: 2, latenciesMs: [4, 5], p50: 4, p95: 5, p99: 5, max: 5, histogram: { '<=5ms': 2 } },
             cross_shard: { requests: 2, latenciesMs: [5, 6], p50: 5, p95: 6, p99: 6, max: 6, histogram: { '<=6ms': 2 } },
         },
+        contextLoad: { requests: 3, latenciesMs: [6, 8, 10], p50: 8, p95: 10, p99: 10, max: 10, histogram: { '<=10ms': 3 } },
         predictionHitRate: 0.6,
         predictionAttempts: 10,
         predictionHits: 6,
@@ -72,6 +74,7 @@ describe('Harness report generator (Story 9.5)', () => {
         expect(report.runId).toBe('run-test');
         expect(report.throughput.totalOpsPerSec).toBeGreaterThan(0);
         expect(report.latency.accessP95Ms).toBeGreaterThan(0);
+        expect(report.latency.contextLoadP95Ms).toBe(10);
         expect(report.prediction.hitRate).toBe(0.6);
         expect(report.correctness.proofFailures).toBe(0);
 
@@ -91,7 +94,29 @@ describe('Harness report generator (Story 9.5)', () => {
         expect(metrics).toContain('mmpm_harness_throughput_ops_per_sec');
         expect(metrics).toContain('mmpm_harness_prediction_hit_rate_ratio');
         expect(metrics).toContain('mmpm_harness_pattern_latency_p95_ms');
+        expect(metrics).toContain('mmpm_harness_latency_context_load_p95_ms');
         expect(metrics).toContain('run_id="run-prom"');
+    });
+
+    it('evaluates latency SLO pass/fail for access and context-load p95', () => {
+        const report = buildBenchmarkReport({
+            runId: 'run-slo',
+            ingestion: makeIngestStats(),
+            recall: makeRecallStats(),
+        });
+
+        const pass = evaluateLatencySlo(report, {
+            accessP95MaxMs: 7,
+            contextLoadP95MaxMs: 20,
+        });
+        expect(pass.pass).toBe(true);
+
+        const fail = evaluateLatencySlo(report, {
+            accessP95MaxMs: 1,
+            contextLoadP95MaxMs: 9,
+        });
+        expect(fail.pass).toBe(false);
+        expect(fail.failures.length).toBeGreaterThanOrEqual(1);
     });
 
     it('serves /metrics from a report file via exporter HTTP endpoint', async () => {

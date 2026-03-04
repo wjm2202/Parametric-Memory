@@ -17,6 +17,8 @@ function bootAtom(value: string): string {
     return `v1.other.${value}`;
 }
 
+const API_KEY = 'test-continuous-client-key';
+
 afterAll(() => {
     while (dbDirs.length > 0) {
         const dir = dbDirs.pop();
@@ -31,6 +33,7 @@ describe('Continuous client harness', () => {
             data: [bootAtom('seed_a'), bootAtom('seed_b'), bootAtom('seed_c')],
             dbBasePath: tempDb('traffic'),
             numShards: 4,
+            apiKey: API_KEY,
         });
 
         await app.orchestrator.init();
@@ -51,6 +54,7 @@ describe('Continuous client harness', () => {
 
             const stats = await runContinuousClient({
                 baseUrl: `http://127.0.0.1:${address.port}`,
+                apiKey: API_KEY,
                 profile: 'balanced',
                 durationMs: 1800,
                 targetOpsPerSec: 45,
@@ -87,6 +91,7 @@ describe('Continuous client harness', () => {
             data: [bootAtom('seed_x'), bootAtom('seed_y'), bootAtom('seed_z')],
             dbBasePath: tempDb('policy'),
             numShards: 4,
+            apiKey: API_KEY,
         });
 
         await app.orchestrator.init();
@@ -101,6 +106,7 @@ describe('Continuous client harness', () => {
 
             const stats = await runContinuousClient({
                 baseUrl: `http://127.0.0.1:${address.port}`,
+                apiKey: API_KEY,
                 profile: 'policy-stress',
                 durationMs: 1700,
                 targetOpsPerSec: 40,

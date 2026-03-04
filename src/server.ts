@@ -31,6 +31,544 @@ interface BuildAppOpts {
 }
 
 const SCHEMA_ERROR = "schema v1 required: use 'v1.<type>.<value>' or object { type, value } with type in {fact,event,relation,state,other}.";
+const DEFAULT_CONTEXT_MAX_TOKENS = 512;
+const MAX_CONTEXT_MAX_TOKENS = 8000;
+const DEFAULT_SEARCH_LIMIT = 10;
+const MAX_SEARCH_LIMIT = 100;
+const DEFAULT_BOOTSTRAP_LIMIT = 12;
+const MAX_ATOMS_PAGE_SIZE = 1000;
+const DEFAULT_HIGH_IMPACT_EVIDENCE_THRESHOLD = 0.65;
+const WRITE_POLICY_TIERS = ['auto-write', 'review-required', 'never-store'] as const;
+
+type NamespaceScope = {
+    user?: string;
+    project?: string;
+    task?: string;
+    includeGlobal: boolean;
+};
+
+type FactConflictEntry = {
+    atom: string;
+    claim: string;
+    source: string | null;
+    confidence: string | null;
+    createdAtMs: number;
+};
+
+type FactConflictGroup = {
+    key: string;
+    claims: string[];
+    entries: FactConflictEntry[];
+};
+
+type TemporalScope = {
+    mode: 'current' | 'time' | 'version' | 'time+version';
+    asOfMs: number | null;
+    asOfVersion: number | null;
+    effectiveAsOfMs: number | null;
+    rootAtVersion: string | null;
+};
+
+type BootstrapProof = {
+    leaf: string;
+    root: string;
+    auditPath: string[];
+    index: number;
+};
+
+type BootstrapMemoryItem = {
+    atom: string;
+    type: string;
+    value: string;
+    category: 'goal' | 'constraint' | 'preference' | 'memory';
+    relevance: number;
+    createdAtMs: number;
+    shardId: number;
+    dominantNext: string | null;
+    proof: BootstrapProof;
+    contradiction: {
+        hasConflict: boolean;
+        conflictKey: string | null;
+        competingClaims: FactConflictEntry[];
+    };
+};
+
+type WritePolicyTier = (typeof WRITE_POLICY_TIERS)[number];
+
+type WritePolicyConfig = {
+    defaultTier: WritePolicyTier;
+    byType: Partial<Record<AtomType, WritePolicyTier>>;
+};
+
+type WritePolicyEvaluation = {
+    decision: 'allow' | 'review-required' | 'deny';
+    reviewApproved: boolean;
+    allowedAtoms: string[];
+    reviewRequiredAtoms: string[];
+    deniedAtoms: string[];
+    policy: WritePolicyConfig;
+};
+
+function estimateTokens(text: string): number {
+    return Math.max(1, Math.ceil(text.length / 4));
+}
+
+function parseMaxTokens(input: unknown): number | null {
+    if (typeof input === 'number') {
+        if (!Number.isInteger(input) || input <= 0 || input > MAX_CONTEXT_MAX_TOKENS) return null;
+        return input;
+    }
+    if (typeof input === 'string') {
+        const trimmed = input.trim();
+        if (!/^\d+$/.test(trimmed)) return null;
+        const parsed = parseInt(trimmed, 10);
+        if (parsed <= 0 || parsed > MAX_CONTEXT_MAX_TOKENS) return null;
+        return parsed;
+    }
+    return null;
+}
+
+function tokenizeText(input: string): string[] {
+    return input
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter(Boolean);
+}
+
+function semanticSimilarityScore(query: string, candidate: string): number {
+    const q = new Set(tokenizeText(query));
+    const c = new Set(tokenizeText(candidate));
+    if (q.size === 0 || c.size === 0) return 0;
+
+    let overlap = 0;
+    for (const token of q) {
+        if (c.has(token)) overlap++;
+    }
+    if (overlap === 0) return 0;
+
+    const union = new Set([...q, ...c]).size;
+    return overlap / union;
+}
+
+function parseSearchLimit(input: unknown): number | null {
+    if (input === undefined) return DEFAULT_SEARCH_LIMIT;
+    if (!Number.isInteger(input) || (input as number) <= 0 || (input as number) > MAX_SEARCH_LIMIT) return null;
+    return input as number;
+}
+
+function parseSearchThreshold(input: unknown): number | null {
+    if (input === undefined) return 0;
+    if (typeof input !== 'number' || !Number.isFinite(input) || input < 0 || input > 1) return null;
+    return input;
+}
+
+function parseNamespaceValue(input: unknown): string | null {
+    if (typeof input !== 'string') return null;
+    const value = input.trim().toLowerCase();
+    if (value.length === 0 || value.length > 64) return null;
+    if (!/^[a-z0-9_-]+$/.test(value)) return null;
+    return value;
+}
+
+function parseIncludeGlobal(input: unknown, fallback: boolean): boolean | null {
+    if (input === undefined) return fallback;
+    if (typeof input === 'boolean') return input;
+    if (typeof input === 'string') {
+        const v = input.trim().toLowerCase();
+        if (v === 'true' || v === '1') return true;
+        if (v === 'false' || v === '0') return false;
+    }
+    return null;
+}
+
+function parseNamespaceScope(
+    namespaceInput: unknown,
+    includeGlobalInput: unknown,
+    fallbackIncludeGlobal = true
+): NamespaceScope | null {
+    if (namespaceInput !== undefined && (typeof namespaceInput !== 'object' || namespaceInput === null || Array.isArray(namespaceInput))) {
+        return null;
+    }
+
+    const ns = (namespaceInput ?? {}) as Record<string, unknown>;
+    const userParsed = ns.user === undefined ? undefined : parseNamespaceValue(ns.user);
+    const projectParsed = ns.project === undefined ? undefined : parseNamespaceValue(ns.project);
+    const taskParsed = ns.task === undefined ? undefined : parseNamespaceValue(ns.task);
+    if ((ns.user !== undefined && userParsed === null) || (ns.project !== undefined && projectParsed === null) || (ns.task !== undefined && taskParsed === null)) {
+        return null;
+    }
+    const user = userParsed ?? undefined;
+    const project = projectParsed ?? undefined;
+    const task = taskParsed ?? undefined;
+
+    const includeGlobal = parseIncludeGlobal(includeGlobalInput, fallbackIncludeGlobal);
+    if (includeGlobal === null) return null;
+
+    return { user, project, task, includeGlobal };
+}
+
+function parseNamespaceScopeFromQuery(query: Record<string, unknown>): NamespaceScope | null {
+    return parseNamespaceScope(
+        {
+            user: query.namespaceUser,
+            project: query.namespaceProject,
+            task: query.namespaceTask,
+        },
+        query.includeGlobal,
+        true
+    );
+}
+
+function extractAtomNamespace(atom: string): Omit<NamespaceScope, 'includeGlobal'> {
+    const parsed = parseAtomV1(atom);
+    const value = parsed?.value.toLowerCase() ?? atom.toLowerCase();
+    const found: Omit<NamespaceScope, 'includeGlobal'> = {};
+    const regex = /(?:^|_)(?:ns|namespace)_(user|project|task)_([a-z0-9_-]+)/g;
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(value)) !== null) {
+        const key = match[1] as 'user' | 'project' | 'task';
+        if (!found[key]) found[key] = match[2];
+    }
+    return found;
+}
+
+function matchesNamespaceScope(atom: string, scope: NamespaceScope): boolean {
+    const atomNs = extractAtomNamespace(atom);
+    const checks: Array<keyof Omit<NamespaceScope, 'includeGlobal'>> = ['user', 'project', 'task'];
+
+    for (const key of checks) {
+        const expected = scope[key];
+        if (!expected) continue;
+        const actual = atomNs[key];
+        if (actual === undefined) {
+            if (!scope.includeGlobal) return false;
+            continue;
+        }
+        if (actual !== expected) return false;
+    }
+    return true;
+}
+
+function parseFactClaim(atom: string): {
+    key: string;
+    claim: string;
+    source: string | null;
+    confidence: string | null;
+} | null {
+    const parsed = parseAtomV1(atom);
+    if (!parsed || parsed.type !== 'fact') return null;
+
+    const value = parsed.value.toLowerCase();
+    const metadataMarkers = ['_src_', '_conf_', '_scope_', '_dt_', '_ns_', '_namespace_'];
+    let coreEnd = value.length;
+    for (const marker of metadataMarkers) {
+        const idx = value.indexOf(marker);
+        if (idx !== -1 && idx < coreEnd) coreEnd = idx;
+    }
+    const core = value.slice(0, coreEnd).replace(/^_+|_+$/g, '');
+    const tokens = core.split('_').filter(Boolean);
+    if (tokens.length < 2) return null;
+
+    const key = tokens.slice(0, -1).join('_');
+    const claim = tokens[tokens.length - 1];
+    if (!key || !claim) return null;
+
+    const sourceMatch = value.match(/(?:^|_)src_([a-z0-9_-]+)/);
+    const confMatch = value.match(/(?:^|_)conf_([a-z0-9_-]+)/);
+
+    return {
+        key,
+        claim,
+        source: sourceMatch?.[1] ?? null,
+        confidence: confMatch?.[1] ?? null,
+    };
+}
+
+function buildFactConflictIndex(
+    atoms: Array<{ atom: string; createdAtMs: number }>
+): Map<string, FactConflictGroup> {
+    const grouped = new Map<string, FactConflictEntry[]>();
+
+    for (const row of atoms) {
+        const claim = parseFactClaim(row.atom);
+        if (!claim) continue;
+        const entry: FactConflictEntry = {
+            atom: row.atom,
+            claim: claim.claim,
+            source: claim.source,
+            confidence: claim.confidence,
+            createdAtMs: row.createdAtMs,
+        };
+        if (!grouped.has(claim.key)) grouped.set(claim.key, []);
+        grouped.get(claim.key)!.push(entry);
+    }
+
+    const conflicts = new Map<string, FactConflictGroup>();
+    for (const [key, entries] of grouped.entries()) {
+        const claims = Array.from(new Set(entries.map(entry => entry.claim))).sort();
+        if (claims.length < 2) continue;
+        conflicts.set(key, {
+            key,
+            claims,
+            entries: entries.sort((a, b) => b.createdAtMs - a.createdAtMs),
+        });
+    }
+
+    return conflicts;
+}
+
+function getFactConflictForAtom(
+    atom: string,
+    conflicts: Map<string, FactConflictGroup>
+): {
+    hasConflict: boolean;
+    conflictKey: string | null;
+    competingClaims: FactConflictEntry[];
+} {
+    const parsed = parseFactClaim(atom);
+    if (!parsed) {
+        return { hasConflict: false, conflictKey: null, competingClaims: [] };
+    }
+    const group = conflicts.get(parsed.key);
+    if (!group) {
+        return { hasConflict: false, conflictKey: parsed.key, competingClaims: [] };
+    }
+    return {
+        hasConflict: true,
+        conflictKey: group.key,
+        competingClaims: group.entries,
+    };
+}
+
+function parseBootstrapLimit(input: unknown): number | null {
+    if (input === undefined) return DEFAULT_BOOTSTRAP_LIMIT;
+    if (!Number.isInteger(input) || (input as number) <= 0 || (input as number) > MAX_SEARCH_LIMIT) return null;
+    return input as number;
+}
+
+function classifyBootstrapMemory(atom: string): 'goal' | 'constraint' | 'preference' | 'memory' {
+    const parsed = parseAtomV1(atom);
+    if (!parsed) return 'memory';
+
+    const value = parsed.value.toLowerCase();
+    if (value.includes('prefers_') || value.includes('preference_')) return 'preference';
+    if (value.includes('requires_') || value.includes('must_') || value.includes('constraint_') || value.includes('policy_')) return 'constraint';
+    if (value.includes('objective_') || value.includes('current_focus_') || value.includes('next_step_') || value.includes('sprint.')) return 'goal';
+    return 'memory';
+}
+
+function buildDecisionEvidence(
+    topMemories: BootstrapMemoryItem[],
+    objectiveText: string,
+    treeVersion: number,
+    evidenceByMemory: Map<string, number>,
+    thresholdGate: { applied: boolean; threshold: number }
+) {
+    const objectiveTokens = new Set(tokenizeText(objectiveText));
+
+    const memoryIds = topMemories.map(item => item.atom);
+    const proofReferences = topMemories.map(item => ({
+        memoryId: item.atom,
+        shardId: item.shardId,
+        treeVersion,
+        proofRoot: item.proof.root,
+        proofLeaf: item.proof.leaf,
+        proofIndex: item.proof.index,
+    }));
+
+    const retrievalRationale = topMemories.map((item, idx) => {
+        const valueTokens = new Set(tokenizeText(item.value));
+        const overlapCount = Array.from(objectiveTokens).filter(token => valueTokens.has(token)).length;
+        const reasons: string[] = [];
+        if (objectiveText.length > 0 && overlapCount > 0) {
+            reasons.push(`objective_token_overlap=${overlapCount}`);
+        }
+        if (item.relevance > 0) {
+            reasons.push(`semantic_relevance=${item.relevance}`);
+        }
+        if (item.category !== 'memory') {
+            reasons.push(`category=${item.category}`);
+        }
+        if (item.contradiction.hasConflict && item.contradiction.conflictKey) {
+            reasons.push(`conflict_key=${item.contradiction.conflictKey}`);
+        }
+        const evidenceScore = evidenceByMemory.get(item.atom) ?? 0;
+        reasons.push(`evidence_score=${evidenceScore}`);
+        if (thresholdGate.applied) {
+            reasons.push(`threshold_gate=${evidenceScore >= thresholdGate.threshold ? 'pass' : 'fail'}`);
+        }
+        reasons.push(`rank=${idx + 1}`);
+
+        return {
+            memoryId: item.atom,
+            rank: idx + 1,
+            relevance: item.relevance,
+            evidenceScore,
+            category: item.category,
+            createdAtMs: item.createdAtMs,
+            hasConflict: item.contradiction.hasConflict,
+            reasons,
+        };
+    });
+
+    return {
+        memoryIds,
+        proofReferences,
+        retrievalRationale,
+        coverage: {
+            memoryIds: memoryIds.length,
+            proofReferences: proofReferences.length,
+            retrievalRationale: retrievalRationale.length,
+            complete:
+                memoryIds.length > 0 &&
+                memoryIds.length === proofReferences.length &&
+                memoryIds.length === retrievalRationale.length,
+        },
+    };
+}
+
+function computeBootstrapEvidenceScore(item: BootstrapMemoryItem): number {
+    const proofPresent = item.proof && typeof item.proof.root === 'string' && item.proof.root.length > 0;
+    const categorySignal = item.category === 'memory' ? 0 : 1;
+    const conflictPenalty = item.contradiction.hasConflict ? 0 : 1;
+
+    const raw =
+        (item.relevance * 0.55) +
+        (proofPresent ? 0.25 : 0) +
+        (categorySignal * 0.10) +
+        (conflictPenalty * 0.10);
+
+    const clamped = Math.max(0, Math.min(1, raw));
+    return Number(clamped.toFixed(6));
+}
+
+function applyEvidenceThresholdGate(
+    topMemories: BootstrapMemoryItem[],
+    highImpact: boolean,
+    threshold: number
+): {
+    included: BootstrapMemoryItem[];
+    excluded: Array<{ memoryId: string; evidenceScore: number }>;
+    evidenceByMemory: Map<string, number>;
+    gate: {
+        applied: boolean;
+        threshold: number;
+        inputCount: number;
+        includedCount: number;
+        excludedCount: number;
+        lowEvidenceFallback: boolean;
+        lowEvidenceUsageRate: number;
+    };
+} {
+    const evidenceByMemory = new Map<string, number>();
+    for (const item of topMemories) {
+        evidenceByMemory.set(item.atom, computeBootstrapEvidenceScore(item));
+    }
+
+    if (!highImpact) {
+        return {
+            included: topMemories,
+            excluded: [],
+            evidenceByMemory,
+            gate: {
+                applied: false,
+                threshold,
+                inputCount: topMemories.length,
+                includedCount: topMemories.length,
+                excludedCount: 0,
+                lowEvidenceFallback: false,
+                lowEvidenceUsageRate: 0,
+            },
+        };
+    }
+
+    const included: BootstrapMemoryItem[] = [];
+    const excluded: Array<{ memoryId: string; evidenceScore: number }> = [];
+    for (const item of topMemories) {
+        const score = evidenceByMemory.get(item.atom) ?? 0;
+        if (score >= threshold) included.push(item);
+        else excluded.push({ memoryId: item.atom, evidenceScore: score });
+    }
+
+    const inputCount = topMemories.length;
+    const excludedCount = excluded.length;
+    const lowEvidenceUsageRate = inputCount > 0 ? Number((excludedCount / inputCount).toFixed(6)) : 0;
+
+    return {
+        included,
+        excluded,
+        evidenceByMemory,
+        gate: {
+            applied: true,
+            threshold,
+            inputCount,
+            includedCount: included.length,
+            excludedCount,
+            lowEvidenceFallback: included.length === 0 && inputCount > 0,
+            lowEvidenceUsageRate,
+        },
+    };
+}
+
+function parseOptionalNonNegativeInt(input: unknown): number | null {
+    if (input === undefined) return 0;
+    if (typeof input === 'number') {
+        if (!Number.isInteger(input) || input < 0) return null;
+        return input;
+    }
+    if (typeof input === 'string') {
+        const trimmed = input.trim();
+        if (!/^\d+$/.test(trimmed)) return null;
+        return parseInt(trimmed, 10);
+    }
+    return null;
+}
+
+function parseOptionalPositiveInt(input: unknown): number | null {
+    if (input === undefined) return null;
+    if (typeof input === 'number') {
+        if (!Number.isInteger(input) || input <= 0 || input > MAX_ATOMS_PAGE_SIZE) return null;
+        return input;
+    }
+    if (typeof input === 'string') {
+        const trimmed = input.trim();
+        if (!/^\d+$/.test(trimmed)) return null;
+        const parsed = parseInt(trimmed, 10);
+        if (parsed <= 0 || parsed > MAX_ATOMS_PAGE_SIZE) return null;
+        return parsed;
+    }
+    return null;
+}
+
+function parseAsOfMs(input: unknown): number | null {
+    if (input === undefined) return null;
+    if (typeof input === 'number') {
+        if (!Number.isInteger(input) || input <= 0) return null;
+        return input;
+    }
+    if (typeof input === 'string') {
+        const trimmed = input.trim();
+        if (!/^\d+$/.test(trimmed)) return null;
+        const parsed = parseInt(trimmed, 10);
+        if (parsed <= 0) return null;
+        return parsed;
+    }
+    return null;
+}
+
+function parseAsOfVersion(input: unknown): number | null {
+    if (input === undefined) return null;
+    if (typeof input === 'number') {
+        if (!Number.isInteger(input) || input < 0) return null;
+        return input;
+    }
+    if (typeof input === 'string') {
+        const trimmed = input.trim();
+        if (!/^\d+$/.test(trimmed)) return null;
+        return parseInt(trimmed, 10);
+    }
+    return null;
+}
 
 function isAtomType(value: unknown): value is AtomType {
     return typeof value === 'string' && (ATOM_TYPES as readonly string[]).includes(value);
@@ -49,6 +587,79 @@ function parsePolicyConfig(input: unknown): TypePolicyConfig | null {
     }
 
     return config;
+}
+
+function isWritePolicyTier(value: unknown): value is WritePolicyTier {
+    return typeof value === 'string' && (WRITE_POLICY_TIERS as readonly string[]).includes(value);
+}
+
+function createDefaultWritePolicy(): WritePolicyConfig {
+    return {
+        defaultTier: 'auto-write',
+        byType: {},
+    };
+}
+
+function parseWritePolicyConfig(input: unknown): WritePolicyConfig | null {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+    const raw = input as Record<string, unknown>;
+
+    const defaultTierInput = raw.defaultTier;
+    const defaultTier = defaultTierInput === undefined
+        ? 'auto-write'
+        : (isWritePolicyTier(defaultTierInput) ? defaultTierInput : null);
+    if (defaultTier === null) return null;
+
+    const byTypeInput = raw.byType;
+    const byType: Partial<Record<AtomType, WritePolicyTier>> = {};
+    if (byTypeInput !== undefined) {
+        if (!byTypeInput || typeof byTypeInput !== 'object' || Array.isArray(byTypeInput)) return null;
+        const rawByType = byTypeInput as Record<string, unknown>;
+        for (const [atomType, tier] of Object.entries(rawByType)) {
+            if (!isAtomType(atomType)) return null;
+            if (!isWritePolicyTier(tier)) return null;
+            byType[atomType] = tier;
+        }
+    }
+
+    return { defaultTier, byType };
+}
+
+function resolveWriteTierForAtom(atom: string, policy: WritePolicyConfig): WritePolicyTier {
+    const parsed = parseAtomV1(atom);
+    const atomType = parsed?.type ?? 'other';
+    return policy.byType[atomType] ?? policy.defaultTier;
+}
+
+function evaluateWritePolicy(atoms: string[], policy: WritePolicyConfig, reviewApproved: boolean): WritePolicyEvaluation {
+    const allowedAtoms: string[] = [];
+    const reviewRequiredAtoms: string[] = [];
+    const deniedAtoms: string[] = [];
+
+    for (const atom of atoms) {
+        const tier = resolveWriteTierForAtom(atom, policy);
+        if (tier === 'never-store') {
+            deniedAtoms.push(atom);
+        } else if (tier === 'review-required' && !reviewApproved) {
+            reviewRequiredAtoms.push(atom);
+        } else {
+            allowedAtoms.push(atom);
+        }
+    }
+
+    const decision: WritePolicyEvaluation['decision'] =
+        deniedAtoms.length > 0 ? 'deny'
+            : reviewRequiredAtoms.length > 0 ? 'review-required'
+                : 'allow';
+
+    return {
+        decision,
+        reviewApproved,
+        allowedAtoms,
+        reviewRequiredAtoms,
+        deniedAtoms,
+        policy,
+    };
 }
 
 /** Load a JSON seed file and return its atom array, or null on any error. */
@@ -79,6 +690,18 @@ function loadSeedFile(filePath: string): string[] | null {
 
 export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; orchestrator: ShardedOrchestrator; pipeline: IngestionPipeline } {
     const server = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' } });
+    server.addContentTypeParser('application/json', { parseAs: 'string' }, (_request, body, done) => {
+        const rawBody = typeof body === 'string' ? body : body.toString('utf8');
+        if (rawBody.trim().length === 0) {
+            done(null, {});
+            return;
+        }
+        try {
+            done(null, JSON.parse(rawBody));
+        } catch (error: unknown) {
+            done(error instanceof Error ? error : new Error('Invalid JSON payload'), undefined);
+        }
+    });
     const numShards = opts.numShards ?? parseInt(process.env.SHARD_COUNT ?? '4');
     const dbBasePath = opts.dbBasePath ?? (process.env.DB_BASE_PATH ?? './mmpm-db');
 
@@ -112,8 +735,78 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
         batchSize: parseInt(process.env.INGEST_BATCH_SIZE ?? '100'),
         flushIntervalMs: parseInt(process.env.INGEST_FLUSH_MS ?? '1000'),
     });
+    let writePolicy: WritePolicyConfig = createDefaultWritePolicy();
 
     const probePaths = new Set(['/metrics', '/health', '/ready']);
+
+    const resolveTemporalScope = (asOfMsInput: unknown, asOfVersionInput: unknown):
+        | { ok: true; scope: TemporalScope }
+        | { ok: false; statusCode: number; error: string } => {
+        const asOfMs = parseAsOfMs(asOfMsInput);
+        const asOfVersion = parseAsOfVersion(asOfVersionInput);
+
+        if (asOfMsInput !== undefined && asOfMs === null) {
+            return { ok: false, statusCode: 400, error: "Property 'asOfMs' must be a positive integer Unix timestamp (ms)." };
+        }
+        if (asOfVersionInput !== undefined && asOfVersion === null) {
+            return { ok: false, statusCode: 400, error: "Property 'asOfVersion' must be a non-negative integer." };
+        }
+
+        const currentVersion = orchestrator.getMasterVersion();
+        if (asOfVersion !== null && asOfVersion > currentVersion) {
+            return { ok: false, statusCode: 400, error: `Requested asOfVersion ${asOfVersion} exceeds current version ${currentVersion}.` };
+        }
+
+        let versionTimestamp: number | null = null;
+        let rootAtVersion: string | null = null;
+        if (asOfVersion !== null) {
+            if (asOfVersion === currentVersion) {
+                versionTimestamp = Date.now();
+                rootAtVersion = orchestrator.getMasterRootAtVersion(currentVersion) ?? null;
+            } else {
+                const ts = orchestrator.getMasterVersionTimestamp(asOfVersion);
+                const root = orchestrator.getMasterRootAtVersion(asOfVersion);
+                if (ts === undefined || root === undefined) {
+                    return {
+                        ok: false,
+                        statusCode: 400,
+                        error: `Requested asOfVersion ${asOfVersion} is outside retained history window.`,
+                    };
+                }
+                versionTimestamp = ts;
+                rootAtVersion = root;
+            }
+        }
+
+        if (asOfMs !== null && versionTimestamp !== null && asOfMs < versionTimestamp) {
+            return {
+                ok: false,
+                statusCode: 400,
+                error: 'Provided asOfMs is earlier than the commit timestamp for requested asOfVersion.',
+            };
+        }
+
+        const effectiveAsOfMs = asOfMs !== null && versionTimestamp !== null
+            ? Math.min(asOfMs, versionTimestamp)
+            : (asOfMs ?? versionTimestamp ?? null);
+
+        const mode: TemporalScope['mode'] =
+            asOfMs !== null && asOfVersion !== null ? 'time+version'
+                : asOfVersion !== null ? 'version'
+                    : asOfMs !== null ? 'time'
+                        : 'current';
+
+        return {
+            ok: true,
+            scope: {
+                mode,
+                asOfMs,
+                asOfVersion,
+                effectiveAsOfMs,
+                rootAtVersion,
+            },
+        };
+    };
 
     // Optional Bearer token auth — /metrics always bypasses
     if (apiKey) {
@@ -257,6 +950,50 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
     });
 
     /**
+     * GET /write-policy  —  Return current memory-write policy tiers.
+     */
+    server.get('/write-policy', async () => {
+        const isDefault = writePolicy.defaultTier === 'auto-write' && Object.keys(writePolicy.byType).length === 0;
+        return {
+            policy: writePolicy,
+            isDefault,
+        };
+    });
+
+    /**
+     * POST /write-policy  —  Set write policy tiers or reset to default.
+     * Body: { policy: { defaultTier?: WritePolicyTier, byType?: Record<AtomType, WritePolicyTier> } }
+     *    or: { policy: 'default' }
+     */
+    server.post('/write-policy', async (request, reply) => {
+        const { policy } = (request.body ?? {}) as { policy?: unknown };
+
+        if (policy === 'default') {
+            writePolicy = createDefaultWritePolicy();
+            return {
+                status: 'WritePolicyUpdated',
+                isDefault: true,
+                policy: writePolicy,
+            };
+        }
+
+        const parsed = parseWritePolicyConfig(policy);
+        if (!parsed) {
+            return reply.status(400).send({
+                error: "Property 'policy' must be 'default' or an object with optional defaultTier and byType atom-type mappings to one of: auto-write, review-required, never-store.",
+            });
+        }
+
+        writePolicy = parsed;
+        const isDefault = writePolicy.defaultTier === 'auto-write' && Object.keys(writePolicy.byType).length === 0;
+        return {
+            status: 'WritePolicyUpdated',
+            isDefault,
+            policy: writePolicy,
+        };
+    });
+
+    /**
      * POST /train  —  Body: { "sequence": ["Node_A", "Node_B"] }
      */
     server.post('/train', async (request, reply) => {
@@ -286,8 +1023,8 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             for (const atom of fromAtoms) {
                 const weights = orchestrator.getWeights(atom);
                 if (weights && weights.length > 0) {
-                    const total = weights.reduce((s, t) => s + t.weight, 0);
-                    atomDominanceRatio.set({ atom }, weights[0].weight / total);
+                    const total = weights.reduce((s, t) => s + t.effectiveWeight, 0);
+                    atomDominanceRatio.set({ atom }, total > 0 ? weights[0].effectiveWeight / total : 0);
                     atomTrainedEdges.set({ atom }, weights.length);
                 }
             }
@@ -303,6 +1040,101 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
     });
 
     /**
+     * POST /search  —  Semantic/lexical MVP retrieval over active atoms.
+     * Body: { query: string, limit?: number, threshold?: number }
+     */
+    server.post('/search', async (request, reply) => {
+        const startedAt = Date.now();
+        const { query, limit, threshold, namespace, includeGlobal, asOfMs, asOfVersion } = (request.body ?? {}) as {
+            query?: unknown;
+            limit?: unknown;
+            threshold?: unknown;
+            namespace?: unknown;
+            includeGlobal?: unknown;
+            asOfMs?: unknown;
+            asOfVersion?: unknown;
+        };
+
+        if (typeof query !== 'string' || query.trim().length === 0) {
+            return reply.status(400).send({ error: "Property 'query' must be a non-empty string." });
+        }
+
+        const parsedLimit = parseSearchLimit(limit);
+        if (parsedLimit === null) {
+            return reply.status(400).send({ error: `Property 'limit' must be an integer between 1 and ${MAX_SEARCH_LIMIT}.` });
+        }
+
+        const parsedThreshold = parseSearchThreshold(threshold);
+        if (parsedThreshold === null) {
+            return reply.status(400).send({ error: "Property 'threshold' must be a number between 0 and 1." });
+        }
+
+        const namespaceScope = parseNamespaceScope(namespace, includeGlobal, true);
+        if (namespaceScope === null) {
+            return reply.status(400).send({ error: "Property 'namespace' must be an object with optional user/project/task strings; includeGlobal must be boolean when provided." });
+        }
+
+        const temporal = resolveTemporalScope(asOfMs, asOfVersion);
+        if (!temporal.ok) return reply.status(temporal.statusCode).send({ error: temporal.error });
+
+        const activeAtoms = orchestrator
+            .listAtoms()
+            .filter(entry => entry.status === 'active')
+            .filter(entry => matchesNamespaceScope(entry.atom, namespaceScope))
+            .map(entry => orchestrator.inspectAtom(entry.atom))
+            .filter(entry => {
+                if (!entry) return false;
+                if (temporal.scope.effectiveAsOfMs === null) return true;
+                return entry.createdAtMs <= temporal.scope.effectiveAsOfMs;
+            })
+            .filter((entry): entry is NonNullable<ReturnType<typeof orchestrator.inspectAtom>> => entry !== null);
+
+        const conflictIndex = buildFactConflictIndex(activeAtoms.map(entry => ({
+            atom: entry.atom,
+            createdAtMs: entry.createdAtMs,
+        })));
+
+        const scored = activeAtoms
+            .map(entry => {
+                const parsed = parseAtomV1(entry.atom);
+                const semanticText = parsed ? `${parsed.type} ${parsed.value} ${entry.atom}` : entry.atom;
+                const similarity = semanticSimilarityScore(query, semanticText);
+                return { entry, similarity };
+            })
+            .filter(item => item.similarity >= parsedThreshold)
+            .sort((a, b) => {
+                if (b.similarity !== a.similarity) return b.similarity - a.similarity;
+                if (b.entry.createdAtMs !== a.entry.createdAtMs) return b.entry.createdAtMs - a.entry.createdAtMs;
+                return a.entry.atom.localeCompare(b.entry.atom);
+            })
+            .slice(0, parsedLimit);
+
+        const results = await Promise.all(
+            scored.map(async (item, index) => {
+                const report = await orchestrator.access(item.entry.atom);
+                return {
+                    atom: item.entry.atom,
+                    similarity: Number(item.similarity.toFixed(6)),
+                    rank: index + 1,
+                    shardId: item.entry.shard,
+                    proof: report.currentProof,
+                    contradiction: getFactConflictForAtom(item.entry.atom, conflictIndex),
+                };
+            })
+        );
+
+        return {
+            mode: 'semantic',
+            query,
+            namespace: namespaceScope,
+            temporal: temporal.scope,
+            results,
+            searchTimeMs: Date.now() - startedAt,
+            treeVersion: orchestrator.getMasterVersion(),
+        };
+    });
+
+    /**
      * GET /weights/:atom  —  Introspect Markov weights for a single atom.
      * Read-only. Returns outgoing transitions sorted by weight descending.
      * Response includes dominanceRatio so callers can assess prediction confidence.
@@ -314,12 +1146,14 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             return reply.status(404).send({ error: `Atom '${atom}' not found in any shard.` });
         }
         const totalWeight = transitions.reduce((s, t) => s + t.weight, 0);
+        const totalEffectiveWeight = transitions.reduce((s, t) => s + t.effectiveWeight, 0);
         return {
             atom,
             transitions,
             totalWeight,
+            totalEffectiveWeight,
             dominantNext: transitions[0]?.to ?? null,
-            dominanceRatio: totalWeight > 0 ? transitions[0].weight / totalWeight : null,
+            dominanceRatio: totalEffectiveWeight > 0 ? transitions[0].effectiveWeight / totalEffectiveWeight : null,
         };
     });
 
@@ -347,6 +1181,254 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
     });
 
     /**
+     * GET /memory/context  —  Build a compact context block from active atoms.
+     * Query: ?maxTokens=<positive integer, default 512, max 8000>
+     */
+    server.get('/memory/context', async (request, reply) => {
+        const query = (request.query ?? {}) as Record<string, unknown>;
+        const { maxTokens } = query as { maxTokens?: unknown };
+        const budget = maxTokens === undefined ? DEFAULT_CONTEXT_MAX_TOKENS : parseMaxTokens(maxTokens);
+        if (budget === null) {
+            return reply.status(400).send({ error: "Query param 'maxTokens' must be a positive integer <= 8000." });
+        }
+
+        const namespaceScope = parseNamespaceScopeFromQuery(query);
+        if (namespaceScope === null) {
+            return reply.status(400).send({ error: "Namespace query params invalid. Use namespaceUser/namespaceProject/namespaceTask with [a-z0-9_-], includeGlobal as boolean." });
+        }
+
+        const temporal = resolveTemporalScope(query.asOfMs, query.asOfVersion);
+        if (!temporal.ok) return reply.status(temporal.statusCode).send({ error: temporal.error });
+
+        const activeAtoms = orchestrator
+            .listAtoms()
+            .filter(entry => entry.status === 'active')
+            .filter(entry => matchesNamespaceScope(entry.atom, namespaceScope))
+            .map(entry => orchestrator.inspectAtom(entry.atom))
+            .filter(entry => {
+                if (!entry) return false;
+                if (temporal.scope.effectiveAsOfMs === null) return true;
+                return entry.createdAtMs <= temporal.scope.effectiveAsOfMs;
+            })
+            .filter((entry): entry is NonNullable<ReturnType<typeof orchestrator.inspectAtom>> => entry !== null)
+            .sort((a, b) => b.createdAtMs - a.createdAtMs);
+
+        const conflictIndex = buildFactConflictIndex(activeAtoms.map(entry => ({
+            atom: entry.atom,
+            createdAtMs: entry.createdAtMs,
+        })));
+
+        const entries: {
+            atom: string;
+            createdAtMs: number;
+            transitions: number;
+            dominantNext: string | null;
+            contradiction: {
+                hasConflict: boolean;
+                conflictKey: string | null;
+                competingClaims: FactConflictEntry[];
+            };
+        }[] = [];
+        const lines: string[] = [];
+        let estimatedTokens = 0;
+
+        for (const item of activeAtoms) {
+            const dominantNext = item.outgoingTransitions[0]?.to ?? null;
+            const contradiction = getFactConflictForAtom(item.atom, conflictIndex);
+            const line = `${item.atom} | createdAtMs=${item.createdAtMs} | transitions=${item.outgoingTransitions.length}${dominantNext ? ` | dominantNext=${dominantNext}` : ''}${contradiction.hasConflict ? ` | conflictKey=${contradiction.conflictKey}` : ''}`;
+            const lineTokens = estimateTokens(line) + 1;
+            if (estimatedTokens + lineTokens > budget) break;
+
+            entries.push({
+                atom: item.atom,
+                createdAtMs: item.createdAtMs,
+                transitions: item.outgoingTransitions.length,
+                dominantNext,
+                contradiction,
+            });
+            lines.push(line);
+            estimatedTokens += lineTokens;
+        }
+
+        return {
+            mode: 'context',
+            context: lines.join('\n'),
+            namespace: namespaceScope,
+            temporal: temporal.scope,
+            entries,
+            includedAtoms: entries.length,
+            estimatedTokens,
+            maxTokens: budget,
+            treeVersion: orchestrator.getMasterVersion(),
+            generatedAtMs: Date.now(),
+        };
+    });
+
+    /**
+     * POST /memory/bootstrap  —  Single-call session bootstrap payload.
+     * Body: { objective?: string, maxTokens?: number, limit?: number }
+     *
+     * Returns goals/constraints/preferences + top relevant memories with proof
+     * metadata and a compact context block for session initialization.
+     */
+    server.post('/memory/bootstrap', async (request, reply) => {
+        const { objective, maxTokens, limit, namespace, includeGlobal, asOfMs, asOfVersion, highImpact, evidenceThreshold } = (request.body ?? {}) as {
+            objective?: unknown;
+            maxTokens?: unknown;
+            limit?: unknown;
+            namespace?: unknown;
+            includeGlobal?: unknown;
+            asOfMs?: unknown;
+            asOfVersion?: unknown;
+            highImpact?: unknown;
+            evidenceThreshold?: unknown;
+        };
+
+        if (objective !== undefined && (typeof objective !== 'string' || objective.trim().length === 0)) {
+            return reply.status(400).send({ error: "Property 'objective' must be a non-empty string when provided." });
+        }
+
+        const budget = maxTokens === undefined ? DEFAULT_CONTEXT_MAX_TOKENS : parseMaxTokens(maxTokens);
+        if (budget === null) {
+            return reply.status(400).send({ error: "Property 'maxTokens' must be a positive integer <= 8000." });
+        }
+
+        const topLimit = parseBootstrapLimit(limit);
+        if (topLimit === null) {
+            return reply.status(400).send({ error: `Property 'limit' must be an integer between 1 and ${MAX_SEARCH_LIMIT}.` });
+        }
+
+        if (highImpact !== undefined && typeof highImpact !== 'boolean') {
+            return reply.status(400).send({ error: "Property 'highImpact' must be boolean when provided." });
+        }
+
+        const parsedEvidenceThreshold = evidenceThreshold === undefined
+            ? DEFAULT_HIGH_IMPACT_EVIDENCE_THRESHOLD
+            : parseSearchThreshold(evidenceThreshold);
+        if (parsedEvidenceThreshold === null) {
+            return reply.status(400).send({ error: "Property 'evidenceThreshold' must be a number between 0 and 1." });
+        }
+
+        const namespaceScope = parseNamespaceScope(namespace, includeGlobal, true);
+        if (namespaceScope === null) {
+            return reply.status(400).send({ error: "Property 'namespace' must be an object with optional user/project/task strings; includeGlobal must be boolean when provided." });
+        }
+
+        const temporal = resolveTemporalScope(asOfMs, asOfVersion);
+        if (!temporal.ok) return reply.status(temporal.statusCode).send({ error: temporal.error });
+
+        const objectiveText = typeof objective === 'string' ? objective.trim() : '';
+        const activeAtoms = orchestrator
+            .listAtoms()
+            .filter(entry => entry.status === 'active')
+            .filter(entry => matchesNamespaceScope(entry.atom, namespaceScope))
+            .map(entry => orchestrator.inspectAtom(entry.atom))
+            .filter(entry => {
+                if (!entry) return false;
+                if (temporal.scope.effectiveAsOfMs === null) return true;
+                return entry.createdAtMs <= temporal.scope.effectiveAsOfMs;
+            })
+            .filter((entry): entry is NonNullable<ReturnType<typeof orchestrator.inspectAtom>> => entry !== null);
+
+        const conflictIndex = buildFactConflictIndex(activeAtoms.map(entry => ({
+            atom: entry.atom,
+            createdAtMs: entry.createdAtMs,
+        })));
+
+        const ranked = activeAtoms
+            .map(entry => {
+                const parsed = parseAtomV1(entry.atom);
+                const semanticText = parsed ? `${parsed.type} ${parsed.value} ${entry.atom}` : entry.atom;
+                const relevance = objectiveText ? semanticSimilarityScore(objectiveText, semanticText) : 0;
+                return { entry, relevance };
+            })
+            .sort((a, b) => {
+                if (b.relevance !== a.relevance) return b.relevance - a.relevance;
+                if (b.entry.createdAtMs !== a.entry.createdAtMs) return b.entry.createdAtMs - a.entry.createdAtMs;
+                return a.entry.atom.localeCompare(b.entry.atom);
+            });
+
+        const top = ranked.slice(0, topLimit);
+        const withProofs: BootstrapMemoryItem[] = await Promise.all(top.map(async row => {
+            const report = await orchestrator.access(row.entry.atom);
+            const parsed = parseAtomV1(row.entry.atom);
+            return {
+                atom: row.entry.atom,
+                type: parsed?.type ?? 'other',
+                value: parsed?.value ?? row.entry.atom,
+                category: classifyBootstrapMemory(row.entry.atom),
+                relevance: Number(row.relevance.toFixed(6)),
+                createdAtMs: row.entry.createdAtMs,
+                shardId: row.entry.shard,
+                dominantNext: row.entry.outgoingTransitions[0]?.to ?? null,
+                proof: report.currentProof,
+                contradiction: getFactConflictForAtom(row.entry.atom, conflictIndex),
+            };
+        }));
+
+        const evidenceGate = applyEvidenceThresholdGate(
+            withProofs,
+            highImpact === true,
+            parsedEvidenceThreshold
+        );
+
+        const gatedMemories = evidenceGate.included;
+        const masterVersion = orchestrator.getMasterVersion();
+        const decisionEvidence = buildDecisionEvidence(
+            gatedMemories,
+            objectiveText,
+            masterVersion,
+            evidenceGate.evidenceByMemory,
+            {
+                applied: highImpact === true,
+                threshold: parsedEvidenceThreshold,
+            }
+        );
+
+        const goals = gatedMemories.filter(item => item.category === 'goal');
+        const constraints = gatedMemories.filter(item => item.category === 'constraint');
+        const preferences = gatedMemories.filter(item => item.category === 'preference');
+        const conflictingFacts = Array.from(conflictIndex.values());
+
+        const lines: string[] = [];
+        let estimatedTokens = 0;
+        for (const item of gatedMemories) {
+            const line = `${item.atom} | category=${item.category} | relevance=${item.relevance}`;
+            const lineTokens = estimateTokens(line) + 1;
+            if (estimatedTokens + lineTokens > budget) break;
+            lines.push(line);
+            estimatedTokens += lineTokens;
+        }
+
+        return {
+            mode: 'session_bootstrap',
+            objective: objectiveText || null,
+            namespace: namespaceScope,
+            temporal: temporal.scope,
+            highImpact: highImpact === true,
+            goals,
+            constraints,
+            preferences,
+            conflictingFacts,
+            topMemories: gatedMemories,
+            decisionEvidence,
+            evidenceGate: {
+                ...evidenceGate.gate,
+                excluded: evidenceGate.excluded,
+                fallbackReason: evidenceGate.gate.lowEvidenceFallback
+                    ? 'Insufficient evidence after threshold gating; memory influence excluded for high-impact output.'
+                    : null,
+            },
+            context: lines.join('\n'),
+            includedAtoms: gatedMemories.length,
+            estimatedTokens,
+            maxTokens: budget,
+            treeVersion: masterVersion,
+            generatedAtMs: Date.now(),
+        };
+    });
+
+    /**
      * GET /metrics  —  Prometheus scrape endpoint
      */
     server.get('/metrics', async (request, reply) => {
@@ -371,17 +1453,45 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
      */
     server.post('/atoms', async (request, reply) => {
         try {
-            const { atoms } = request.body as { atoms?: unknown };
+            const { atoms, reviewApproved } = request.body as { atoms?: unknown; reviewApproved?: unknown };
             if (!Array.isArray(atoms) || atoms.length === 0) {
                 return reply.status(400).send({ error: "'atoms' must be a non-empty array." });
+            }
+            if (reviewApproved !== undefined && typeof reviewApproved !== 'boolean') {
+                return reply.status(400).send({ error: "Property 'reviewApproved' must be boolean when provided." });
             }
             const normalized = atoms.map(normalizeAtomInput);
             if (normalized.some(x => x === null)) {
                 return reply.status(400).send({ error: `'atoms' invalid — ${SCHEMA_ERROR}` });
             }
+
+            const writeEvaluation = evaluateWritePolicy(
+                normalized as string[],
+                writePolicy,
+                reviewApproved === true
+            );
+
+            if (writeEvaluation.decision === 'deny') {
+                return reply.status(403).send({
+                    status: 'Denied',
+                    reason: 'Write policy blocked one or more atoms (never-store tier).',
+                    writePolicyOutcome: writeEvaluation,
+                    queued: 0,
+                });
+            }
+
+            if (writeEvaluation.decision === 'review-required') {
+                return reply.status(202).send({
+                    status: 'ReviewRequired',
+                    reason: 'Write policy requires explicit review approval before ingestion.',
+                    writePolicyOutcome: writeEvaluation,
+                    queued: 0,
+                });
+            }
+
             const admission = orchestrator.getWriteAdmission(
                 pipeline.getStats().queueDepth,
-                normalized.length
+                writeEvaluation.allowedAtoms.length
             );
             if (!admission.accept) {
                 reply.header('Retry-After', String(admission.retryAfterSec));
@@ -393,10 +1503,15 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
                         totalShardPendingWrites: admission.totalShardPendingWrites,
                         projectedPendingWrites: admission.projectedPendingWrites,
                     },
+                    writePolicyOutcome: writeEvaluation,
                 });
             }
-            const receipt = await pipeline.enqueue(normalized as string[]);
-            return { status: 'Queued', ...receipt };
+            const receipt = await pipeline.enqueue(writeEvaluation.allowedAtoms);
+            return {
+                status: 'Queued',
+                ...receipt,
+                writePolicyOutcome: writeEvaluation,
+            };
         } catch (e: any) {
             return reply.status(500).send({ error: e.message });
         }
@@ -459,9 +1574,46 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
      * GET /atoms  —  List all registered atoms across all shards.
      * Returns: { atoms: [{ atom, status: 'active' | 'tombstoned' }], treeVersion }
      */
-    server.get('/atoms', async () => {
+    server.get('/atoms', async (request, reply) => {
+        const query = (request.query ?? {}) as {
+            type?: unknown;
+            prefix?: unknown;
+            limit?: unknown;
+            offset?: unknown;
+        };
+
+        let atoms = orchestrator.listAtoms();
+
+        if (query.type !== undefined) {
+            if (!isAtomType(query.type)) {
+                return reply.status(400).send({ error: "Query param 'type' must be one of: fact,event,relation,state,other." });
+            }
+            atoms = atoms.filter(entry => parseAtomV1(entry.atom)?.type === query.type);
+        }
+
+        if (query.prefix !== undefined) {
+            if (typeof query.prefix !== 'string') {
+                return reply.status(400).send({ error: "Query param 'prefix' must be a string." });
+            }
+            const prefix = query.prefix;
+            atoms = atoms.filter(entry => entry.atom.startsWith(prefix));
+        }
+
+        const offset = parseOptionalNonNegativeInt(query.offset);
+        if (offset === null) {
+            return reply.status(400).send({ error: "Query param 'offset' must be a non-negative integer." });
+        }
+
+        const limit = parseOptionalPositiveInt(query.limit);
+        if (query.limit !== undefined && limit === null) {
+            return reply.status(400).send({ error: `Query param 'limit' must be an integer between 1 and ${MAX_ATOMS_PAGE_SIZE}.` });
+        }
+
+        if (offset > 0) atoms = atoms.slice(offset);
+        if (limit !== null) atoms = atoms.slice(0, limit);
+
         return {
-            atoms: orchestrator.listAtoms(),
+            atoms,
             treeVersion: orchestrator.getMasterVersion(),
         };
     });
@@ -473,14 +1625,37 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
      */
     server.get('/atoms/:atom', async (request, reply) => {
         const { atom } = request.params as { atom: string };
+        const query = (request.query ?? {}) as Record<string, unknown>;
         if (!isAtomV1(atom)) {
             return reply.status(400).send({ error: `Path param 'atom' invalid — ${SCHEMA_ERROR}` });
         }
+
+        const temporal = resolveTemporalScope(query.asOfMs, query.asOfVersion);
+        if (!temporal.ok) return reply.status(temporal.statusCode).send({ error: temporal.error });
+
         const record = orchestrator.inspectAtom(atom);
         if (!record) {
             return reply.status(404).send({ error: `Atom '${atom}' not found in any shard.` });
         }
-        return record;
+        if (temporal.scope.effectiveAsOfMs !== null && record.createdAtMs > temporal.scope.effectiveAsOfMs) {
+            return reply.status(404).send({ error: `Atom '${atom}' did not exist at requested temporal scope.` });
+        }
+
+        const activeAtoms = orchestrator
+            .listAtoms()
+            .filter(entry => entry.status === 'active')
+            .map(entry => orchestrator.inspectAtom(entry.atom))
+            .filter((entry): entry is NonNullable<ReturnType<typeof orchestrator.inspectAtom>> => entry !== null);
+        const conflictIndex = buildFactConflictIndex(activeAtoms.map(entry => ({
+            atom: entry.atom,
+            createdAtMs: entry.createdAtMs,
+        })));
+
+        return {
+            ...record,
+            contradiction: getFactConflictForAtom(record.atom, conflictIndex),
+            temporal: temporal.scope,
+        };
     });
 
     return { server, orchestrator, pipeline };

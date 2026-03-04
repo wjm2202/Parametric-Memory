@@ -120,6 +120,27 @@ describe('MerkleSnapshot', () => {
         expect(() => snap.getProof(100)).toThrow(RangeError);
     });
 
+    it('tracks reference counts via acquireRef()/releaseRef()', () => {
+        const snap = MerkleSnapshot.fromData(data);
+        expect(snap.refCount).toBe(0);
+
+        snap.acquireRef();
+        snap.acquireRef();
+        expect(snap.refCount).toBe(2);
+
+        expect(snap.releaseRef()).toBe(1);
+        expect(snap.releaseRef()).toBe(0);
+        expect(snap.refCount).toBe(0);
+    });
+
+    it('marks snapshots retired and prevents refcount underflow', () => {
+        const snap = MerkleSnapshot.fromData(data);
+        expect(snap.isRetired).toBe(false);
+        snap.markRetired();
+        expect(snap.isRetired).toBe(true);
+        expect(() => snap.releaseRef()).toThrow(/underflow/i);
+    });
+
     // Cross-validate: snapshot proofs should be verifiable by the old MerkleKernel
     it('produces proofs compatible with MerkleKernel.verifyProof', () => {
         const snap = MerkleSnapshot.fromData(data);

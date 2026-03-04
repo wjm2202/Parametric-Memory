@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { createServer, Server } from 'http';
+import { createServer, IncomingMessage, Server, ServerResponse } from 'http';
 import { waitForApiReady } from '../../tools/harness/api_ready';
 
 const servers: Server[] = [];
 
 async function startServer(
-    handler: Parameters<typeof createServer>[0]
+    handler: (req: IncomingMessage, res: ServerResponse) => void
 ): Promise<{ server: Server; baseUrl: string }> {
     const server = createServer(handler);
     servers.push(server);

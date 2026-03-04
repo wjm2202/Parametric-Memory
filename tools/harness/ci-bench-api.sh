@@ -30,6 +30,7 @@ while (( SECONDS < deadline )); do
         if [[ "$status" == "healthy" ]]; then
             echo "[ci-bench] service is healthy"
             npm run bench:run:api
+            npm run bench:slo:check
             echo "[ci-bench] benchmark completed"
             exit 0
         fi

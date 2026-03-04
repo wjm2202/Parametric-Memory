@@ -28,6 +28,10 @@ export class MerkleSnapshot {
      * Built once on first getProof() call, then reused.
      */
     private _nodes: Buffer[] | null = null;
+    /** Number of in-flight readers currently holding this snapshot. */
+    private _refCount: number = 0;
+    /** Whether this snapshot has been superseded by a newer active snapshot. */
+    private _retired: boolean = false;
 
     constructor(leaves: Buffer[], version: number) {
         // Defensive freeze: shallow copy so caller can't mutate our array
@@ -59,6 +63,30 @@ export class MerkleSnapshot {
 
     get leafCount(): number {
         return this.leaves.length;
+    }
+
+    get refCount(): number {
+        return this._refCount;
+    }
+
+    get isRetired(): boolean {
+        return this._retired;
+    }
+
+    acquireRef(): void {
+        this._refCount++;
+    }
+
+    releaseRef(): number {
+        if (this._refCount <= 0) {
+            throw new Error(`Snapshot v${this.version} refcount underflow.`);
+        }
+        this._refCount--;
+        return this._refCount;
+    }
+
+    markRetired(): void {
+        this._retired = true;
     }
 
     /**

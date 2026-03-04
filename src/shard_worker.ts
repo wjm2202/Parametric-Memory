@@ -77,6 +77,7 @@ export type ShardBatchAccessItemResult =
  *   w:<fromHash>:<toHash>  — Markov transition weight
  *   ai:<paddedIdx>         — All atoms (seeds + dynamically added)
  *   th:<hash>              — Tombstone marker
+ *   ts:<paddedIdx>         — Atom creation timestamp (Unix ms, stored as string)
  */
 export class ShardWorker {
     // ─── Atom state ─────────────────────────────────────────────────────
@@ -85,9 +86,11 @@ export class ShardWorker {
     private atomHashes: Map<DataAtom, Hash>;
     private dataIndex: Map<DataAtom, number>;
     private hashToIndex: Map<Hash, number> = new Map();
+    private atomCreatedAtMs: number[];
 
     // ─── Snapshot + concurrency ─────────────────────────────────────────
     private activeSnapshot: MerkleSnapshot;
+    private retiredSnapshots: Map<number, MerkleSnapshot> = new Map();
     private pending: PendingWrites;
     private epoch: EpochManager = new EpochManager();
 
@@ -96,6 +99,8 @@ export class ShardWorker {
     private csrMatrix: CsrTransitionMatrix = CsrTransitionMatrix.empty(0);
     private csrDirty = false;
     private policy: TransitionPolicy = TransitionPolicy.default();
+    private transitionUpdatedAt: Map<number, Map<Hash, number>> = new Map();
+    private readonly confidenceHalfLifeMs: number;
 
     // ─── Tombstone tracking ─────────────────────────────────────────────
     private tombstoned: Set<number> = new Set();
@@ -121,6 +126,8 @@ export class ShardWorker {
             commitIntervalMs?: number;
             /** Numeric shard id used as a Prometheus label. */
             shardId?: number;
+            /** Half-life for confidence decay in milliseconds (<=0 disables decay). */
+            confidenceHalfLifeMs?: number;
         }
     ) {
         this.dbPath = dbPath;
@@ -131,6 +138,7 @@ export class ShardWorker {
             this.atomHashes.set(atom, createHash('sha256').update(atom).digest().toString('hex'));
         }
         this.dataIndex = new Map(dataBlocks.map((d, i) => [d, i]));
+        this.atomCreatedAtMs = dataBlocks.map(() => Date.now());
 
         this.activeSnapshot = MerkleSnapshot.fromData(dataBlocks, 0);
         this.pending = new PendingWrites(0);
@@ -159,6 +167,12 @@ export class ShardWorker {
         this._shardId = options?.shardId !== undefined
             ? String(options.shardId)
             : dbPath.replace(/.*[/\\]/, ''); // fallback: last path segment
+
+        const envHalfLife = process.env.MMPM_CONFIDENCE_HALF_LIFE_MS
+            ? parseInt(process.env.MMPM_CONFIDENCE_HALF_LIFE_MS, 10)
+            : undefined;
+        const configuredHalfLife = options?.confidenceHalfLifeMs ?? envHalfLife ?? (7 * 24 * 60 * 60 * 1000);
+        this.confidenceHalfLifeMs = Number.isFinite(configuredHalfLife) ? configuredHalfLife : 0;
     }
 
     /**
@@ -184,6 +198,7 @@ export class ShardWorker {
     async init() {
         try {
             await this.db.open(); await this.wal.open();
+            this.retiredSnapshots.clear();
 
             // ── 1. Persist seeds to LevelDB ─────────────────────────────
             if (this.data.length > 0) {
@@ -199,6 +214,7 @@ export class ShardWorker {
             this.atomTypes = [];
             this.atomHashes = new Map();
             this.dataIndex = new Map();
+            this.atomCreatedAtMs = [];
             for await (const [, value] of this.db.iterator({ gte: 'ai:', lte: 'ai:~' })) {
                 const atom = value as string;
                 const parsed = parseAtomV1(atom);
@@ -211,6 +227,29 @@ export class ShardWorker {
                 this.data.push(atom);
                 this.atomTypes.push(parsed.type);
                 this.atomHashes.set(atom, this.hashAtom(atom));
+            }
+
+            // Ensure every atom has a durable creation timestamp.
+            // Missing/invalid ts: values are backfilled once and persisted.
+            for (let i = 0; i < this.data.length; i++) {
+                const tsKey = `ts:${String(i).padStart(10, '0')}`;
+                let createdAtMs: number;
+                try {
+                    const raw = await this.db.get(tsKey);
+                    if (raw === undefined) {
+                        throw new Error(`Missing timestamp value for key ${tsKey}`);
+                    }
+                    const parsed = parseInt(raw, 10);
+                    if (!Number.isFinite(parsed) || parsed <= 0) {
+                        throw new Error(`Invalid timestamp value for key ${tsKey}`);
+                    }
+                    createdAtMs = parsed;
+                } catch {
+                    createdAtMs = Date.now();
+                    await this.db.put(tsKey, String(createdAtMs))
+                        .catch((err: unknown) => logger.error({ err }, 'Timestamp backfill persist error'));
+                }
+                this.atomCreatedAtMs[i] = createdAtMs;
             }
 
             // ── 3. Collect tombstone hashes ──────────────────────────────
@@ -244,9 +283,14 @@ export class ShardWorker {
                     this.atomTypes.push(parsed.type);
                     this.atomHashes.set(entry.data, this.hashAtom(entry.data));
                     this.dataIndex.set(entry.data, idx);
+                    const createdAtMs = Number.isFinite(entry.ts) && entry.ts > 0 ? entry.ts : Date.now();
+                    this.atomCreatedAtMs[idx] = createdAtMs;
                     await this.db
                         .put(`ai:${String(idx).padStart(10, '0')}`, entry.data)
                         .catch((err: unknown) => logger.error({ err }, 'WAL recovery db.put error'));
+                    await this.db
+                        .put(`ts:${String(idx).padStart(10, '0')}`, String(createdAtMs))
+                        .catch((err: unknown) => logger.error({ err }, 'WAL recovery timestamp persist error'));
                 } else if (entry.op === 'TOMBSTONE' && entry.index !== undefined) {
                     walTombstoneIndices.push(entry.index);
                 }
@@ -289,6 +333,22 @@ export class ShardWorker {
                 if (fromIdx === undefined) continue;
                 if (!this.transitions.has(fromIdx)) this.transitions.set(fromIdx, new Map());
                 this.transitions.get(fromIdx)!.set(toHash, weight);
+
+                let updatedAtMs = Date.now();
+                try {
+                    const rawTs = await this.db.get(`wu:${fromHash}:${toHash}`);
+                    if (rawTs !== undefined) {
+                        const parsedTs = parseInt(rawTs, 10);
+                        if (Number.isFinite(parsedTs) && parsedTs > 0) {
+                            updatedAtMs = parsedTs;
+                        }
+                    }
+                } catch {
+                    // Legacy weight entries may not have timestamp metadata yet.
+                }
+
+                if (!this.transitionUpdatedAt.has(fromIdx)) this.transitionUpdatedAt.set(fromIdx, new Map());
+                this.transitionUpdatedAt.get(fromIdx)!.set(toHash, updatedAtMs);
             }
 
             // Build CSR projection once on startup so read path is warm.
@@ -347,10 +407,12 @@ export class ShardWorker {
         try {
             const hasTombstones = this.pending.getOps().some(op => op.kind === 'tombstone');
             const { snapshot: newSnapshot, addedIndices } = this.pending.apply(this.activeSnapshot);
+            const previousSnapshot = this.activeSnapshot;
             for (const idx of addedIndices) {
                 this.hashToIndex.set(newSnapshot.getLeafHash(idx), idx);
             }
             this.activeSnapshot = newSnapshot;
+            this.retireSnapshot(previousSnapshot);
             if (hasTombstones || this.csrDirty) {
                 const csrBuildStart = performance.now();
                 this.rebuildCsrMatrix();
@@ -379,6 +441,20 @@ export class ShardWorker {
     get pendingCount(): number { return this.pending.size; }
     /** Expose epoch commit/reader state for cluster health reporting. */
     getEpochStatus() { return this.epoch.getStatus(); }
+    getSnapshotRefStatus(): {
+        activeVersion: number;
+        activeRefCount: number;
+        retired: Array<{ version: number; refCount: number }>;
+    } {
+        this.collectRetiredSnapshots();
+        return {
+            activeVersion: this.activeSnapshot.version,
+            activeRefCount: this.activeSnapshot.refCount,
+            retired: Array.from(this.retiredSnapshots.values())
+                .map(s => ({ version: s.version, refCount: s.refCount }))
+                .sort((a, b) => a.version - b.version),
+        };
+    }
 
     // ─── Dynamic atom management ────────────────────────────────────────
 
@@ -395,6 +471,7 @@ export class ShardWorker {
             if (this.dataIndex.has(atom)) continue;
 
             const idx = this.data.length;
+            const createdAtMs = Date.now();
 
             // 1. WAL first — fsync ensures we can recover from here
             await this.wal.writeAdd(atom, idx);
@@ -404,6 +481,7 @@ export class ShardWorker {
             this.atomTypes.push(this.getAtomTypeOrThrow(atom));
             this.atomHashes.set(atom, this.hashAtom(atom));
             this.dataIndex.set(atom, idx);
+            this.atomCreatedAtMs[idx] = createdAtMs;
 
             // 3. Queue for snapshot commit
             this.pending.addLeaf(atom);
@@ -413,6 +491,9 @@ export class ShardWorker {
             await this.db
                 .put(`ai:${String(idx).padStart(10, '0')}`, atom)
                 .catch((err: unknown) => logger.error({ err }, 'Shard persistence error (addAtoms)'));
+            await this.db
+                .put(`ts:${String(idx).padStart(10, '0')}`, String(createdAtMs))
+                .catch((err: unknown) => logger.error({ err }, 'Shard persistence error (addAtoms ts)'));
         }
 
         if (this.pending.size >= this.commitThreshold && !this.epoch.isCommitting) {
@@ -469,6 +550,7 @@ export class ShardWorker {
         status: 'active' | 'tombstoned';
         hash: Hash;
         committed: boolean;
+        createdAtMs: number;
     } | null {
         const idx = this.dataIndex.get(item);
         if (idx === undefined) return null;
@@ -478,6 +560,7 @@ export class ShardWorker {
             status: this.tombstoned.has(idx) ? 'tombstoned' : 'active',
             hash: this.hashAtom(item),
             committed: idx < this.activeSnapshot.leafCount,
+            createdAtMs: this.atomCreatedAtMs[idx] ?? 0,
         };
     }
 
@@ -529,12 +612,13 @@ export class ShardWorker {
         const snapshot = this.activeSnapshot;
         const incomingWeightByIndex = new Map<number, number>();
 
-        for (const targets of this.transitions.values()) {
+        for (const [fromIdx, targets] of this.transitions) {
             for (const [toHash, weight] of targets) {
                 const toIdx = this.hashToIndex.get(toHash);
                 if (toIdx === undefined) continue;
                 if (!this.isCandidateIndexReadable(snapshot, toIdx)) continue;
-                incomingWeightByIndex.set(toIdx, (incomingWeightByIndex.get(toIdx) ?? 0) + weight);
+                const effective = this.getEffectiveTransitionWeight(fromIdx, toHash, weight);
+                incomingWeightByIndex.set(toIdx, (incomingWeightByIndex.get(toIdx) ?? 0) + effective);
             }
         }
 
@@ -559,13 +643,20 @@ export class ShardWorker {
         const fromIdx = this.hashToIndex.get(from);
         if (fromIdx === undefined) return;
         if (!this.transitions.has(fromIdx)) this.transitions.set(fromIdx, new Map());
+        if (!this.transitionUpdatedAt.has(fromIdx)) this.transitionUpdatedAt.set(fromIdx, new Map());
         const targets = this.transitions.get(fromIdx)!;
+        const targetsUpdatedAt = this.transitionUpdatedAt.get(fromIdx)!;
         const newWeight = (targets.get(to) || 0) + 1;
+        const updatedAtMs = Date.now();
         targets.set(to, newWeight);
+        targetsUpdatedAt.set(to, updatedAtMs);
         this.csrDirty = true;
         await this.db
             .put(`w:${from}:${to}`, newWeight.toString())
             .catch((err: unknown) => logger.error({ err }, 'Shard persistence error'));
+        await this.db
+            .put(`wu:${from}:${to}`, updatedAtMs.toString())
+            .catch((err: unknown) => logger.error({ err }, 'Shard confidence timestamp persistence error'));
     }
 
     async access(item: DataAtom): Promise<ShardAccessResult> {
@@ -574,8 +665,9 @@ export class ShardWorker {
         if (this.tombstoned.has(idx)) throw new Error(`Atom '${item}' has been tombstoned.`);
 
         const ticket: ReadTicket = this.epoch.beginRead();
+        const snapshot = this.activeSnapshot;
+        this.acquireSnapshotReference(snapshot);
         try {
-            const snapshot = this.activeSnapshot;
             if (idx >= snapshot.leafCount) {
                 throw new Error(
                     `Atom '${item}' is pending commit (index ${idx}, snapshot has ${snapshot.leafCount} leaves). Call commit() first.`
@@ -584,6 +676,7 @@ export class ShardWorker {
 
             return this.buildAccessResult(snapshot, idx);
         } finally {
+            this.releaseSnapshotReference(snapshot);
             this.epoch.endRead(ticket);
         }
     }
@@ -592,8 +685,9 @@ export class ShardWorker {
         if (items.length === 0) return [];
 
         const ticket: ReadTicket = this.epoch.beginRead();
+        const snapshot = this.activeSnapshot;
+        this.acquireSnapshotReference(snapshot);
         try {
-            const snapshot = this.activeSnapshot;
             const results: ShardBatchAccessItemResult[] = [];
 
             for (const item of items) {
@@ -635,6 +729,7 @@ export class ShardWorker {
 
             return results;
         } finally {
+            this.releaseSnapshotReference(snapshot);
             this.epoch.endRead(ticket);
         }
     }
@@ -648,7 +743,9 @@ export class ShardWorker {
         let policyFiltered = false;
 
         if (this.policy.isOpenPolicy()) {
-            if (this.csrMatrix.atomCount === 0) {
+            if (this.isConfidenceDecayEnabled()) {
+                predictedHash = this.getPredictedHashFromMap(idx);
+            } else if (this.csrMatrix.atomCount === 0) {
                 predictedHash = this.getPredictedHashFromMap(idx);
             } else {
                 const topIdx = this.csrMatrix.getTopPrediction(idx);
@@ -694,7 +791,7 @@ export class ShardWorker {
         let firstCandidatePos = 0;
         let sawCandidate = false;
 
-        if (this.csrMatrix.atomCount > 0) {
+        if (!this.isConfidenceDecayEnabled() && this.csrMatrix.atomCount > 0) {
             for (const edge of this.csrMatrix.getEdges(fromIdx)) {
                 const candidateIdx = edge.toIdx;
                 if (!this.isCandidateIndexReadable(snapshot, candidateIdx)) continue;
@@ -724,11 +821,13 @@ export class ShardWorker {
             if (!this.isCandidateIndexReadable(snapshot, candidateIdx)) continue;
             hasReadableCandidate = true;
 
+            const effectiveWeight = this.getEffectiveTransitionWeight(fromIdx, candidateHash, weight);
+
             if (
-                weight > bestOverallWeight ||
-                (weight === bestOverallWeight && (bestOverallIdx < 0 || candidateIdx < bestOverallIdx))
+                effectiveWeight > bestOverallWeight ||
+                (effectiveWeight === bestOverallWeight && (bestOverallIdx < 0 || candidateIdx < bestOverallIdx))
             ) {
-                bestOverallWeight = weight;
+                bestOverallWeight = effectiveWeight;
                 bestOverallIdx = candidateIdx;
             }
 
@@ -736,10 +835,10 @@ export class ShardWorker {
             if (!toType || !this.policy.isAllowed(fromType, toType)) continue;
 
             if (
-                weight > bestAllowedWeight ||
-                (weight === bestAllowedWeight && (bestAllowedIdx < 0 || candidateIdx < bestAllowedIdx))
+                effectiveWeight > bestAllowedWeight ||
+                (effectiveWeight === bestAllowedWeight && (bestAllowedIdx < 0 || candidateIdx < bestAllowedIdx))
             ) {
-                bestAllowedWeight = weight;
+                bestAllowedWeight = effectiveWeight;
                 bestAllowedIdx = candidateIdx;
             }
         }
@@ -762,8 +861,9 @@ export class ShardWorker {
         for (const [candidateHash, weight] of targets) {
             const toIdx = this.hashToIndex.get(candidateHash);
             if (toIdx !== undefined && this.tombstoned.has(toIdx)) continue;
-            if (weight > bestWeight) {
-                bestWeight = weight;
+            const effectiveWeight = this.getEffectiveTransitionWeight(fromIdx, candidateHash, weight);
+            if (effectiveWeight > bestWeight) {
+                bestWeight = effectiveWeight;
                 bestHash = candidateHash;
             }
         }
@@ -808,19 +908,40 @@ export class ShardWorker {
         return { trainedAtoms: this.transitions.size, totalEdges };
     }
 
-    getWeights(item: DataAtom): { to: DataAtom | null; toHash: Hash; weight: number }[] | null {
+    getWeights(item: DataAtom): { to: DataAtom | null; toHash: Hash; weight: number; effectiveWeight: number; lastUpdatedMs: number | null }[] | null {
         const idx = this.dataIndex.get(item);
         if (idx === undefined) return null;
         const transitions = this.transitions.get(idx);
         if (!transitions || transitions.size === 0) return [];
-        const result: { to: DataAtom | null; toHash: Hash; weight: number }[] = [];
+        const result: { to: DataAtom | null; toHash: Hash; weight: number; effectiveWeight: number; lastUpdatedMs: number | null }[] = [];
         for (const [toHash, weight] of transitions) {
             const toIdx = this.hashToIndex.get(toHash);
             if (toIdx !== undefined && this.tombstoned.has(toIdx)) continue;
-            result.push({ to: toIdx !== undefined ? this.data[toIdx] : null, toHash, weight });
+            const lastUpdatedMs = this.transitionUpdatedAt.get(idx)?.get(toHash) ?? null;
+            result.push({
+                to: toIdx !== undefined ? this.data[toIdx] : null,
+                toHash,
+                weight,
+                effectiveWeight: this.getEffectiveTransitionWeight(idx, toHash, weight),
+                lastUpdatedMs,
+            });
         }
-        result.sort((a, b) => b.weight - a.weight);
+        result.sort((a, b) => b.effectiveWeight - a.effectiveWeight || b.weight - a.weight);
         return result;
+    }
+
+    private isConfidenceDecayEnabled(): boolean {
+        return this.confidenceHalfLifeMs > 0;
+    }
+
+    private getEffectiveTransitionWeight(fromIdx: number, toHash: Hash, rawWeight: number): number {
+        if (!this.isConfidenceDecayEnabled()) return rawWeight;
+        const updatedAt = this.transitionUpdatedAt.get(fromIdx)?.get(toHash);
+        if (updatedAt === undefined) return rawWeight;
+
+        const elapsedMs = Math.max(0, Date.now() - updatedAt);
+        const decayFactor = Math.pow(0.5, elapsedMs / this.confidenceHalfLifeMs);
+        return rawWeight * decayFactor;
     }
 
     async close(): Promise<void> {
@@ -830,6 +951,35 @@ export class ShardWorker {
         }
         await this.wal.close();
         await this.db.close();
+        this.collectRetiredSnapshots();
+    }
+
+    private acquireSnapshotReference(snapshot: MerkleSnapshot): void {
+        snapshot.acquireRef();
+    }
+
+    private releaseSnapshotReference(snapshot: MerkleSnapshot): void {
+        const remaining = snapshot.releaseRef();
+        if (remaining === 0 && snapshot.isRetired) {
+            this.retiredSnapshots.delete(snapshot.version);
+        }
+    }
+
+    private retireSnapshot(snapshot: MerkleSnapshot): void {
+        snapshot.markRetired();
+        if (snapshot.refCount > 0) {
+            this.retiredSnapshots.set(snapshot.version, snapshot);
+        } else {
+            this.retiredSnapshots.delete(snapshot.version);
+        }
+    }
+
+    private collectRetiredSnapshots(): void {
+        for (const [version, snapshot] of this.retiredSnapshots) {
+            if (snapshot.refCount === 0) {
+                this.retiredSnapshots.delete(version);
+            }
+        }
     }
 
     private getAtomTypeOrThrow(atom: DataAtom): AtomType {

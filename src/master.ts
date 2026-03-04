@@ -11,6 +11,7 @@ export class MasterKernel {
      * Capped to the last HISTORY_WINDOW versions to bound memory usage.
      */
     private readonly rootHistory: Map<number, Hash> = new Map();
+    private readonly versionTimestampHistory: Map<number, number> = new Map();
     private readonly HISTORY_WINDOW = 100;
     /**
      * Records the snapshot version that produced each shard's current root.
@@ -30,6 +31,13 @@ export class MasterKernel {
      */
     getRootAtVersion(v: number): Hash | undefined {
         return this.rootHistory.get(v);
+    }
+
+    /**
+     * Lookup commit timestamp (Unix ms) associated with a master version.
+     */
+    getVersionTimestamp(v: number): number | undefined {
+        return this.versionTimestampHistory.get(v);
     }
 
     /**
@@ -58,13 +66,7 @@ export class MasterKernel {
             this.shardSnapshotVersions.set(shardIdx, snapshotVersion);
         }
         this.shardRoots[shardIdx] = newRoot;
-        // Re-build the master tree whenever a child shard changes its root
-        this.kernel = new MerkleKernel(this.shardRoots);
-        this._version++;
-        this.rootHistory.set(this._version, this.kernel.root);
-        // Evict the oldest entry once the window is exceeded
-        const evictVersion = this._version - this.HISTORY_WINDOW;
-        if (evictVersion > 0) this.rootHistory.delete(evictVersion);
+        this.recordVersionAfterRootChange();
         return true;
     }
 
@@ -101,11 +103,7 @@ export class MasterKernel {
             anyApplied = true;
         }
         if (!anyApplied) return;
-        this.kernel = new MerkleKernel(this.shardRoots);
-        this._version++;
-        this.rootHistory.set(this._version, this.kernel.root);
-        const evictVersion = this._version - this.HISTORY_WINDOW;
-        if (evictVersion > 0) this.rootHistory.delete(evictVersion);
+        this.recordVersionAfterRootChange();
     }
 
     get masterRoot(): Hash {
@@ -114,5 +112,20 @@ export class MasterKernel {
 
     getShardProof(shardIdx: number): MerkleProof | undefined {
         return this.kernel?.getProof(shardIdx);
+    }
+
+    private recordVersionAfterRootChange(): void {
+        // Re-build the master tree whenever child shard roots change.
+        this.kernel = new MerkleKernel(this.shardRoots);
+        this._version++;
+        this.rootHistory.set(this._version, this.kernel.root);
+        this.versionTimestampHistory.set(this._version, Date.now());
+
+        // Evict the oldest entries once the history window is exceeded.
+        const evictVersion = this._version - this.HISTORY_WINDOW;
+        if (evictVersion > 0) {
+            this.rootHistory.delete(evictVersion);
+            this.versionTimestampHistory.delete(evictVersion);
+        }
     }
 }

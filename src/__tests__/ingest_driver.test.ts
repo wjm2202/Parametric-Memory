@@ -7,6 +7,7 @@ import { buildApp } from '../server';
 import { generateStructuredDataset } from '../../tools/harness/generator';
 import { runIngestionDriver } from '../../tools/harness/ingest_driver';
 const atom = (value: string) => `v1.other.${value}`;
+const API_KEY = 'test-ingest-driver-key';
 
 const dirs: string[] = [];
 
@@ -95,7 +96,7 @@ describe('Harness ingestion driver (Story 9.2)', () => {
 
         const port = 3411;
         const dbPath = tempDb('api-stream');
-        const app = buildApp({ data: [atom('Boot_A'), atom('Boot_B')], dbBasePath: dbPath, numShards: 4 });
+        const app = buildApp({ data: [atom('Boot_A'), atom('Boot_B')], dbBasePath: dbPath, numShards: 4, apiKey: API_KEY });
         await app.orchestrator.init();
         app.pipeline.start();
         await app.server.listen({ port, host: '127.0.0.1' });
@@ -105,6 +106,7 @@ describe('Harness ingestion driver (Story 9.2)', () => {
                 mode: 'streaming',
                 useApi: true,
                 baseUrl: `http://127.0.0.1:${port}`,
+                apiKey: API_KEY,
                 chunkSize: 120,
                 atomsPerSecond: 5000,
                 maxAccessProbes: 5,
@@ -136,7 +138,7 @@ describe('Harness ingestion driver (Story 9.2)', () => {
 
         const port = 3413;
         const dbPath = tempDb('api-delayed-ready');
-        const app = buildApp({ data: [atom('Boot_X'), atom('Boot_Y')], dbBasePath: dbPath, numShards: 4 });
+        const app = buildApp({ data: [atom('Boot_X'), atom('Boot_Y')], dbBasePath: dbPath, numShards: 4, apiKey: API_KEY });
         await app.server.listen({ port, host: '127.0.0.1' });
 
         const delayedInit = setTimeout(async () => {
@@ -149,6 +151,7 @@ describe('Harness ingestion driver (Story 9.2)', () => {
                 mode: 'streaming',
                 useApi: true,
                 baseUrl: `http://127.0.0.1:${port}`,
+                apiKey: API_KEY,
                 chunkSize: 80,
                 atomsPerSecond: 4000,
                 maxAccessProbes: 0,

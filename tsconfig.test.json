@@ -1,13 +1,20 @@
 {
     "extends": "./tsconfig.json",
     "compilerOptions": {
-        "rootDir": "./src",
+        "rootDir": ".",
+        "noEmit": true,
         "types": [
-            "node"
-        ]
+            "node",
+            "vitest/globals"
+        ],
+        "composite": false
     },
     "include": [
-        "src/**/*"
+        "src/**/*",
+        "tools/**/*"
     ],
-    "exclude": []
+    "exclude": [
+        "dist",
+        "node_modules"
+    ]
 }
