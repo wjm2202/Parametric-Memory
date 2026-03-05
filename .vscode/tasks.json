@@ -1,0 +1,129 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build (tsc)",
+      "type": "npm",
+      "script": "build",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": [
+        "$tsc"
+      ],
+      "detail": "Compile TypeScript → dist/"
+    },
+    {
+      "label": "Typecheck only (no emit)",
+      "type": "npm",
+      "script": "typecheck",
+      "problemMatcher": [
+        "$tsc"
+      ],
+      "detail": "tsc --noEmit (faster than full build)"
+    },
+    {
+      "label": "Typecheck all (src + tests)",
+      "type": "npm",
+      "script": "typecheck:all",
+      "problemMatcher": [
+        "$tsc"
+      ],
+      "detail": "Run before declaring a sprint complete"
+    },
+    {
+      "label": "Test: all",
+      "type": "npm",
+      "script": "test",
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "problemMatcher": [],
+      "detail": "vitest run (533 tests)"
+    },
+    {
+      "label": "Test: watch mode",
+      "type": "npm",
+      "script": "test:watch",
+      "problemMatcher": [],
+      "detail": "vitest --watch"
+    },
+    {
+      "label": "Test: smoke (API)",
+      "type": "npm",
+      "script": "test:smoke",
+      "problemMatcher": [],
+      "detail": "Quick smoke test against running server"
+    },
+    {
+      "label": "Start server (dev / ts-node)",
+      "type": "npm",
+      "script": "dev",
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "mmpm-server",
+        "pattern": {
+          "regexp": ".",
+          "file": 1,
+          "line": 2,
+          "message": 3
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "Starting",
+          "endsPattern": "ready"
+        }
+      },
+      "detail": "ts-node src/server.ts (live reload)"
+    },
+    {
+      "label": "Start server (dist / production)",
+      "type": "npm",
+      "script": "start",
+      "isBackground": true,
+      "problemMatcher": [],
+      "detail": "node dist/server.js — requires a build first"
+    },
+    {
+      "label": "Start MCP server (safe / read-only)",
+      "type": "npm",
+      "script": "mcp:serve",
+      "isBackground": true,
+      "problemMatcher": [],
+      "detail": "Expose MMPM tools to Claude — read-only"
+    },
+    {
+      "label": "Start MCP server (unsafe / mutations enabled)",
+      "type": "npm",
+      "script": "mcp:serve:unsafe",
+      "isBackground": true,
+      "problemMatcher": [],
+      "detail": "Expose MMPM tools to Claude — writes enabled"
+    },
+    {
+      "label": "Benchmark: smoke preset",
+      "type": "npm",
+      "script": "bench:run",
+      "problemMatcher": [],
+      "detail": "Quick benchmark → tools/harness/results/latest.json"
+    },
+    {
+      "label": "Benchmark: SLO gate check",
+      "type": "npm",
+      "script": "bench:slo:check",
+      "problemMatcher": [],
+      "detail": "Check if latest benchmark results pass SLO thresholds"
+    },
+    {
+      "label": "Sprint complete gate (typecheck all)",
+      "type": "npm",
+      "script": "sprint:complete",
+      "problemMatcher": [
+        "$tsc"
+      ],
+      "detail": "Must pass before marking any sprint complete"
+    }
+  ]
+}

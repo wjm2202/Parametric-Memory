@@ -1,1260 +1,1966 @@
 {
-    "__inputs": [
-        {
-            "name": "DS_PROMETHEUS",
-            "label": "Prometheus",
-            "description": "",
-            "type": "datasource",
-            "pluginId": "prometheus",
-            "pluginName": "Prometheus"
-        }
-    ],
-    "__requires": [
-        {
-            "type": "grafana",
-            "id": "grafana",
-            "name": "Grafana",
-            "version": "9.0.0"
-        },
-        {
-            "type": "datasource",
-            "id": "prometheus",
-            "name": "Prometheus",
-            "version": "1.0.0"
-        },
-        {
-            "type": "panel",
-            "id": "stat",
-            "name": "Stat",
-            "version": ""
-        },
-        {
-            "type": "panel",
-            "id": "timeseries",
-            "name": "Time series",
-            "version": ""
-        }
-    ],
-    "annotations": {
-        "list": []
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "__requires": [
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "9.0.0"
     },
-    "editable": true,
-    "fiscalYearStartMonth": 0,
-    "graphTooltip": 1,
-    "id": null,
-    "links": [],
-    "panels": [
+    {
+      "type": "datasource",
+      "id": "prometheus",
+      "name": "Prometheus",
+      "version": "1.0.0"
+    },
+    {
+      "type": "panel",
+      "id": "stat",
+      "name": "Stat",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "timeseries",
+      "name": "Time series",
+      "version": ""
+    }
+  ],
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Access Rate",
+      "description": "Requests per second to POST /access",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
         {
-            "id": 1,
-            "title": "Access Rate",
-            "description": "Requests per second to POST /access",
-            "type": "stat",
-            "gridPos": {
-                "h": 4,
-                "w": 8,
-                "x": 0,
-                "y": 0
-            },
-            "datasource": {
-                "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
-            },
-            "targets": [
-                {
-                    "refId": "A",
-                    "expr": "sum(rate(mmpm_access_total[1m]))",
-                    "legendFormat": "req/s"
-                }
-            ],
-            "fieldConfig": {
-                "defaults": {
-                    "unit": "reqps",
-                    "color": {
-                        "mode": "thresholds"
-                    },
-                    "thresholds": {
-                        "mode": "absolute",
-                        "steps": [
-                            {
-                                "color": "green",
-                                "value": null
-                            },
-                            {
-                                "color": "yellow",
-                                "value": 100
-                            },
-                            {
-                                "color": "red",
-                                "value": 500
-                            }
-                        ]
-                    }
-                },
-                "overrides": []
-            },
-            "options": {
-                "reduceOptions": {
-                    "calcs": [
-                        "lastNotNull"
-                    ]
-                },
-                "orientation": "auto",
-                "textMode": "auto",
-                "colorMode": "background",
-                "graphMode": "area"
-            }
-        },
-        {
-            "id": 2,
-            "title": "Prediction Hit Rate",
-            "description": "% of /access calls where Markov predicted the next atom",
-            "type": "stat",
-            "gridPos": {
-                "h": 4,
-                "w": 8,
-                "x": 8,
-                "y": 0
-            },
-            "datasource": {
-                "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
-            },
-            "targets": [
-                {
-                    "refId": "A",
-                    "expr": "100 * sum(rate(mmpm_access_total{result=\"hit\"}[5m])) / sum(rate(mmpm_access_total[5m]))",
-                    "legendFormat": "hit %"
-                }
-            ],
-            "fieldConfig": {
-                "defaults": {
-                    "unit": "percent",
-                    "min": 0,
-                    "max": 100,
-                    "color": {
-                        "mode": "thresholds"
-                    },
-                    "thresholds": {
-                        "mode": "absolute",
-                        "steps": [
-                            {
-                                "color": "red",
-                                "value": null
-                            },
-                            {
-                                "color": "yellow",
-                                "value": 40
-                            },
-                            {
-                                "color": "green",
-                                "value": 70
-                            }
-                        ]
-                    }
-                },
-                "overrides": []
-            },
-            "options": {
-                "reduceOptions": {
-                    "calcs": [
-                        "lastNotNull"
-                    ]
-                },
-                "orientation": "auto",
-                "textMode": "auto",
-                "colorMode": "background",
-                "graphMode": "none"
-            }
-        },
-        {
-            "id": 3,
-            "title": "P95 Latency",
-            "description": "95th-percentile end-to-end /access latency",
-            "type": "stat",
-            "gridPos": {
-                "h": 4,
-                "w": 8,
-                "x": 16,
-                "y": 0
-            },
-            "datasource": {
-                "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
-            },
-            "targets": [
-                {
-                    "refId": "A",
-                    "expr": "histogram_quantile(0.95, sum(rate(mmpm_request_duration_ms_bucket[5m])) by (le))",
-                    "legendFormat": "P95 ms"
-                }
-            ],
-            "fieldConfig": {
-                "defaults": {
-                    "unit": "ms",
-                    "color": {
-                        "mode": "thresholds"
-                    },
-                    "thresholds": {
-                        "mode": "absolute",
-                        "steps": [
-                            {
-                                "color": "green",
-                                "value": null
-                            },
-                            {
-                                "color": "yellow",
-                                "value": 50
-                            },
-                            {
-                                "color": "red",
-                                "value": 200
-                            }
-                        ]
-                    }
-                },
-                "overrides": []
-            },
-            "options": {
-                "reduceOptions": {
-                    "calcs": [
-                        "lastNotNull"
-                    ]
-                },
-                "orientation": "auto",
-                "textMode": "auto",
-                "colorMode": "background",
-                "graphMode": "area"
-            }
-        },
-        {
-            "id": 4,
-            "title": "Access Calls by Result",
-            "description": "Rate of /access calls split by hit, miss and error",
-            "type": "timeseries",
-            "gridPos": {
-                "h": 8,
-                "w": 12,
-                "x": 0,
-                "y": 4
-            },
-            "datasource": {
-                "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
-            },
-            "targets": [
-                {
-                    "refId": "A",
-                    "expr": "sum by (result) (rate(mmpm_access_total[1m]))",
-                    "legendFormat": "{{result}}"
-                }
-            ],
-            "fieldConfig": {
-                "defaults": {
-                    "unit": "reqps",
-                    "custom": {
-                        "lineWidth": 2,
-                        "fillOpacity": 10,
-                        "gradientMode": "none",
-                        "showPoints": "never"
-                    }
-                },
-                "overrides": [
-                    {
-                        "matcher": {
-                            "id": "byName",
-                            "options": "hit"
-                        },
-                        "properties": [
-                            {
-                                "id": "color",
-                                "value": {
-                                    "mode": "fixed",
-                                    "fixedColor": "green"
-                                }
-                            }
-                        ]
-                    },
-                    {
-                        "matcher": {
-                            "id": "byName",
-                            "options": "miss"
-                        },
-                        "properties": [
-                            {
-                                "id": "color",
-                                "value": {
-                                    "mode": "fixed",
-                                    "fixedColor": "yellow"
-                                }
-                            }
-                        ]
-                    },
-                    {
-                        "matcher": {
-                            "id": "byName",
-                            "options": "error"
-                        },
-                        "properties": [
-                            {
-                                "id": "color",
-                                "value": {
-                                    "mode": "fixed",
-                                    "fixedColor": "red"
-                                }
-                            }
-                        ]
-                    }
-                ]
-            },
-            "options": {
-                "legend": {
-                    "displayMode": "list",
-                    "placement": "bottom"
-                },
-                "tooltip": {
-                    "mode": "multi",
-                    "sort": "none"
-                }
-            }
-        },
-        {
-            "id": 5,
-            "title": "Latency Percentiles",
-            "description": "P50 / P95 / P99 of /access end-to-end latency",
-            "type": "timeseries",
-            "gridPos": {
-                "h": 8,
-                "w": 12,
-                "x": 12,
-                "y": 4
-            },
-            "datasource": {
-                "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
-            },
-            "targets": [
-                {
-                    "refId": "A",
-                    "expr": "histogram_quantile(0.50, sum(rate(mmpm_request_duration_ms_bucket[5m])) by (le))",
-                    "legendFormat": "P50"
-                },
-                {
-                    "refId": "B",
-                    "expr": "histogram_quantile(0.95, sum(rate(mmpm_request_duration_ms_bucket[5m])) by (le))",
-                    "legendFormat": "P95"
-                },
-                {
-                    "refId": "C",
-                    "expr": "histogram_quantile(0.99, sum(rate(mmpm_request_duration_ms_bucket[5m])) by (le))",
-                    "legendFormat": "P99"
-                }
-            ],
-            "fieldConfig": {
-                "defaults": {
-                    "unit": "ms",
-                    "custom": {
-                        "lineWidth": 2,
-                        "fillOpacity": 0,
-                        "showPoints": "never"
-                    }
-                },
-                "overrides": [
-                    {
-                        "matcher": {
-                            "id": "byName",
-                            "options": "P50"
-                        },
-                        "properties": [
-                            {
-                                "id": "color",
-                                "value": {
-                                    "mode": "fixed",
-                                    "fixedColor": "green"
-                                }
-                            }
-                        ]
-                    },
-                    {
-                        "matcher": {
-                            "id": "byName",
-                            "options": "P95"
-                        },
-                        "properties": [
-                            {
-                                "id": "color",
-                                "value": {
-                                    "mode": "fixed",
-                                    "fixedColor": "yellow"
-                                }
-                            }
-                        ]
-                    },
-                    {
-                        "matcher": {
-                            "id": "byName",
-                            "options": "P99"
-                        },
-                        "properties": [
-                            {
-                                "id": "color",
-                                "value": {
-                                    "mode": "fixed",
-                                    "fixedColor": "red"
-                                }
-                            }
-                        ]
-                    }
-                ]
-            },
-            "options": {
-                "legend": {
-                    "displayMode": "list",
-                    "placement": "bottom"
-                },
-                "tooltip": {
-                    "mode": "multi",
-                    "sort": "none"
-                }
-            }
-        },
-        {
-            "id": 6,
-            "title": "Train Rate",
-            "description": "POST /train calls per second",
-            "type": "timeseries",
-            "gridPos": {
-                "h": 8,
-                "w": 12,
-                "x": 0,
-                "y": 12
-            },
-            "datasource": {
-                "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
-            },
-            "targets": [
-                {
-                    "refId": "A",
-                    "expr": "rate(mmpm_train_total[1m])",
-                    "legendFormat": "train req/s"
-                }
-            ],
-            "fieldConfig": {
-                "defaults": {
-                    "unit": "reqps",
-                    "custom": {
-                        "lineWidth": 2,
-                        "fillOpacity": 10,
-                        "showPoints": "never"
-                    },
-                    "color": {
-                        "mode": "fixed",
-                        "fixedColor": "blue"
-                    }
-                },
-                "overrides": []
-            },
-            "options": {
-                "legend": {
-                    "displayMode": "list",
-                    "placement": "bottom"
-                },
-                "tooltip": {
-                    "mode": "single",
-                    "sort": "none"
-                }
-            }
-        },
-        {
-            "id": 7,
-            "title": "Train Sequence Lengths",
-            "description": "Distribution of sequence lengths passed to /train (P50/P95/P99)",
-            "type": "timeseries",
-            "gridPos": {
-                "h": 8,
-                "w": 12,
-                "x": 12,
-                "y": 12
-            },
-            "datasource": {
-                "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
-            },
-            "targets": [
-                {
-                    "refId": "A",
-                    "expr": "histogram_quantile(0.50, sum(rate(mmpm_train_sequence_length_bucket[5m])) by (le))",
-                    "legendFormat": "P50 length"
-                },
-                {
-                    "refId": "B",
-                    "expr": "histogram_quantile(0.95, sum(rate(mmpm_train_sequence_length_bucket[5m])) by (le))",
-                    "legendFormat": "P95 length"
-                }
-            ],
-            "fieldConfig": {
-                "defaults": {
-                    "unit": "short",
-                    "custom": {
-                        "lineWidth": 2,
-                        "fillOpacity": 5,
-                        "showPoints": "never"
-                    }
-                },
-                "overrides": []
-            },
-            "options": {
-                "legend": {
-                    "displayMode": "list",
-                    "placement": "bottom"
-                },
-                "tooltip": {
-                    "mode": "multi",
-                    "sort": "none"
-                }
-            }
-        },
-        {
-            "id": 8,
-            "title": "Node.js Heap Used",
-            "description": "V8 heap memory currently in use",
-            "type": "timeseries",
-            "gridPos": {
-                "h": 7,
-                "w": 8,
-                "x": 0,
-                "y": 20
-            },
-            "datasource": {
-                "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
-            },
-            "targets": [
-                {
-                    "refId": "A",
-                    "expr": "nodejs_heap_size_used_bytes",
-                    "legendFormat": "heap used"
-                },
-                {
-                    "refId": "B",
-                    "expr": "nodejs_heap_size_total_bytes",
-                    "legendFormat": "heap total"
-                }
-            ],
-            "fieldConfig": {
-                "defaults": {
-                    "unit": "bytes",
-                    "custom": {
-                        "lineWidth": 2,
-                        "fillOpacity": 5,
-                        "showPoints": "never"
-                    }
-                },
-                "overrides": []
-            },
-            "options": {
-                "legend": {
-                    "displayMode": "list",
-                    "placement": "bottom"
-                },
-                "tooltip": {
-                    "mode": "multi",
-                    "sort": "none"
-                }
-            }
-        },
-        {
-            "id": 9,
-            "title": "Event Loop Lag",
-            "description": "Node.js event loop delay (p99) — proxy for CPU starvation",
-            "type": "timeseries",
-            "gridPos": {
-                "h": 7,
-                "w": 8,
-                "x": 8,
-                "y": 20
-            },
-            "datasource": {
-                "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
-            },
-            "targets": [
-                {
-                    "refId": "A",
-                    "expr": "nodejs_eventloop_lag_p99_seconds * 1000",
-                    "legendFormat": "P99 lag ms"
-                }
-            ],
-            "fieldConfig": {
-                "defaults": {
-                    "unit": "ms",
-                    "custom": {
-                        "lineWidth": 2,
-                        "fillOpacity": 10,
-                        "showPoints": "never"
-                    },
-                    "color": {
-                        "mode": "fixed",
-                        "fixedColor": "orange"
-                    },
-                    "thresholds": {
-                        "mode": "absolute",
-                        "steps": [
-                            {
-                                "color": "green",
-                                "value": null
-                            },
-                            {
-                                "color": "yellow",
-                                "value": 10
-                            },
-                            {
-                                "color": "red",
-                                "value": 50
-                            }
-                        ]
-                    }
-                },
-                "overrides": []
-            },
-            "options": {
-                "legend": {
-                    "displayMode": "list",
-                    "placement": "bottom"
-                },
-                "tooltip": {
-                    "mode": "single",
-                    "sort": "none"
-                }
-            }
-        },
-        {
-            "id": 10,
-            "title": "Process CPU",
-            "description": "CPU seconds consumed per second (1 = one full core)",
-            "type": "timeseries",
-            "gridPos": {
-                "h": 7,
-                "w": 8,
-                "x": 16,
-                "y": 20
-            },
-            "datasource": {
-                "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
-            },
-            "targets": [
-                {
-                    "refId": "A",
-                    "expr": "rate(process_cpu_seconds_total[1m])",
-                    "legendFormat": "CPU"
-                }
-            ],
-            "fieldConfig": {
-                "defaults": {
-                    "unit": "percentunit",
-                    "min": 0,
-                    "custom": {
-                        "lineWidth": 2,
-                        "fillOpacity": 10,
-                        "showPoints": "never"
-                    },
-                    "color": {
-                        "mode": "fixed",
-                        "fixedColor": "purple"
-                    }
-                },
-                "overrides": []
-            },
-            "options": {
-                "legend": {
-                    "displayMode": "list",
-                    "placement": "bottom"
-                },
-                "tooltip": {
-                    "mode": "single",
-                    "sort": "none"
-                }
-            }
-        },
-        {
-            "id": 11,
-            "title": "Trained Atoms",
-            "description": "Atoms with at least one outgoing Markov transition recorded",
-            "type": "stat",
-            "gridPos": {
-                "h": 4,
-                "w": 12,
-                "x": 0,
-                "y": 27
-            },
-            "datasource": {
-                "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
-            },
-            "targets": [
-                {
-                    "refId": "A",
-                    "expr": "mmpm_cluster_trained_atoms",
-                    "legendFormat": "atoms"
-                }
-            ],
-            "fieldConfig": {
-                "defaults": {
-                    "unit": "short",
-                    "color": {
-                        "mode": "thresholds"
-                    },
-                    "thresholds": {
-                        "mode": "absolute",
-                        "steps": [
-                            {
-                                "color": "blue",
-                                "value": null
-                            }
-                        ]
-                    }
-                },
-                "overrides": []
-            },
-            "options": {
-                "reduceOptions": {
-                    "calcs": [
-                        "lastNotNull"
-                    ]
-                },
-                "orientation": "auto",
-                "textMode": "auto",
-                "colorMode": "background",
-                "graphMode": "area"
-            }
-        },
-        {
-            "id": 12,
-            "title": "Total Cluster Edges",
-            "description": "Total trained Markov transitions across all shards",
-            "type": "stat",
-            "gridPos": {
-                "h": 4,
-                "w": 12,
-                "x": 12,
-                "y": 27
-            },
-            "datasource": {
-                "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
-            },
-            "targets": [
-                {
-                    "refId": "A",
-                    "expr": "mmpm_cluster_total_edges",
-                    "legendFormat": "edges"
-                }
-            ],
-            "fieldConfig": {
-                "defaults": {
-                    "unit": "short",
-                    "color": {
-                        "mode": "thresholds"
-                    },
-                    "thresholds": {
-                        "mode": "absolute",
-                        "steps": [
-                            {
-                                "color": "purple",
-                                "value": null
-                            }
-                        ]
-                    }
-                },
-                "overrides": []
-            },
-            "options": {
-                "reduceOptions": {
-                    "calcs": [
-                        "lastNotNull"
-                    ]
-                },
-                "orientation": "auto",
-                "textMode": "auto",
-                "colorMode": "background",
-                "graphMode": "area"
-            }
-        },
-        {
-            "id": 13,
-            "title": "Prediction Confidence by Atom",
-            "description": "Dominance ratio per atom: top_weight / total_weight. 1.0 = single deterministic successor, 0.5 = two equally-weighted paths. One line per atom — O(atoms) cardinality.",
-            "type": "timeseries",
-            "gridPos": {
-                "h": 9,
-                "w": 24,
-                "x": 0,
-                "y": 31
-            },
-            "datasource": {
-                "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
-            },
-            "targets": [
-                {
-                    "refId": "A",
-                    "expr": "mmpm_atom_dominance_ratio",
-                    "legendFormat": "{{atom}}"
-                }
-            ],
-            "fieldConfig": {
-                "defaults": {
-                    "unit": "percentunit",
-                    "min": 0,
-                    "max": 1,
-                    "custom": {
-                        "lineWidth": 2,
-                        "fillOpacity": 5,
-                        "showPoints": "never"
-                    }
-                },
-                "overrides": []
-            },
-            "options": {
-                "legend": {
-                    "displayMode": "list",
-                    "placement": "right"
-                },
-                "tooltip": {
-                    "mode": "multi",
-                    "sort": "desc"
-                }
-            }
-        },
-        {
-            "id": 14,
-            "title": "Trained Edges per Atom (Out-degree)",
-            "description": "Number of distinct successors each atom has learned. Flat line = converged. Rising line = new paths being discovered.",
-            "type": "timeseries",
-            "gridPos": {
-                "h": 9,
-                "w": 24,
-                "x": 0,
-                "y": 40
-            },
-            "datasource": {
-                "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
-            },
-            "targets": [
-                {
-                    "refId": "A",
-                    "expr": "mmpm_atom_trained_edges",
-                    "legendFormat": "{{atom}}"
-                }
-            ],
-            "fieldConfig": {
-                "defaults": {
-                    "unit": "short",
-                    "min": 0,
-                    "custom": {
-                        "lineWidth": 2,
-                        "fillOpacity": 5,
-                        "showPoints": "never",
-                        "drawStyle": "line",
-                        "stacking": {
-                            "mode": "none"
-                        }
-                    }
-                },
-                "overrides": []
-            },
-            "options": {
-                "legend": {
-                    "displayMode": "list",
-                    "placement": "right"
-                },
-                "tooltip": {
-                    "mode": "multi",
-                    "sort": "desc"
-                }
-            }
-        },
-        {
-            "id": 15,
-            "title": "CSR Build Latency p95 by Shard",
-            "description": "Commit-time CSR rebuild p95 latency per shard.",
-            "type": "timeseries",
-            "gridPos": {
-                "h": 8,
-                "w": 12,
-                "x": 0,
-                "y": 49
-            },
-            "datasource": {
-                "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
-            },
-            "targets": [
-                {
-                    "refId": "A",
-                    "expr": "histogram_quantile(0.95, sum by (le, shard) (rate(mmpm_csr_build_ms_bucket{shard=~\"$shard\"}[5m])))",
-                    "legendFormat": "shard {{shard}}"
-                }
-            ],
-            "fieldConfig": {
-                "defaults": {
-                    "unit": "ms",
-                    "custom": {
-                        "lineWidth": 2,
-                        "fillOpacity": 10,
-                        "showPoints": "never"
-                    }
-                },
-                "overrides": []
-            },
-            "options": {
-                "legend": {
-                    "displayMode": "list",
-                    "placement": "right"
-                }
-            }
-        },
-        {
-            "id": 16,
-            "title": "CSR Edge Count by Shard",
-            "description": "Compiled transition edge count per shard after each commit.",
-            "type": "timeseries",
-            "gridPos": {
-                "h": 8,
-                "w": 12,
-                "x": 12,
-                "y": 49
-            },
-            "datasource": {
-                "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
-            },
-            "targets": [
-                {
-                    "refId": "A",
-                    "expr": "mmpm_csr_edge_count{shard=~\"$shard\"}",
-                    "legendFormat": "shard {{shard}}"
-                }
-            ],
-            "fieldConfig": {
-                "defaults": {
-                    "unit": "short",
-                    "min": 0,
-                    "custom": {
-                        "lineWidth": 2,
-                        "fillOpacity": 8,
-                        "showPoints": "never"
-                    }
-                },
-                "overrides": []
-            },
-            "options": {
-                "legend": {
-                    "displayMode": "list",
-                    "placement": "right"
-                }
-            }
-        },
-        {
-            "id": 17,
-            "title": "Type-Policy Filtered Predictions",
-            "description": "Rate of predictions changed/nullified by policy constraints.",
-            "type": "timeseries",
-            "gridPos": {
-                "h": 8,
-                "w": 12,
-                "x": 0,
-                "y": 57
-            },
-            "datasource": {
-                "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
-            },
-            "targets": [
-                {
-                    "refId": "A",
-                    "expr": "sum by (shard) (rate(mmpm_prediction_type_filtered_total{shard=~\"$shard\"}[5m]))",
-                    "legendFormat": "shard {{shard}}"
-                }
-            ],
-            "fieldConfig": {
-                "defaults": {
-                    "unit": "ops",
-                    "min": 0,
-                    "custom": {
-                        "lineWidth": 2,
-                        "fillOpacity": 10,
-                        "showPoints": "never"
-                    }
-                },
-                "overrides": []
-            },
-            "options": {
-                "legend": {
-                    "displayMode": "list",
-                    "placement": "right"
-                }
-            }
-        },
-        {
-            "id": 18,
-            "title": "Warm-Read Fallback Rate",
-            "description": "Fallback prediction rate under restricted policies.",
-            "type": "timeseries",
-            "gridPos": {
-                "h": 8,
-                "w": 12,
-                "x": 12,
-                "y": 57
-            },
-            "datasource": {
-                "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
-            },
-            "targets": [
-                {
-                    "refId": "A",
-                    "expr": "sum by (shard) (rate(mmpm_warm_prediction_fallback_total{shard=~\"$shard\"}[5m]))",
-                    "legendFormat": "shard {{shard}}"
-                }
-            ],
-            "fieldConfig": {
-                "defaults": {
-                    "unit": "ops",
-                    "min": 0,
-                    "custom": {
-                        "lineWidth": 2,
-                        "fillOpacity": 10,
-                        "showPoints": "never"
-                    }
-                },
-                "overrides": []
-            },
-            "options": {
-                "legend": {
-                    "displayMode": "list",
-                    "placement": "right"
-                }
-            }
-        },
-        {
-            "id": 19,
-            "title": "Client Offered vs Service Access (req/s)",
-            "description": "Overlay continuous-client offered /access load against service /access handling rate.",
-            "type": "timeseries",
-            "gridPos": {
-                "h": 8,
-                "w": 12,
-                "x": 0,
-                "y": 65
-            },
-            "datasource": {
-                "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
-            },
-            "targets": [
-                {
-                    "refId": "A",
-                    "expr": "sum(rate(mmpm_continuous_client_completed_ops_total{profile=~\"$profile\",op=\"access\",status=\"success\"}[1m]))",
-                    "legendFormat": "client offered /access"
-                },
-                {
-                    "refId": "B",
-                    "expr": "sum(rate(mmpm_access_total[1m]))",
-                    "legendFormat": "service handled /access"
-                }
-            ],
-            "fieldConfig": {
-                "defaults": {
-                    "unit": "reqps",
-                    "custom": {
-                        "lineWidth": 2,
-                        "fillOpacity": 8,
-                        "showPoints": "never"
-                    }
-                },
-                "overrides": []
-            },
-            "options": {
-                "legend": {
-                    "displayMode": "table",
-                    "placement": "bottom"
-                }
-            }
-        },
-        {
-            "id": 20,
-            "title": "Client Inflight and Error Rate",
-            "description": "Continuous client pressure and operation failure rate.",
-            "type": "timeseries",
-            "gridPos": {
-                "h": 8,
-                "w": 12,
-                "x": 12,
-                "y": 65
-            },
-            "datasource": {
-                "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
-            },
-            "targets": [
-                {
-                    "refId": "A",
-                    "expr": "sum(mmpm_continuous_client_inflight_requests{profile=~\"$profile\"})",
-                    "legendFormat": "client inflight"
-                },
-                {
-                    "refId": "B",
-                    "expr": "sum(rate(mmpm_continuous_client_completed_ops_total{profile=~\"$profile\",status=\"error\"}[1m]))",
-                    "legendFormat": "client error/sec"
-                }
-            ],
-            "fieldConfig": {
-                "defaults": {
-                    "unit": "short",
-                    "custom": {
-                        "lineWidth": 2,
-                        "fillOpacity": 8,
-                        "showPoints": "never"
-                    }
-                },
-                "overrides": []
-            },
-            "options": {
-                "legend": {
-                    "displayMode": "table",
-                    "placement": "bottom"
-                }
-            }
-        },
-        {
-            "id": 21,
-            "title": "Client Retrieval Quality (ratio)",
-            "description": "Prediction accuracy/usefulness observed by the continuous client and its scientific probe.",
-            "type": "timeseries",
-            "gridPos": {
-                "h": 8,
-                "w": 24,
-                "x": 0,
-                "y": 73
-            },
-            "datasource": {
-                "type": "prometheus",
-                "uid": "${DS_PROMETHEUS}"
-            },
-            "targets": [
-                {
-                    "refId": "A",
-                    "expr": "max(mmpm_continuous_client_prediction_accuracy_ratio{profile=~\"$profile\"})",
-                    "legendFormat": "online accuracy"
-                },
-                {
-                    "refId": "B",
-                    "expr": "max(mmpm_continuous_client_prediction_useful_ratio{profile=~\"$profile\"})",
-                    "legendFormat": "online usefulness"
-                },
-                {
-                    "refId": "C",
-                    "expr": "max(mmpm_continuous_client_probe_accuracy_ratio{profile=~\"$profile\"})",
-                    "legendFormat": "probe accuracy"
-                },
-                {
-                    "refId": "D",
-                    "expr": "max(mmpm_continuous_client_probe_useful_ratio{profile=~\"$profile\"})",
-                    "legendFormat": "probe usefulness"
-                }
-            ],
-            "fieldConfig": {
-                "defaults": {
-                    "unit": "percentunit",
-                    "min": 0,
-                    "max": 1,
-                    "custom": {
-                        "lineWidth": 2,
-                        "fillOpacity": 8,
-                        "showPoints": "never"
-                    }
-                },
-                "overrides": []
-            },
-            "options": {
-                "legend": {
-                    "displayMode": "table",
-                    "placement": "bottom"
-                }
-            }
+          "refId": "A",
+          "expr": "sum(rate(mmpm_access_total[1m]))",
+          "legendFormat": "req/s"
         }
-    ],
-    "refresh": "10s",
-    "schemaVersion": 38,
-    "tags": [
-        "mmpm",
-        "markov",
-        "merkle"
-    ],
-    "templating": {
-        "list": [
-            {
-                "current": {},
-                "hide": 0,
-                "includeAll": false,
-                "label": "Data Source",
-                "multi": false,
-                "name": "DS_PROMETHEUS",
-                "options": [],
-                "query": "prometheus",
-                "refresh": 1,
-                "type": "datasource"
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 100
+              },
+              {
+                "color": "red",
+                "value": 500
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 2,
+      "title": "Prediction Hit Rate",
+      "description": "% of /access calls where Markov predicted the next atom",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * sum(rate(mmpm_access_total{result=\"hit\"}[5m])) / sum(rate(mmpm_access_total[5m]))",
+          "legendFormat": "hit %"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 40
+              },
+              {
+                "color": "green",
+                "value": 70
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 3,
+      "title": "P95 Latency",
+      "description": "95th-percentile end-to-end /access latency",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum(rate(mmpm_request_duration_ms_bucket[5m])) by (le))",
+          "legendFormat": "P95 ms"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 50
+              },
+              {
+                "color": "red",
+                "value": 200
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 4,
+      "title": "Access Calls by Result",
+      "description": "Rate of /access calls split by hit, miss and error",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (result) (rate(mmpm_access_total[1m]))",
+          "legendFormat": "{{result}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "showPoints": "never"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "hit"
             },
-            {
-                "current": {
-                    "selected": true,
-                    "text": "All",
-                    "value": "$__all"
-                },
-                "hide": 0,
-                "includeAll": true,
-                "label": "Shard",
-                "multi": false,
-                "name": "shard",
-                "options": [],
-                "query": {
-                    "query": "label_values(mmpm_pending_writes_count, shard)",
-                    "refId": "PromVarShard"
-                },
-                "refresh": 2,
-                "type": "query"
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "miss"
             },
-            {
-                "current": {
-                    "selected": true,
-                    "text": "All",
-                    "value": "$__all"
-                },
-                "hide": 0,
-                "includeAll": true,
-                "label": "Client Profile",
-                "multi": false,
-                "name": "profile",
-                "options": [],
-                "query": {
-                    "query": "label_values(mmpm_continuous_client_target_ops_per_sec, profile)",
-                    "refId": "PromVarProfile"
-                },
-                "refresh": 2,
-                "type": "query"
-            }
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "yellow"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "error"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
         ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
     },
-    "time": {
-        "from": "now-30m",
-        "to": "now"
+    {
+      "id": 5,
+      "title": "Latency Percentiles",
+      "description": "P50 / P95 / P99 of /access end-to-end latency",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum(rate(mmpm_request_duration_ms_bucket[5m])) by (le))",
+          "legendFormat": "P50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum(rate(mmpm_request_duration_ms_bucket[5m])) by (le))",
+          "legendFormat": "P95"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum(rate(mmpm_request_duration_ms_bucket[5m])) by (le))",
+          "legendFormat": "P99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "P50"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "P95"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "yellow"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "P99"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
     },
-    "timepicker": {},
-    "timezone": "browser",
-    "title": "MMPM — Markov Merkle Predictive Memory",
-    "uid": "mmpm-main",
-    "version": 3
+    {
+      "id": 6,
+      "title": "Train Rate",
+      "description": "POST /train calls per second",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(mmpm_train_total[1m])",
+          "legendFormat": "train req/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "title": "Train Sequence Lengths",
+      "description": "Distribution of sequence lengths passed to /train (P50/P95/P99)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum(rate(mmpm_train_sequence_length_bucket[5m])) by (le))",
+          "legendFormat": "P50 length"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum(rate(mmpm_train_sequence_length_bucket[5m])) by (le))",
+          "legendFormat": "P95 length"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "title": "Node.js Heap Used",
+      "description": "V8 heap memory currently in use",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 20
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "nodejs_heap_size_used_bytes",
+          "legendFormat": "heap used"
+        },
+        {
+          "refId": "B",
+          "expr": "nodejs_heap_size_total_bytes",
+          "legendFormat": "heap total"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "title": "Event Loop Lag",
+      "description": "Node.js event loop delay (p99) \u2014 proxy for CPU starvation",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 20
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "nodejs_eventloop_lag_p99_seconds * 1000",
+          "legendFormat": "P99 lag ms"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "orange"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 50
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "title": "Process CPU",
+      "description": "CPU seconds consumed per second (1 = one full core)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 20
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(process_cpu_seconds_total[1m])",
+          "legendFormat": "CPU"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "purple"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "title": "Trained Atoms",
+      "description": "Atoms with at least one outgoing Markov transition recorded",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 0,
+        "y": 27
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "mmpm_cluster_trained_atoms",
+          "legendFormat": "atoms"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 12,
+      "title": "Total Cluster Edges",
+      "description": "Total trained Markov transitions across all shards",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 27
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "mmpm_cluster_total_edges",
+          "legendFormat": "edges"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "purple",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 13,
+      "title": "Prediction Confidence by Atom",
+      "description": "Dominance ratio per atom: top_weight / total_weight. 1.0 = single deterministic successor, 0.5 = two equally-weighted paths. One line per atom \u2014 O(atoms) cardinality.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 31
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "mmpm_atom_dominance_ratio",
+          "legendFormat": "{{atom}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 14,
+      "title": "Trained Edges per Atom (Out-degree)",
+      "description": "Number of distinct successors each atom has learned. Flat line = converged. Rising line = new paths being discovered.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "mmpm_atom_trained_edges",
+          "legendFormat": "{{atom}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 5,
+            "showPoints": "never",
+            "drawStyle": "line",
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 15,
+      "title": "CSR Build Latency p95 by Shard",
+      "description": "Commit-time CSR rebuild p95 latency per shard.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 49
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, shard) (rate(mmpm_csr_build_ms_bucket{shard=~\"$shard\"}[5m])))",
+          "legendFormat": "shard {{shard}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "right"
+        }
+      }
+    },
+    {
+      "id": 16,
+      "title": "CSR Edge Count by Shard",
+      "description": "Compiled transition edge count per shard after each commit.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 49
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "mmpm_csr_edge_count{shard=~\"$shard\"}",
+          "legendFormat": "shard {{shard}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "right"
+        }
+      }
+    },
+    {
+      "id": 17,
+      "title": "Type-Policy Filtered Predictions",
+      "description": "Rate of predictions changed/nullified by policy constraints.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 57
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (shard) (rate(mmpm_prediction_type_filtered_total{shard=~\"$shard\"}[5m]))",
+          "legendFormat": "shard {{shard}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "right"
+        }
+      }
+    },
+    {
+      "id": 18,
+      "title": "Warm-Read Fallback Rate",
+      "description": "Fallback prediction rate under restricted policies.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 57
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (shard) (rate(mmpm_warm_prediction_fallback_total{shard=~\"$shard\"}[5m]))",
+          "legendFormat": "shard {{shard}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "right"
+        }
+      }
+    },
+    {
+      "id": 19,
+      "title": "Client Offered vs Service Access (req/s)",
+      "description": "Overlay continuous-client offered /access load against service /access handling rate.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 65
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(mmpm_continuous_client_completed_ops_total{profile=~\"$profile\",op=\"access\",status=\"success\"}[1m]))",
+          "legendFormat": "client offered /access"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(mmpm_access_total[1m]))",
+          "legendFormat": "service handled /access"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 20,
+      "title": "Client Inflight and Error Rate",
+      "description": "Continuous client pressure and operation failure rate.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 65
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(mmpm_continuous_client_inflight_requests{profile=~\"$profile\"})",
+          "legendFormat": "client inflight"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(mmpm_continuous_client_completed_ops_total{profile=~\"$profile\",status=\"error\"}[1m]))",
+          "legendFormat": "client error/sec"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 21,
+      "title": "Client Retrieval Quality (ratio)",
+      "description": "Prediction accuracy/usefulness observed by the continuous client and its scientific probe.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 73
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(mmpm_continuous_client_prediction_accuracy_ratio{profile=~\"$profile\"})",
+          "legendFormat": "online accuracy"
+        },
+        {
+          "refId": "B",
+          "expr": "max(mmpm_continuous_client_prediction_useful_ratio{profile=~\"$profile\"})",
+          "legendFormat": "online usefulness"
+        },
+        {
+          "refId": "C",
+          "expr": "max(mmpm_continuous_client_probe_accuracy_ratio{profile=~\"$profile\"})",
+          "legendFormat": "probe accuracy"
+        },
+        {
+          "refId": "D",
+          "expr": "max(mmpm_continuous_client_probe_useful_ratio{profile=~\"$profile\"})",
+          "legendFormat": "probe usefulness"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 100,
+      "title": "\ud83d\uddc4  Shard & Storage Health",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 81
+      }
+    },
+    {
+      "id": 101,
+      "title": "Total Commits",
+      "description": "Snapshot commits flushed across all shards (lifetime)",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 82
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(mmpm_commits_total)",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 102,
+      "title": "Epoch Transitions",
+      "description": "Completed epoch transitions (commit completions) across all shards",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 82
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(mmpm_epoch_transitions_total)",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 103,
+      "title": "Pending Writes (now)",
+      "description": "Total uncommitted writes currently buffered across all shards",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 82
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(mmpm_pending_writes_count)",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 104,
+      "title": "Commit Rate by Shard",
+      "description": "Commits per second per shard \u2014 shows which shards are busiest",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 86
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(mmpm_commits_total{shard=\"0\"}[1m])",
+          "legendFormat": "shard-0"
+        },
+        {
+          "refId": "B",
+          "expr": "rate(mmpm_commits_total{shard=\"1\"}[1m])",
+          "legendFormat": "shard-1"
+        },
+        {
+          "refId": "C",
+          "expr": "rate(mmpm_commits_total{shard=\"2\"}[1m])",
+          "legendFormat": "shard-2"
+        },
+        {
+          "refId": "D",
+          "expr": "rate(mmpm_commits_total{shard=\"3\"}[1m])",
+          "legendFormat": "shard-3"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cps",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 105,
+      "title": "Pending Writes by Shard",
+      "description": "Uncommitted write buffer depth per shard \u2014 spike = backpressure building",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 86
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "mmpm_pending_writes_count{shard=\"0\"}",
+          "legendFormat": "shard-0"
+        },
+        {
+          "refId": "B",
+          "expr": "mmpm_pending_writes_count{shard=\"1\"}",
+          "legendFormat": "shard-1"
+        },
+        {
+          "refId": "C",
+          "expr": "mmpm_pending_writes_count{shard=\"2\"}",
+          "legendFormat": "shard-2"
+        },
+        {
+          "refId": "D",
+          "expr": "mmpm_pending_writes_count{shard=\"3\"}",
+          "legendFormat": "shard-3"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 106,
+      "title": "Commit Latency p95 by Shard",
+      "description": "Time to complete a snapshot commit per shard (ms) \u2014 sustained spikes indicate I/O pressure",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 94
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, rate(mmpm_commit_latency_ms_bucket{shard=\"0\"}[1m]))",
+          "legendFormat": "shard-0 p95"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, rate(mmpm_commit_latency_ms_bucket{shard=\"1\"}[1m]))",
+          "legendFormat": "shard-1 p95"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.95, rate(mmpm_commit_latency_ms_bucket{shard=\"2\"}[1m]))",
+          "legendFormat": "shard-2 p95"
+        },
+        {
+          "refId": "D",
+          "expr": "histogram_quantile(0.95, rate(mmpm_commit_latency_ms_bucket{shard=\"3\"}[1m]))",
+          "legendFormat": "shard-3 p95"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 107,
+      "title": "Epoch Transitions by Shard",
+      "description": "Epoch transitions per minute per shard \u2014 measures commit cadence",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 94
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(mmpm_epoch_transitions_total{shard=\"0\"}[1m])*60",
+          "legendFormat": "shard-0"
+        },
+        {
+          "refId": "B",
+          "expr": "rate(mmpm_epoch_transitions_total{shard=\"1\"}[1m])*60",
+          "legendFormat": "shard-1"
+        },
+        {
+          "refId": "C",
+          "expr": "rate(mmpm_epoch_transitions_total{shard=\"2\"}[1m])*60",
+          "legendFormat": "shard-2"
+        },
+        {
+          "refId": "D",
+          "expr": "rate(mmpm_epoch_transitions_total{shard=\"3\"}[1m])*60",
+          "legendFormat": "shard-3"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 110,
+      "title": "\ud83d\udd17  Transition Type Breakdown",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 102
+      }
+    },
+    {
+      "id": 111,
+      "title": "Trained Transitions by Type Pair",
+      "description": "Rate of new transitions trained per from\u2192to type pair \u2014 shows what kinds of sequences are being taught",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 103
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(mmpm_transition_by_type_total[1m])",
+          "legendFormat": "{{from_type}} \u2192 {{to_type}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        },
+        "stacking": {
+          "mode": "normal",
+          "group": "A"
+        }
+      }
+    },
+    {
+      "id": 120,
+      "title": "\u2699\ufe0f  Node.js Runtime Detail",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 112
+      }
+    },
+    {
+      "id": 121,
+      "title": "GC Pause Duration p99",
+      "description": "Garbage collection pause time p99 by GC type \u2014 high values mean GC pressure",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 113
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, rate(nodejs_gc_duration_seconds_bucket{kind=\"major\"}[1m]))*1000",
+          "legendFormat": "major GC p99"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.99, rate(nodejs_gc_duration_seconds_bucket{kind=\"minor\"}[1m]))*1000",
+          "legendFormat": "minor GC p99"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, rate(nodejs_gc_duration_seconds_bucket{kind=\"incremental\"}[1m]))*1000",
+          "legendFormat": "incremental p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 122,
+      "title": "GC Rate by Type",
+      "description": "GC collections per second by type \u2014 sustained major GC rate indicates memory pressure",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 113
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(nodejs_gc_duration_seconds_count{kind=\"major\"}[1m])",
+          "legendFormat": "major"
+        },
+        {
+          "refId": "B",
+          "expr": "rate(nodejs_gc_duration_seconds_count{kind=\"minor\"}[1m])",
+          "legendFormat": "minor"
+        },
+        {
+          "refId": "C",
+          "expr": "rate(nodejs_gc_duration_seconds_count{kind=\"incremental\"}[1m])",
+          "legendFormat": "incremental"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 123,
+      "title": "Heap Space Breakdown",
+      "description": "Heap space used vs available by V8 space name \u2014 useful for spotting space exhaustion before OOM",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 121
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "nodejs_heap_space_size_used_bytes{space=\"old\"}",
+          "legendFormat": "old space used"
+        },
+        {
+          "refId": "B",
+          "expr": "nodejs_heap_space_size_used_bytes{space=\"new\"}",
+          "legendFormat": "new space used"
+        },
+        {
+          "refId": "C",
+          "expr": "nodejs_heap_space_size_used_bytes{space=\"code\"}",
+          "legendFormat": "code space used"
+        },
+        {
+          "refId": "D",
+          "expr": "nodejs_heap_size_total_bytes",
+          "legendFormat": "total heap"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 124,
+      "title": "Active Handles & Resources",
+      "description": "Open handles and active resources \u2014 unexpected growth may indicate a handle leak",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 121
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "nodejs_active_handles",
+          "legendFormat": "handles"
+        },
+        {
+          "refId": "B",
+          "expr": "nodejs_active_resources",
+          "legendFormat": "resources"
+        },
+        {
+          "refId": "C",
+          "expr": "nodejs_active_requests",
+          "legendFormat": "requests"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "tags": [
+    "mmpm",
+    "markov",
+    "merkle"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Data Source",
+        "multi": false,
+        "name": "DS_PROMETHEUS",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "type": "datasource"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "hide": 0,
+        "includeAll": true,
+        "label": "Shard",
+        "multi": false,
+        "name": "shard",
+        "options": [],
+        "query": {
+          "query": "label_values(mmpm_pending_writes_count, shard)",
+          "refId": "PromVarShard"
+        },
+        "refresh": 2,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "hide": 0,
+        "includeAll": true,
+        "label": "Client Profile",
+        "multi": false,
+        "name": "profile",
+        "options": [],
+        "query": {
+          "query": "label_values(mmpm_continuous_client_target_ops_per_sec, profile)",
+          "refId": "PromVarProfile"
+        },
+        "refresh": 2,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "MMPM \u2014 Markov Merkle Predictive Memory",
+  "uid": "mmpm-main",
+  "version": 4
 }

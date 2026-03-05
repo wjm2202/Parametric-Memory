@@ -250,6 +250,25 @@ export function createToolDefinitions(options: MmpmMcpOptions = {}): ToolDef[] {
             handler: async () => callApi('GET', '/atoms/pending'),
         },
         {
+            name: 'memory_atoms_stale',
+            description: 'List active atoms not accessed or updated within maxAgeDays (default 30). Useful for memory hygiene — identify states and facts that may no longer be relevant. Wraps GET /atoms/stale.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    maxAgeDays: { type: 'number', description: 'Atoms older than this many days are considered stale (default: 30).' },
+                    type: { type: 'string', enum: ['fact', 'event', 'relation', 'state', 'other'], description: 'Filter by atom type.' },
+                },
+                additionalProperties: false,
+            },
+            handler: async args => {
+                const query = new URLSearchParams();
+                if (typeof args.maxAgeDays === 'number') query.set('maxAgeDays', String(args.maxAgeDays));
+                if (typeof args.type === 'string') query.set('type', args.type);
+                const suffix = query.toString();
+                return callApi('GET', suffix ? `/atoms/stale?${suffix}` : '/atoms/stale');
+            },
+        },
+        {
             name: 'memory_health',
             description: 'Read cluster health status. Wraps GET /health.',
             inputSchema: { type: 'object', properties: {}, additionalProperties: false },

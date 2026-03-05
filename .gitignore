@@ -7,10 +7,12 @@ dist/
 *.d.ts.map
 
 # ── LevelDB / runtime data ────────────────────────────────────────────
+wal/
 mmpm-db/
-mmpm-test-smoke-db/
+mmpm-test-smoke-db*/
+mmpm-demo-db/
+test-shard-db*/
 test-*-db*/
-/tmp/mmpm-*
 
 # ── Environment files ─────────────────────────────────────────────────
 # Block ALL .env variants — they may contain secrets
@@ -29,6 +31,9 @@ coverage/
 .nyc_output/
 vitest-results/
 
+# ── Benchmark artifacts ─────────────────────────────────────────────────────
+tools/harness/results/**/
+
 # ── Docker ────────────────────────────────────────────────────────────
 # (docker-compose.yml and Dockerfile ARE committed)
 
@@ -43,8 +48,3 @@ vitest-results/
 *.swp
 *.swo
 *.orig
-
-test-shard-db*
-mmpm-demo-db/
-tools/harness/results/*.json
-tools/harness/results/*.prom

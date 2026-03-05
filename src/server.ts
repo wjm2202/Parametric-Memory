@@ -1595,6 +1595,61 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
     });
 
     /**
+     * GET /atoms/stale  —  List active atoms that haven't been accessed or updated
+     * in more than `maxAgeDays` days (default: 30).  Optionally filter by type.
+     *
+     * Query params:
+     *   maxAgeDays  — integer > 0, default 30
+     *   type        — fact | event | relation | state | other (optional filter)
+     *
+     * Returns: { stale: [{ atom, type, createdAtMs, ageDays }], count, asOfMs, maxAgeDays }
+     */
+    server.get('/atoms/stale', async (request, reply) => {
+        const query = (request.query ?? {}) as { maxAgeDays?: unknown; type?: unknown };
+
+        const rawMaxAge = query.maxAgeDays !== undefined ? parseInt(String(query.maxAgeDays), 10) : 30;
+        if (!Number.isInteger(rawMaxAge) || rawMaxAge <= 0) {
+            return reply.status(400).send({ error: "Query param 'maxAgeDays' must be a positive integer." });
+        }
+
+        if (query.type !== undefined && !isAtomType(query.type)) {
+            return reply.status(400).send({ error: "Query param 'type' must be one of: fact,event,relation,state,other." });
+        }
+
+        const now = Date.now();
+        const cutoffMs = now - rawMaxAge * 24 * 60 * 60 * 1000;
+
+        const allAtoms = orchestrator.listAtoms();
+        const activeAtoms = allAtoms.filter(e => e.status === 'active');
+
+        const staleEntries: { atom: string; type: string; createdAtMs: number; ageDays: number }[] = [];
+
+        for (const entry of activeAtoms) {
+            const parsed = parseAtomV1(entry.atom);
+            if (!parsed) continue;
+            if (query.type !== undefined && parsed.type !== query.type) continue;
+
+            const record = orchestrator.inspectAtom(entry.atom);
+            if (!record) continue;
+
+            if (record.createdAtMs <= cutoffMs) {
+                const ageDays = Math.floor((now - record.createdAtMs) / (24 * 60 * 60 * 1000));
+                staleEntries.push({ atom: entry.atom, type: parsed.type, createdAtMs: record.createdAtMs, ageDays });
+            }
+        }
+
+        // Sort oldest-first so the most stale atoms are easiest to identify
+        staleEntries.sort((a, b) => a.createdAtMs - b.createdAtMs);
+
+        return {
+            stale: staleEntries,
+            count: staleEntries.length,
+            asOfMs: now,
+            maxAgeDays: rawMaxAge,
+        };
+    });
+
+    /**
      * POST /admin/commit  —  Force an immediate flush of the ingestion pipeline.
      * Useful for testing and for cases where you need atoms committed right away.
      *
