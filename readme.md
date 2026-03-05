@@ -1,5 +1,7 @@
 # Markov-Merkle Predictive Memory (MMPM)
 
+**License:** AGPL/SSPL/BSL (Affero GPL, Server Side Public License, or Business Source License) for commercial protection. See BUSINESS_PLAN.md for details.
+
 MMPM is a sharded, verifiable memory system that combines:
 - Merkle proofs for integrity,
 - Markov transition learning for prediction,

@@ -46,8 +46,8 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
-  "description": "",
+  "license": "AGPL OR SSPL OR BSL",
+  "description": "Composable, explainable, auditable memory substrate for agentic and AI workflows. See BUSINESS_PLAN.md for details.",
   "devDependencies": {
     "@types/node": "^25.3.3",
     "ts-node": "^10.9.2",
