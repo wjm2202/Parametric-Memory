@@ -1,0 +1,510 @@
+{
+  "toolVisible": {
+    "memory_atoms_add": true,
+    "memory_train": true,
+    "memory_search": true,
+    "memory_context": true
+  },
+  "write": {
+    "add": {
+      "isError": false,
+      "data": {
+        "status": "Queued",
+        "batchId": 4,
+        "queued": 29,
+        "commitEtaMs": 1000
+      }
+    },
+    "commit": {
+      "isError": false,
+      "data": {
+        "status": "Committed",
+        "flushedCount": 29
+      }
+    },
+    "train": {
+      "isError": false,
+      "data": {
+        "status": "Success",
+        "message": "Trained path of length 8 across shards."
+      }
+    }
+  },
+  "recall": {
+    "searchWorkflow": {
+      "isError": false,
+      "data": {
+        "mode": "semantic",
+        "query": "glen workflow sprint board tests metrics",
+        "results": [
+          {
+            "atom": "v1.fact.workflow.glen.step4_create_sprint_board_with_logical_items_and_meta_info_src_human_conf_high_scope_project_dt_2026_03_04",
+            "similarity": 0.153846,
+            "rank": 1,
+            "shardId": 3,
+            "proof": {
+              "leaf": "d7188dd23e73ca369cb2d01b62141a2ea5859b5bd1314129152395559484d671",
+              "root": "a1a200e1278e8fc167836a165be659307951d9e87977ddc762229202f8f4d5c1",
+              "auditPath": [
+                "3945ce94bcd998d6bd34855230cac0dec9f70aebf28956a61c37c03780564595",
+                "8d6b90ebd0aae969f7ccec9e65973940987ef5b9cbaa5b6693ee282547de8503",
+                "552935330e76af324989aa6fcdda436497c5021c0558864ae190bb03d041a255",
+                "c78009fdf07fc56a11f122370658a353aaa542ed63e44c4bc15ff4cd105ab33c",
+                "e24a2408e3854756bbebc96bd450da1f2a9cc0d9fbbca1be0496cdfe02104785"
+              ],
+              "index": 17
+            }
+          },
+          {
+            "atom": "v1.fact.workflow.glen.step5_create_real_world_tests_src_human_conf_high_scope_project_dt_2026_03_04",
+            "similarity": 0.136364,
+            "rank": 2,
+            "shardId": 0,
+            "proof": {
+              "leaf": "b7218f6d0ffb19cc7a74849421bef3142d1f8092969d0a12b2342372a7b065c1",
+              "root": "a52490acfb4a1421fc4447c9726842648c15cf1b30acec2f2c4399fe7781e180",
+              "auditPath": [
+                "a2d7b1167fad04334f37368d8b971843d34a52a50618479d552894ef7ab57f60",
+                "6db662e923ab467de7c24f05d6d08aa5a43f98bc73b7d167c26e6046d33c6f6c",
+                "058931acc7986c06eb9108d133763e42a35c26c2c1c21d182e9f02f1888730ce",
+                "c78009fdf07fc56a11f122370658a353aaa542ed63e44c4bc15ff4cd105ab33c",
+                "979cdd66e99bd946316dcae6cc03090b87b514d338b91fb1dc8318e7f65e8ce3"
+              ],
+              "index": 17
+            }
+          },
+          {
+            "atom": "v1.fact.workflow.glen.step8_capture_metrics_when_changes_improve_system_src_human_conf_high_scope_project_dt_2026_03_04",
+            "similarity": 0.125,
+            "rank": 3,
+            "shardId": 2,
+            "proof": {
+              "leaf": "877afaf1418f3da0afa66fa188515e94efda38e7189b86a1d6fa75898793f681",
+              "root": "bae14ba785c6bc3378811d13d760d6e817c9b0cc2d2bc77b95d179ff34c44ccf",
+              "auditPath": [
+                "d09256a8c9394165da24a78380e789c64659b699d7f0846d189e25f25ac63ddb",
+                "d5487b2a0323e1f22db5ce34afc8ed3ffb2f7ec7373648f146d0395ebe06967a",
+                "03decb748ed9208219012b683830427b125815cab748bce7b1cdc9040e5b94c8",
+                "dd09a9d2c6ada1a346ddab9d10c78ca458993e7e24937a2cac3595ff63a741a5",
+                "1f71280de90e1ea4edcd2d3fa708f948db387b9772173c60b1be1124458cdaf4"
+              ],
+              "index": 15
+            }
+          },
+          {
+            "atom": "v1.fact.workflow.glen.step6_run_new_tests_then_full_suite_to_100_percent_pass_src_human_conf_high_scope_project_dt_2026_03_04",
+            "similarity": 0.107143,
+            "rank": 4,
+            "shardId": 2,
+            "proof": {
+              "leaf": "d09256a8c9394165da24a78380e789c64659b699d7f0846d189e25f25ac63ddb",
+              "root": "bae14ba785c6bc3378811d13d760d6e817c9b0cc2d2bc77b95d179ff34c44ccf",
+              "auditPath": [
+                "877afaf1418f3da0afa66fa188515e94efda38e7189b86a1d6fa75898793f681",
+                "d5487b2a0323e1f22db5ce34afc8ed3ffb2f7ec7373648f146d0395ebe06967a",
+                "03decb748ed9208219012b683830427b125815cab748bce7b1cdc9040e5b94c8",
+                "dd09a9d2c6ada1a346ddab9d10c78ca458993e7e24937a2cac3595ff63a741a5",
+                "1f71280de90e1ea4edcd2d3fa708f948db387b9772173c60b1be1124458cdaf4"
+              ],
+              "index": 14
+            }
+          },
+          {
+            "atom": "v1.fact.workflow.glen.step2_research_the_topic_src_human_conf_high_scope_project_dt_2026_03_04",
+            "similarity": 0.090909,
+            "rank": 5,
+            "shardId": 2,
+            "proof": {
+              "leaf": "33b17aa0749ae2142f8045d4240cfcd5b9374c29ce85200623bc615ab638fc1d",
+              "root": "bae14ba785c6bc3378811d13d760d6e817c9b0cc2d2bc77b95d179ff34c44ccf",
+              "auditPath": [
+                "8e452bd62087575041802c39a88f1098649b2d0d78c3de4e55c299e4ba99b637",
+                "d0a559e86482cea8bd9ae11274dda407f05aba901a829571831db583e8ad1d28",
+                "03decb748ed9208219012b683830427b125815cab748bce7b1cdc9040e5b94c8",
+                "dd09a9d2c6ada1a346ddab9d10c78ca458993e7e24937a2cac3595ff63a741a5",
+                "1f71280de90e1ea4edcd2d3fa708f948db387b9772173c60b1be1124458cdaf4"
+              ],
+              "index": 13
+            }
+          },
+          {
+            "atom": "v1.state.workflow.glen_current_mode_scientific_iterative_delivery_src_human_conf_high_scope_project_dt_2026_03_04",
+            "similarity": 0.086957,
+            "rank": 6,
+            "shardId": 0,
+            "proof": {
+              "leaf": "00c7ed0e720aaea0793f278d4ef791644fa938452973538d61a16bf4247473ee",
+              "root": "a52490acfb4a1421fc4447c9726842648c15cf1b30acec2f2c4399fe7781e180",
+              "auditPath": [
+                "2bd3d3ce36477ab06149ab4d52ac7c97163149b566d22cf97ba2a47d23efdec5",
+                "e78f6b71e40e31ec7bee33bbdead0c4e0257c130685bd9318bd88cb9df5efbc1",
+                "058931acc7986c06eb9108d133763e42a35c26c2c1c21d182e9f02f1888730ce",
+                "c78009fdf07fc56a11f122370658a353aaa542ed63e44c4bc15ff4cd105ab33c",
+                "979cdd66e99bd946316dcae6cc03090b87b514d338b91fb1dc8318e7f65e8ce3"
+              ],
+              "index": 19
+            }
+          },
+          {
+            "atom": "v1.fact.workflow.glen.step3_analyze_and_reason_for_suggestions_src_human_conf_high_scope_project_dt_2026_03_04",
+            "similarity": 0.083333,
+            "rank": 7,
+            "shardId": 3,
+            "proof": {
+              "leaf": "3945ce94bcd998d6bd34855230cac0dec9f70aebf28956a61c37c03780564595",
+              "root": "a1a200e1278e8fc167836a165be659307951d9e87977ddc762229202f8f4d5c1",
+              "auditPath": [
+                "d7188dd23e73ca369cb2d01b62141a2ea5859b5bd1314129152395559484d671",
+                "8d6b90ebd0aae969f7ccec9e65973940987ef5b9cbaa5b6693ee282547de8503",
+                "552935330e76af324989aa6fcdda436497c5021c0558864ae190bb03d041a255",
+                "c78009fdf07fc56a11f122370658a353aaa542ed63e44c4bc15ff4cd105ab33c",
+                "e24a2408e3854756bbebc96bd450da1f2a9cc0d9fbbca1be0496cdfe02104785"
+              ],
+              "index": 16
+            }
+          },
+          {
+            "atom": "v1.fact.workflow.glen.step7_update_docs_for_all_required_changes_src_human_conf_high_scope_project_dt_2026_03_04",
+            "similarity": 0.08,
+            "rank": 8,
+            "shardId": 0,
+            "proof": {
+              "leaf": "2bd3d3ce36477ab06149ab4d52ac7c97163149b566d22cf97ba2a47d23efdec5",
+              "root": "a52490acfb4a1421fc4447c9726842648c15cf1b30acec2f2c4399fe7781e180",
+              "auditPath": [
+                "00c7ed0e720aaea0793f278d4ef791644fa938452973538d61a16bf4247473ee",
+                "e78f6b71e40e31ec7bee33bbdead0c4e0257c130685bd9318bd88cb9df5efbc1",
+                "058931acc7986c06eb9108d133763e42a35c26c2c1c21d182e9f02f1888730ce",
+                "c78009fdf07fc56a11f122370658a353aaa542ed63e44c4bc15ff4cd105ab33c",
+                "979cdd66e99bd946316dcae6cc03090b87b514d338b91fb1dc8318e7f65e8ce3"
+              ],
+              "index": 18
+            }
+          },
+          {
+            "atom": "v1.fact.workflow.glen.step1_identify_what_we_are_working_on_src_human_conf_high_scope_project_dt_2026_03_04",
+            "similarity": 0.08,
+            "rank": 9,
+            "shardId": 1,
+            "proof": {
+              "leaf": "fec5f0e2608b5863e2fb799d85f9594471db2dc327865cf5b8d9eafdd071b8ef",
+              "root": "fcd56e6de53f58f6134ec8390fcd213aa2422f9369c0e17ec0de7bf84dc41fa3",
+              "auditPath": [
+                "671a700ee0467a0c204e0c5fa3c1d095ea419aeca8ecd491bbe7ce935759846c",
+                "f5a5fd42d16a20302798ef6ed309979b43003d2320d9f0e8ea9831a92759fb4b",
+                "10a953a8838635726abc603529ae55256b52f4ed3bfc1cfd91b671eb3945190c",
+                "c78009fdf07fc56a11f122370658a353aaa542ed63e44c4bc15ff4cd105ab33c",
+                "ba5358fb08d8e348fc53a570ae00a386a09df277e6b329732b9758864f91dcfd"
+              ],
+              "index": 20
+            }
+          },
+          {
+            "atom": "v1.event.user_requested_real_world_mcp_tests",
+            "similarity": 0.076923,
+            "rank": 10,
+            "shardId": 1,
+            "proof": {
+              "leaf": "4c9f1deb0ca429fc7002864550c4d397ef67262ac927febffa03fb9359d31d0b",
+              "root": "fcd56e6de53f58f6134ec8390fcd213aa2422f9369c0e17ec0de7bf84dc41fa3",
+              "auditPath": [
+                "044c9e4218cab5fc4f7ee3c7b5bff6ab969930a1c64511329ee35a72b9e1a677",
+                "d440f9d0982419c68403f834476609cc6c344a463fd23d21bbac6e0b7b2b80ce",
+                "452ad59b12c829e2f833ae90360fc9aced9ef8796617b6ecd54c7d2757b01ccb",
+                "204da9b060b3736bc50ab14117abdbb5c380300c43957b985ad57e592434c738",
+                "4dd1731bd8b0357e4f4735e92965377b9e2909aa95dd87c5b7931678e80fb7d8"
+              ],
+              "index": 2
+            }
+          }
+        ],
+        "searchTimeMs": 1,
+        "treeVersion": 4
+      }
+    },
+    "searchTech": {
+      "isError": false,
+      "data": {
+        "mode": "semantic",
+        "query": "typescript fastify leveldb vitest mcp",
+        "results": [
+          {
+            "atom": "v1.fact.uses_typescript_fastify_vitest_stack_src_repo_conf_high_scope_project_dt_2026_03_04",
+            "similarity": 0.157895,
+            "rank": 1,
+            "shardId": 0,
+            "proof": {
+              "leaf": "4ece96eefa9c040911c12c63338e7d0b1a2d642c8e60fe4579ce189c8a0dc5c4",
+              "root": "a52490acfb4a1421fc4447c9726842648c15cf1b30acec2f2c4399fe7781e180",
+              "auditPath": [
+                "7752437a78da194b7e64d7b11f93818a3aacb18adc9917cfbd6aa76f67dd5ce7",
+                "0ad9bb15eaaa95542c9250415edb470a6b07af37f9927d7ad1ec2dac7b6b2e0c",
+                "04e9d15ec205c18f830a8ae08d0f682db4d7a82bd14c71aa1633f685c3a9c8cc",
+                "eb78260c9a72847202d27198e72c74059a9386bcc7c27f83efa66b599506a3e0",
+                "152ab146ef0bad3312d278d3c5f09a7fa8a671f5adfc85f850f0b52acbaced38"
+              ],
+              "index": 4
+            }
+          },
+          {
+            "atom": "v1.event.user_requested_real_world_mcp_tests",
+            "similarity": 0.083333,
+            "rank": 2,
+            "shardId": 1,
+            "proof": {
+              "leaf": "4c9f1deb0ca429fc7002864550c4d397ef67262ac927febffa03fb9359d31d0b",
+              "root": "fcd56e6de53f58f6134ec8390fcd213aa2422f9369c0e17ec0de7bf84dc41fa3",
+              "auditPath": [
+                "044c9e4218cab5fc4f7ee3c7b5bff6ab969930a1c64511329ee35a72b9e1a677",
+                "d440f9d0982419c68403f834476609cc6c344a463fd23d21bbac6e0b7b2b80ce",
+                "452ad59b12c829e2f833ae90360fc9aced9ef8796617b6ecd54c7d2757b01ccb",
+                "204da9b060b3736bc50ab14117abdbb5c380300c43957b985ad57e592434c738",
+                "4dd1731bd8b0357e4f4735e92965377b9e2909aa95dd87c5b7931678e80fb7d8"
+              ],
+              "index": 2
+            }
+          },
+          {
+            "atom": "v1.fact.tech.testing_vitest_src_package_conf_high_scope_project_dt_2026_03_04",
+            "similarity": 0.052632,
+            "rank": 3,
+            "shardId": 2,
+            "proof": {
+              "leaf": "8e452bd62087575041802c39a88f1098649b2d0d78c3de4e55c299e4ba99b637",
+              "root": "bae14ba785c6bc3378811d13d760d6e817c9b0cc2d2bc77b95d179ff34c44ccf",
+              "auditPath": [
+                "33b17aa0749ae2142f8045d4240cfcd5b9374c29ce85200623bc615ab638fc1d",
+                "d0a559e86482cea8bd9ae11274dda407f05aba901a829571831db583e8ad1d28",
+                "03decb748ed9208219012b683830427b125815cab748bce7b1cdc9040e5b94c8",
+                "dd09a9d2c6ada1a346ddab9d10c78ca458993e7e24937a2cac3595ff63a741a5",
+                "1f71280de90e1ea4edcd2d3fa708f948db387b9772173c60b1be1124458cdaf4"
+              ],
+              "index": 12
+            }
+          },
+          {
+            "atom": "v1.fact.tech.api_fastify_src_package_conf_high_scope_project_dt_2026_03_04",
+            "similarity": 0.052632,
+            "rank": 4,
+            "shardId": 1,
+            "proof": {
+              "leaf": "df420a42e1c4999da59d6dad8c1977496b5f49e75e5eaabee84c035710113350",
+              "root": "fcd56e6de53f58f6134ec8390fcd213aa2422f9369c0e17ec0de7bf84dc41fa3",
+              "auditPath": [
+                "00cc8a0a71bcf2951e158b426ae9850a07cfa1529edf1dbd92da48c6257aaa61",
+                "d9ffb0065bc1b437eec09a200957ce4fb0defa08d0023bd8fa5e23ef6e729622",
+                "e5419c3afa08981afdb9a649ef2b0f89147c6f3f21cad41607420430d8e7bf8d",
+                "c78009fdf07fc56a11f122370658a353aaa542ed63e44c4bc15ff4cd105ab33c",
+                "ba5358fb08d8e348fc53a570ae00a386a09df277e6b329732b9758864f91dcfd"
+              ],
+              "index": 18
+            }
+          },
+          {
+            "atom": "v1.fact.tech.language_typescript_src_package_conf_high_scope_project_dt_2026_03_04",
+            "similarity": 0.052632,
+            "rank": 5,
+            "shardId": 2,
+            "proof": {
+              "leaf": "5b0ea37c47969df2b88ce35f5333004fe7ffa027b9f614987f627943357e1217",
+              "root": "bae14ba785c6bc3378811d13d760d6e817c9b0cc2d2bc77b95d179ff34c44ccf",
+              "auditPath": [
+                "b3610553bd86fe6b491bfcdfe6c21c0c25b8d5a06e791f30999516cf04406ea1",
+                "a1d4bdc891876c0fe57889ca9e13311598cdc99036e9eaff23dba7dc0a4a81d3",
+                "22dc17335f39dd65f6ce83a5d840576595a4a6ae2dd4e325931921ec16e170a0",
+                "dd09a9d2c6ada1a346ddab9d10c78ca458993e7e24937a2cac3595ff63a741a5",
+                "1f71280de90e1ea4edcd2d3fa708f948db387b9772173c60b1be1124458cdaf4"
+              ],
+              "index": 11
+            }
+          },
+          {
+            "atom": "v1.event.2026_03_04_mcp_stdio_integration_validated_src_test_conf_high_scope_project_dt_2026_03_04",
+            "similarity": 0.05,
+            "rank": 6,
+            "shardId": 1,
+            "proof": {
+              "leaf": "4c841357a9bfaeb9184edc6827100f2b0514b68bb1462a2811b7c421b109ea7d",
+              "root": "fcd56e6de53f58f6134ec8390fcd213aa2422f9369c0e17ec0de7bf84dc41fa3",
+              "auditPath": [
+                "61672c7c0de79db8b501256d64c23b4ac192becadae9dbf7873e979e68dfd7d8",
+                "07408b129c5ea7533cae76f5c4660d5b14fe28e5386c67b2070239cd0a18d123",
+                "0e2863ce9499d4dc1d99ca2fc7466a7d715889ac4d4e1476c0d4f501dbe1f679",
+                "2e51867956e4fffacd0e684caef6c27f5eff186b21301611367113eb81aea89e",
+                "4dd1731bd8b0357e4f4735e92965377b9e2909aa95dd87c5b7931678e80fb7d8"
+              ],
+              "index": 11
+            }
+          },
+          {
+            "atom": "v1.fact.tech.integration_mcp_server_stdio_adapter_src_mcp_conf_high_scope_project_dt_2026_03_04",
+            "similarity": 0.047619,
+            "rank": 7,
+            "shardId": 1,
+            "proof": {
+              "leaf": "00cc8a0a71bcf2951e158b426ae9850a07cfa1529edf1dbd92da48c6257aaa61",
+              "root": "fcd56e6de53f58f6134ec8390fcd213aa2422f9369c0e17ec0de7bf84dc41fa3",
+              "auditPath": [
+                "df420a42e1c4999da59d6dad8c1977496b5f49e75e5eaabee84c035710113350",
+                "d9ffb0065bc1b437eec09a200957ce4fb0defa08d0023bd8fa5e23ef6e729622",
+                "e5419c3afa08981afdb9a649ef2b0f89147c6f3f21cad41607420430d8e7bf8d",
+                "c78009fdf07fc56a11f122370658a353aaa542ed63e44c4bc15ff4cd105ab33c",
+                "ba5358fb08d8e348fc53a570ae00a386a09df277e6b329732b9758864f91dcfd"
+              ],
+              "index": 19
+            }
+          },
+          {
+            "atom": "v1.fact.tech.db_classic_level_leveldb_src_package_conf_high_scope_project_dt_2026_03_04",
+            "similarity": 0.047619,
+            "rank": 8,
+            "shardId": 3,
+            "proof": {
+              "leaf": "2aa42c274820ac95223704e70d22e9f56fd2e9621efd2c4dc6dc2837bd729173",
+              "root": "a1a200e1278e8fc167836a165be659307951d9e87977ddc762229202f8f4d5c1",
+              "auditPath": [
+                "9842f4e104ea93c04251d3409ee431143555ee82c7205b7051fc7f664477c670",
+                "dd5dfd33fba21baa2d4546be61cc215738f5a1891f853f47616c75c40d70402a",
+                "4340e93774672bdb4f70be3fb720cbdf177e33f0dab85f3f5f93554ada90aa84",
+                "4b156634cefd98a2d4a5a5f33129d803f13c7a68e09196ca19ca9b47da246339",
+                "5ef08b4ec8b53c86167a19e40b6720e0fb100a4441a2c289dc14821f2da9a6f4"
+              ],
+              "index": 15
+            }
+          },
+          {
+            "atom": "v1.relation.mcp_tools_wrap_http_endpoints_src_repo_conf_high_scope_project_dt_2026_03_04",
+            "similarity": 0.047619,
+            "rank": 9,
+            "shardId": 3,
+            "proof": {
+              "leaf": "a2d02dcde8c43f4c9ea91c46ec61632b93ecbfd4eff1416ece718dce9b00e283",
+              "root": "a1a200e1278e8fc167836a165be659307951d9e87977ddc762229202f8f4d5c1",
+              "auditPath": [
+                "1fb563c6e43b9b651d9cddad11ab96606eb96705fcd5987cd5a8c7bfc10bbb24",
+                "b60ebb4714d5910ad22bfccf566a9d7b7869e845528ca9987266457e33e3654d",
+                "3a988e0d9cb95a8ed33fb5522cd4d0fe159cc8937ec1811dc24b0e240e962c42",
+                "1bc4e47b0d07bb6c4d12b1b0eaddf86ef8df67740cf2a0bbbf3cf8aa85cfdbe9",
+                "5ef08b4ec8b53c86167a19e40b6720e0fb100a4441a2c289dc14821f2da9a6f4"
+              ],
+              "index": 5
+            }
+          },
+          {
+            "atom": "v1.relation.workflow.step5_precedes_step6_src_human_conf_high_scope_project_dt_2026_03_04",
+            "similarity": 0,
+            "rank": 10,
+            "shardId": 2,
+            "proof": {
+              "leaf": "25c71f6f5335ce0d6e65abaeba61f2045d317ea48c3d63c631e5b79f2dbcfa76",
+              "root": "bae14ba785c6bc3378811d13d760d6e817c9b0cc2d2bc77b95d179ff34c44ccf",
+              "auditPath": [
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                "9c433cedbfb3a70373a52fbaec5c484cc9e9fd25439fb69d57d3561d2146492f",
+                "db56114e00fdd4c1f85c892bf35ac9a89289aaecb1ebd0a96cde606a748b5d71",
+                "c78009fdf07fc56a11f122370658a353aaa542ed63e44c4bc15ff4cd105ab33c",
+                "f98b37103d437363948fd950d7957c7a4aadf5d8624cf0007de17b9f67db7bdd"
+              ],
+              "index": 18
+            }
+          }
+        ],
+        "searchTimeMs": 2,
+        "treeVersion": 4
+      }
+    },
+    "listWorkflow": {
+      "isError": false,
+      "data": {
+        "atoms": [
+          {
+            "atom": "v1.fact.workflow.glen.step5_create_real_world_tests_src_human_conf_high_scope_project_dt_2026_03_04",
+            "status": "active"
+          },
+          {
+            "atom": "v1.fact.workflow.glen.step7_update_docs_for_all_required_changes_src_human_conf_high_scope_project_dt_2026_03_04",
+            "status": "active"
+          },
+          {
+            "atom": "v1.fact.workflow.glen.step1_identify_what_we_are_working_on_src_human_conf_high_scope_project_dt_2026_03_04",
+            "status": "active"
+          },
+          {
+            "atom": "v1.fact.workflow.glen.step2_research_the_topic_src_human_conf_high_scope_project_dt_2026_03_04",
+            "status": "active"
+          },
+          {
+            "atom": "v1.fact.workflow.glen.step6_run_new_tests_then_full_suite_to_100_percent_pass_src_human_conf_high_scope_project_dt_2026_03_04",
+            "status": "active"
+          },
+          {
+            "atom": "v1.fact.workflow.glen.step8_capture_metrics_when_changes_improve_system_src_human_conf_high_scope_project_dt_2026_03_04",
+            "status": "active"
+          },
+          {
+            "atom": "v1.fact.workflow.glen.step3_analyze_and_reason_for_suggestions_src_human_conf_high_scope_project_dt_2026_03_04",
+            "status": "active"
+          },
+          {
+            "atom": "v1.fact.workflow.glen.step4_create_sprint_board_with_logical_items_and_meta_info_src_human_conf_high_scope_project_dt_2026_03_04",
+            "status": "active"
+          }
+        ],
+        "treeVersion": 4
+      }
+    },
+    "verifyProject": {
+      "isError": false,
+      "data": {
+        "atoms": [
+          {
+            "atom": "v1.fact.tech.runtime_nodejs_20_plus_src_readme_conf_high_scope_project_dt_2026_03_04",
+            "status": "active"
+          },
+          {
+            "atom": "v1.fact.tech.metrics_prom_client_prometheus_src_package_conf_high_scope_project_dt_2026_03_04",
+            "status": "active"
+          },
+          {
+            "atom": "v1.fact.tech.api_fastify_src_package_conf_high_scope_project_dt_2026_03_04",
+            "status": "active"
+          },
+          {
+            "atom": "v1.fact.tech.integration_mcp_server_stdio_adapter_src_mcp_conf_high_scope_project_dt_2026_03_04",
+            "status": "active"
+          },
+          {
+            "atom": "v1.fact.tech.language_typescript_src_package_conf_high_scope_project_dt_2026_03_04",
+            "status": "active"
+          },
+          {
+            "atom": "v1.fact.tech.testing_vitest_src_package_conf_high_scope_project_dt_2026_03_04",
+            "status": "active"
+          },
+          {
+            "atom": "v1.fact.tech.db_classic_level_leveldb_src_package_conf_high_scope_project_dt_2026_03_04",
+            "status": "active"
+          }
+        ],
+        "treeVersion": 4
+      }
+    },
+    "contextSummary": {
+      "mode": "context",
+      "estimatedTokens": 658,
+      "maxTokens": 700,
+      "firstEntries": [
+        "v1.relation.workflow.step5_precedes_step6_src_human_conf_high_scope_project_dt_2026_03_04",
+        "v1.event.memory.bootstrap_project_insights_and_workflow_completed_dt_2026_03_04_src_agent_conf_high_scope_project",
+        "v1.relation.workflow.step4_precedes_step5_src_human_conf_high_scope_project_dt_2026_03_04",
+        "v1.state.workflow.glen_current_mode_scientific_iterative_delivery_src_human_conf_high_scope_project_dt_2026_03_04",
+        "v1.relation.workflow.step1_precedes_step2_src_human_conf_high_scope_project_dt_2026_03_04",
+        "v1.fact.workflow.glen.step7_update_docs_for_all_required_changes_src_human_conf_high_scope_project_dt_2026_03_04",
+        "v1.relation.workflow.step6_precedes_step7_src_human_conf_high_scope_project_dt_2026_03_04",
+        "v1.fact.workflow.glen.step8_capture_metrics_when_changes_improve_system_src_human_conf_high_scope_project_dt_2026_03_04",
+        "v1.relation.workflow.step7_precedes_step8_src_human_conf_high_scope_project_dt_2026_03_04",
+        "v1.relation.workflow.step3_precedes_step4_src_human_conf_high_scope_project_dt_2026_03_04"
+      ]
+    }
+  }
+}

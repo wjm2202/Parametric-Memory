@@ -47,6 +47,8 @@ type NamespaceScope = {
     includeGlobal: boolean;
 };
 
+type ContextFormat = 'full' | 'compact';
+
 type FactConflictEntry = {
     atom: string;
     claim: string;
@@ -179,6 +181,30 @@ function parseIncludeGlobal(input: unknown, fallback: boolean): boolean | null {
         if (v === 'false' || v === '0') return false;
     }
     return null;
+}
+
+function parseBooleanFlag(input: unknown, fallback: boolean): boolean | null {
+    if (input === undefined) return fallback;
+    return parseIncludeGlobal(input, fallback);
+}
+
+function stripAtomMetadataSuffix(value: string): string {
+    const lower = value.toLowerCase();
+    const metadataMarkers = ['_src_', '_conf_', '_scope_', '_dt_', '_ns_', '_namespace_'];
+    let end = value.length;
+    for (const marker of metadataMarkers) {
+        const idx = lower.indexOf(marker);
+        if (idx !== -1 && idx < end) end = idx;
+    }
+    return value.slice(0, end).replace(/^_+|_+$/g, '');
+}
+
+function summarizeAtomForCompactContext(atom: string): string {
+    const parsed = parseAtomV1(atom);
+    if (!parsed) return atom;
+    const compactValue = stripAtomMetadataSuffix(parsed.value);
+    if (compactValue.length === 0) return parsed.type;
+    return `${parsed.type}:${compactValue}`;
 }
 
 function parseNamespaceScope(
@@ -1182,11 +1208,11 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
 
     /**
      * GET /memory/context  —  Build a compact context block from active atoms.
-     * Query: ?maxTokens=<positive integer, default 512, max 8000>
+     * Query: ?maxTokens=<positive integer, default 512, max 8000>&compact=<boolean>
      */
     server.get('/memory/context', async (request, reply) => {
         const query = (request.query ?? {}) as Record<string, unknown>;
-        const { maxTokens } = query as { maxTokens?: unknown };
+        const { maxTokens, objectiveRank } = query as { maxTokens?: unknown, objectiveRank?: unknown };
         const budget = maxTokens === undefined ? DEFAULT_CONTEXT_MAX_TOKENS : parseMaxTokens(maxTokens);
         if (budget === null) {
             return reply.status(400).send({ error: "Query param 'maxTokens' must be a positive integer <= 8000." });
@@ -1197,10 +1223,21 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             return reply.status(400).send({ error: "Namespace query params invalid. Use namespaceUser/namespaceProject/namespaceTask with [a-z0-9_-], includeGlobal as boolean." });
         }
 
+        const compact = parseBooleanFlag(query.compact, false);
+        if (compact === null) {
+            return reply.status(400).send({ error: "Query param 'compact' must be boolean when provided." });
+        }
+        const contextFormat: ContextFormat = compact ? 'compact' : 'full';
+
+        const rankByObjective = parseBooleanFlag(objectiveRank, false);
+        if (objectiveRank !== undefined && rankByObjective === null) {
+            return reply.status(400).send({ error: "Query param 'objectiveRank' must be boolean when provided." });
+        }
+
         const temporal = resolveTemporalScope(query.asOfMs, query.asOfVersion);
         if (!temporal.ok) return reply.status(temporal.statusCode).send({ error: temporal.error });
 
-        const activeAtoms = orchestrator
+        let activeAtoms = orchestrator
             .listAtoms()
             .filter(entry => entry.status === 'active')
             .filter(entry => matchesNamespaceScope(entry.atom, namespaceScope))
@@ -1210,8 +1247,30 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
                 if (temporal.scope.effectiveAsOfMs === null) return true;
                 return entry.createdAtMs <= temporal.scope.effectiveAsOfMs;
             })
-            .filter((entry): entry is NonNullable<ReturnType<typeof orchestrator.inspectAtom>> => entry !== null)
-            .sort((a, b) => b.createdAtMs - a.createdAtMs);
+            .filter((entry): entry is NonNullable<ReturnType<typeof orchestrator.inspectAtom>> => entry !== null);
+
+        // If objective-aware ranking is requested, sort by relevance to current objective
+        if (rankByObjective) {
+            // Use the most recent 'objective' atom as the ranking reference
+            const objectiveAtom = activeAtoms.find(a => a.atom.includes('objective_'));
+            const objectiveText = objectiveAtom ? parseAtomV1(objectiveAtom.atom)?.value ?? '' : '';
+            activeAtoms = activeAtoms
+                .map(entry => {
+                    const parsed = parseAtomV1(entry.atom);
+                    const semanticText = parsed ? `${parsed.type} ${parsed.value} ${entry.atom}` : entry.atom;
+                    const relevance = objectiveText ? semanticSimilarityScore(objectiveText, semanticText) : 0;
+                    return { entry, relevance };
+                })
+                .sort((a, b) => {
+                    if (b.relevance !== a.relevance) return b.relevance - a.relevance;
+                    if (b.entry.createdAtMs !== a.entry.createdAtMs) return b.entry.createdAtMs - a.entry.createdAtMs;
+                    return a.entry.atom.localeCompare(b.entry.atom);
+                })
+                .map(row => row.entry);
+        } else {
+            // Default: sort by recency
+            activeAtoms = activeAtoms.sort((a, b) => b.createdAtMs - a.createdAtMs);
+        }
 
         const conflictIndex = buildFactConflictIndex(activeAtoms.map(entry => ({
             atom: entry.atom,
@@ -1235,7 +1294,9 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
         for (const item of activeAtoms) {
             const dominantNext = item.outgoingTransitions[0]?.to ?? null;
             const contradiction = getFactConflictForAtom(item.atom, conflictIndex);
-            const line = `${item.atom} | createdAtMs=${item.createdAtMs} | transitions=${item.outgoingTransitions.length}${dominantNext ? ` | dominantNext=${dominantNext}` : ''}${contradiction.hasConflict ? ` | conflictKey=${contradiction.conflictKey}` : ''}`;
+            const line = contextFormat === 'compact'
+                ? `${summarizeAtomForCompactContext(item.atom)} | t=${item.outgoingTransitions.length}${dominantNext ? ` | next=${summarizeAtomForCompactContext(dominantNext)}` : ''}${contradiction.hasConflict ? ' | conflict=1' : ''}`
+                : `${item.atom} | createdAtMs=${item.createdAtMs} | transitions=${item.outgoingTransitions.length}${dominantNext ? ` | dominantNext=${dominantNext}` : ''}${contradiction.hasConflict ? ` | conflictKey=${contradiction.conflictKey}` : ''}`;
             const lineTokens = estimateTokens(line) + 1;
             if (estimatedTokens + lineTokens > budget) break;
 
@@ -1252,6 +1313,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
 
         return {
             mode: 'context',
+            contextFormat,
             context: lines.join('\n'),
             namespace: namespaceScope,
             temporal: temporal.scope,
@@ -1261,6 +1323,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             maxTokens: budget,
             treeVersion: orchestrator.getMasterVersion(),
             generatedAtMs: Date.now(),
+            objectiveRank: !!rankByObjective,
         };
     });
 
@@ -1528,6 +1591,61 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
         return {
             queuedInPipeline: pipeline.getQueuedAtoms(),
             pipelineStats: stats,
+        };
+    });
+
+    /**
+     * GET /atoms/stale  —  List active atoms that haven't been accessed or updated
+     * in more than `maxAgeDays` days (default: 30).  Optionally filter by type.
+     *
+     * Query params:
+     *   maxAgeDays  — integer > 0, default 30
+     *   type        — fact | event | relation | state | other (optional filter)
+     *
+     * Returns: { stale: [{ atom, type, createdAtMs, ageDays }], count, asOfMs, maxAgeDays }
+     */
+    server.get('/atoms/stale', async (request, reply) => {
+        const query = (request.query ?? {}) as { maxAgeDays?: unknown; type?: unknown };
+
+        const rawMaxAge = query.maxAgeDays !== undefined ? parseInt(String(query.maxAgeDays), 10) : 30;
+        if (!Number.isInteger(rawMaxAge) || rawMaxAge <= 0) {
+            return reply.status(400).send({ error: "Query param 'maxAgeDays' must be a positive integer." });
+        }
+
+        if (query.type !== undefined && !isAtomType(query.type)) {
+            return reply.status(400).send({ error: "Query param 'type' must be one of: fact,event,relation,state,other." });
+        }
+
+        const now = Date.now();
+        const cutoffMs = now - rawMaxAge * 24 * 60 * 60 * 1000;
+
+        const allAtoms = orchestrator.listAtoms();
+        const activeAtoms = allAtoms.filter(e => e.status === 'active');
+
+        const staleEntries: { atom: string; type: string; createdAtMs: number; ageDays: number }[] = [];
+
+        for (const entry of activeAtoms) {
+            const parsed = parseAtomV1(entry.atom);
+            if (!parsed) continue;
+            if (query.type !== undefined && parsed.type !== query.type) continue;
+
+            const record = orchestrator.inspectAtom(entry.atom);
+            if (!record) continue;
+
+            if (record.createdAtMs <= cutoffMs) {
+                const ageDays = Math.floor((now - record.createdAtMs) / (24 * 60 * 60 * 1000));
+                staleEntries.push({ atom: entry.atom, type: parsed.type, createdAtMs: record.createdAtMs, ageDays });
+            }
+        }
+
+        // Sort oldest-first so the most stale atoms are easiest to identify
+        staleEntries.sort((a, b) => a.createdAtMs - b.createdAtMs);
+
+        return {
+            stale: staleEntries,
+            count: staleEntries.length,
+            asOfMs: now,
+            maxAgeDays: rawMaxAge,
         };
     });
 

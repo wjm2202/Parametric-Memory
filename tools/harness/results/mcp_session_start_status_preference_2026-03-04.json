@@ -1,0 +1,196 @@
+{
+  "add": {
+    "isError": false,
+    "data": {
+      "status": "Queued",
+      "batchId": 6,
+      "queued": 4,
+      "commitEtaMs": 1000
+    }
+  },
+  "commit": {
+    "isError": false,
+    "data": {
+      "status": "Committed",
+      "flushedCount": 4
+    }
+  },
+  "train": {
+    "isError": false,
+    "data": {
+      "status": "Success",
+      "message": "Trained path of length 3 across shards."
+    }
+  },
+  "verify": {
+    "isError": false,
+    "data": {
+      "mode": "semantic",
+      "query": "glen current sprint status summary session start preference",
+      "results": [
+        {
+          "atom": "v1.fact.workflow.glen.require_current_sprint_status_summary_at_session_start_src_human_conf_high_scope_project_dt_2026_03_04",
+          "similarity": 0.304348,
+          "rank": 1,
+          "shardId": 3,
+          "proof": {
+            "leaf": "76a10f06c728508beec3be493cebe66ddda9dd03eae8c5fb842cbedbefd30abd",
+            "root": "6b41a728a7ca972841db5b416d1fce508acb1d4483c94dfcf80ed4b25b5cd7d8",
+            "auditPath": [
+              "cfb80f3cee7db471ef0d4d49a04c0a2d1a0d2b2f9c8a98fa450d4ccda944df7b",
+              "7c27f2f3355e86ffcd84538c69a90ac210f6be5c36c49d8c46ca34a23d604bc0",
+              "db56114e00fdd4c1f85c892bf35ac9a89289aaecb1ebd0a96cde606a748b5d71",
+              "f73641edac4900c33dde96b05826fbe57fa2192c0d7bd92ca7088586afa1fd15",
+              "ef1fe0c723ebb99bb8ea66e96c5df70ab8fb8a0b453c7c8d2da4121981b74a25",
+              "9efde052aa15429fae05bad4d0b1d7c64da64d03d7a1854a588c2cb8430c0d30",
+              "ebd093a3bba705d70bda2ff47cca55e342dda0e248750432c284a81baa6e7d20"
+            ],
+            "index": 90
+          }
+        },
+        {
+          "atom": "v1.relation.workflow.session_start_requires_current_sprint_status_summary_src_human_conf_high_scope_project_dt_2026_03_04",
+          "similarity": 0.272727,
+          "rank": 2,
+          "shardId": 3,
+          "proof": {
+            "leaf": "cfb80f3cee7db471ef0d4d49a04c0a2d1a0d2b2f9c8a98fa450d4ccda944df7b",
+            "root": "6b41a728a7ca972841db5b416d1fce508acb1d4483c94dfcf80ed4b25b5cd7d8",
+            "auditPath": [
+              "76a10f06c728508beec3be493cebe66ddda9dd03eae8c5fb842cbedbefd30abd",
+              "7c27f2f3355e86ffcd84538c69a90ac210f6be5c36c49d8c46ca34a23d604bc0",
+              "db56114e00fdd4c1f85c892bf35ac9a89289aaecb1ebd0a96cde606a748b5d71",
+              "f73641edac4900c33dde96b05826fbe57fa2192c0d7bd92ca7088586afa1fd15",
+              "ef1fe0c723ebb99bb8ea66e96c5df70ab8fb8a0b453c7c8d2da4121981b74a25",
+              "9efde052aa15429fae05bad4d0b1d7c64da64d03d7a1854a588c2cb8430c0d30",
+              "ebd093a3bba705d70bda2ff47cca55e342dda0e248750432c284a81baa6e7d20"
+            ],
+            "index": 91
+          }
+        },
+        {
+          "atom": "v1.event.workflow.preference_session_start_status_summary_confirmed_dt_2026_03_04_src_human_conf_high_scope_project",
+          "similarity": 0.227273,
+          "rank": 3,
+          "shardId": 1,
+          "proof": {
+            "leaf": "5da119e12588d4f945d354c6e2cd226ebd12d61e5fe532e0732e02e7cbefb6c0",
+            "root": "412884966e617e6dd57f1c75923988a202a066cdebdfb153ce1e52063ade2605",
+            "auditPath": [
+              "e7b7d58a2c4d19298f92c7a383e087aea9644d558bafeed279479146ccc6ae73",
+              "a13d63cd58886901d13a952e61127de713df4c6142a3d258da166f70ffbb4b5a",
+              "db56114e00fdd4c1f85c892bf35ac9a89289aaecb1ebd0a96cde606a748b5d71",
+              "c78009fdf07fc56a11f122370658a353aaa542ed63e44c4bc15ff4cd105ab33c",
+              "536d98837f2dd165a55d5eeae91485954472d56f246df256bf3cae19352a123c",
+              "9efde052aa15429fae05bad4d0b1d7c64da64d03d7a1854a588c2cb8430c0d30",
+              "a3e71168db19e40c8649fb92dfbf047d3ff7035562a0fdfa3dcb576fdaf460ab"
+            ],
+            "index": 67
+          }
+        },
+        {
+          "atom": "v1.state.workflow.glen_prefers_auto_current_sprint_status_each_session_src_human_conf_high_scope_project_dt_2026_03_04",
+          "similarity": 0.208333,
+          "rank": 4,
+          "shardId": 0,
+          "proof": {
+            "leaf": "0853556c794c69badf46ad2d01b3c8ca20e89db81bee895bf7e8e387a06902ca",
+            "root": "02dce90938acb6918e5e94d035d176da31dc0ed6318f367d479da0345fda6bf1",
+            "auditPath": [
+              "0000000000000000000000000000000000000000000000000000000000000000",
+              "f5a5fd42d16a20302798ef6ed309979b43003d2320d9f0e8ea9831a92759fb4b",
+              "db56114e00fdd4c1f85c892bf35ac9a89289aaecb1ebd0a96cde606a748b5d71",
+              "c78009fdf07fc56a11f122370658a353aaa542ed63e44c4bc15ff4cd105ab33c",
+              "536d98837f2dd165a55d5eeae91485954472d56f246df256bf3cae19352a123c",
+              "9efde052aa15429fae05bad4d0b1d7c64da64d03d7a1854a588c2cb8430c0d30",
+              "681936be33fe6225d6db1b6110d6ba19148eefafe12d3d754e9d737f7ee03ad3"
+            ],
+            "index": 64
+          }
+        },
+        {
+          "atom": "v1.state.sprint.board_status_active_scope_project_src_repo_conf_high_dt_2026_03_04",
+          "similarity": 0.090909,
+          "rank": 5,
+          "shardId": 0,
+          "proof": {
+            "leaf": "29d9842860bc9bb90b2b87c50672f74780d7a11afb3e544900f4d9ce9bfca319",
+            "root": "02dce90938acb6918e5e94d035d176da31dc0ed6318f367d479da0345fda6bf1",
+            "auditPath": [
+              "98dba4d4f995eca356dac3887837d1eb59793d909a5838f3e3dddc12cd741b12",
+              "f78e8614df9034ef34bc94005e97f6c46f41e56376a0faa848efcf99fe891718",
+              "898c0e94f572c84a2bdc9660fcc2734e1b19b1dea65f3648da73072dc4fb3cb4",
+              "888ea42b6cf6627099beaf6ce3d1c09f87aecdf091ebfdbda6b656adca691cec",
+              "979cdd66e99bd946316dcae6cc03090b87b514d338b91fb1dc8318e7f65e8ce3",
+              "3182b65d0d07901f5bf5286a2e445e9b2c21b23a0dd24e5df263926fe51f3989",
+              "c452277f329b712d003ae3387d6527709aeee1cc2e2dcd2e77b934a1a561ba9c"
+            ],
+            "index": 21
+          }
+        },
+        {
+          "atom": "v1.state.current_focus_operationalize_weekly_verification_src_session_conf_high_scope_session_dt_2026_03_04",
+          "similarity": 0.090909,
+          "rank": 6,
+          "shardId": 3,
+          "proof": {
+            "leaf": "5530f381e582e83d073ab84aaa80deda524a4dc2abefbabf104d613fc78c126c",
+            "root": "6b41a728a7ca972841db5b416d1fce508acb1d4483c94dfcf80ed4b25b5cd7d8",
+            "auditPath": [
+              "43a7268201c1c5beb7c2cf77056f2db43a273e7ae034d0d74f748ae008144948",
+              "6520b559d3ab33957cd2e49d9792495b24f9dccc99e6526787906fa93643f08e",
+              "4ccb185d20a7f81fb7a083393585e55d67d5504ca19d85e654474fd900e57bbc",
+              "4b156634cefd98a2d4a5a5f33129d803f13c7a68e09196ca19ca9b47da246339",
+              "d1fc913fa41ab96d32441560399c91a6d4e41246d220765a872edf6b1abf9775",
+              "164bdb01e0318e22175535bac8f0c00383ed97d12e2fe243737044f027357956",
+              "5861a426d2e9b20e15c0306b033fbf6452b2a02c7fb54306d8001623c52e7de4"
+            ],
+            "index": 11
+          }
+        },
+        {
+          "atom": "v1.fact.sprint.item_11_3_cold_start_type_fallback_in_warm_read_priority_p1_size_s_status_done_src_plan_conf_high_scope_project_dt_2026_03_04",
+          "similarity": 0.088235,
+          "rank": 7,
+          "shardId": 2,
+          "proof": {
+            "leaf": "3696681a22d2cd91f0899c8556e6bce0daa964c7a35d4e6061b3a58cb0799dd7",
+            "root": "3b38b763726f89d7e7d277af4ce50b6cca23f001056cca689dfe984f5d39d05d",
+            "auditPath": [
+              "46b2a8193eef30b2ffb26993c9c3a5d8809d2f38cac2aaf246bc91617f5a0965",
+              "e0f8fed07ffd60295dd6f04728f6005383039ffb37aa22f84b35fd1ef4a21e5c",
+              "21a91e5fed2724d7b52066763c4c4f76d3652eea9f4e266b233b3d0802db94f2",
+              "2b52ccfa5b90100aac65e7e55186eaed32a92a3641c74d868d826d00e10bc437",
+              "81a68c6237ef5f6a8704b759d5cd3adca14e77820ccb5f99b75572a4087d51c6",
+              "982b84ebe8246b6bada9506050ae12bace60091488a4eb0870cddc74a307f7c9",
+              "93f0f7cff0a13bf9b81f127eb102bb0c46f1db6a1bf86845c3dbf2039da5769d"
+            ],
+            "index": 38
+          }
+        },
+        {
+          "atom": "v1.state.sprint.item_5_5_status_done_src_plan_conf_high_scope_project_dt_2026_03_04",
+          "similarity": 0.086957,
+          "rank": 8,
+          "shardId": 3,
+          "proof": {
+            "leaf": "a4a0dde131225ba7bc0e5ad4210dde8e1d4cca3b4b75a09439d8f0dc2f48fbbf",
+            "root": "6b41a728a7ca972841db5b416d1fce508acb1d4483c94dfcf80ed4b25b5cd7d8",
+            "auditPath": [
+              "f43e6a5d78279b6fa69a3f84a0571baa2c864bfbce52be48783fd508b222ac5f",
+              "8b4be064d025de4d5641e0bafcde4982f9013dc44048755e2a5d178c2d89bc58",
+              "306ba490187c120c8f3182df16a32a7baecad7412385a298c92f7f2c3ab851fb",
+              "a1921211339c7e645c45c3a3b51913ae08312059c536b383e8a4116c4c906ab4",
+              "301c344c015b0708bd556873cf1bacba72d0eb403449b29441444aec63d9ca73",
+              "d3c97b92be50983ba2515a5eb72fc7c80b51baec9b95b9b0e7128c69ebc496bf",
+              "5861a426d2e9b20e15c0306b033fbf6452b2a02c7fb54306d8001623c52e7de4"
+            ],
+            "index": 38
+          }
+        }
+      ],
+      "searchTimeMs": 3,
+      "treeVersion": 6
+    }
+  }
+}

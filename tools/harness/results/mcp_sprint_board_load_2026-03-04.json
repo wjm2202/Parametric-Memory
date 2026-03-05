@@ -1,0 +1,252 @@
+{
+  "source": "MMPM_REFACTOR_PLAN.txt",
+  "parsedStories": 51,
+  "write": {
+    "add": {
+      "isError": false,
+      "data": {
+        "status": "Queued",
+        "batchId": 5,
+        "queued": 205,
+        "commitEtaMs": 1000
+      }
+    },
+    "commit": {
+      "isError": false,
+      "data": {
+        "status": "Committed",
+        "flushedCount": 0
+      }
+    },
+    "train": {
+      "isError": false,
+      "data": {
+        "status": "Success",
+        "message": "Trained path of length 20 across shards."
+      }
+    }
+  },
+  "recall": {
+    "topSearch": {
+      "isError": false,
+      "data": {
+        "mode": "semantic",
+        "query": "mmpm sprint board refactor stories priority status",
+        "results": [
+          {
+            "atom": "v1.fact.sprint.board_mmpm_refactor_source_mmpm_refactor_plan_conf_high_scope_project_dt_2026_03_04",
+            "similarity": 0.210526,
+            "rank": 1,
+            "shardId": 3,
+            "proof": {
+              "leaf": "907a9c2a2ff6c8539d86af3e77b587e0c2e62579e1ebffb947c7a8c1e651131d",
+              "root": "842524f941c67834a4be84c86909ee65407733db0203c521464bae7aebcf8695",
+              "auditPath": [
+                "526aea909d0bc48f74c1474655d8bcbd37f1b45b30358258113f2a73ce398a19",
+                "5f97b9c15a0e63ca75cb57d62f4af55f0d248e943101314f0a7ab39fcf7afc59",
+                "f1a4bce323b3c83e0a76337b7941fac7aa5c9750b1ded393f0ff7745e0252c62",
+                "319fafd26ba53a44548b02c701b4eb79ea629eed8644b7c4e810e3627575b886",
+                "e24a2408e3854756bbebc96bd450da1f2a9cc0d9fbbca1be0496cdfe02104785",
+                "164bdb01e0318e22175535bac8f0c00383ed97d12e2fe243737044f027357956",
+                "8c5f540e253a6993d1b7235159763108c9bde3de14b0e1520a4a4a57303dae37"
+              ],
+              "index": 21
+            }
+          },
+          {
+            "atom": "v1.state.sprint.board_status_active_scope_project_src_repo_conf_high_dt_2026_03_04",
+            "similarity": 0.15,
+            "rank": 2,
+            "shardId": 0,
+            "proof": {
+              "leaf": "29d9842860bc9bb90b2b87c50672f74780d7a11afb3e544900f4d9ce9bfca319",
+              "root": "681936be33fe6225d6db1b6110d6ba19148eefafe12d3d754e9d737f7ee03ad3",
+              "auditPath": [
+                "98dba4d4f995eca356dac3887837d1eb59793d909a5838f3e3dddc12cd741b12",
+                "f78e8614df9034ef34bc94005e97f6c46f41e56376a0faa848efcf99fe891718",
+                "898c0e94f572c84a2bdc9660fcc2734e1b19b1dea65f3648da73072dc4fb3cb4",
+                "888ea42b6cf6627099beaf6ce3d1c09f87aecdf091ebfdbda6b656adca691cec",
+                "979cdd66e99bd946316dcae6cc03090b87b514d338b91fb1dc8318e7f65e8ce3",
+                "3182b65d0d07901f5bf5286a2e445e9b2c21b23a0dd24e5df263926fe51f3989"
+              ],
+              "index": 21
+            }
+          },
+          {
+            "atom": "v1.fact.sprint.item_9_7_regression_tracking_priority_p2_size_s_status_done_src_plan_conf_high_scope_project_dt_2026_03_04",
+            "similarity": 0.107143,
+            "rank": 3,
+            "shardId": 0,
+            "proof": {
+              "leaf": "1a55cc5c2c4802b6db301f7e5291deb72a1a8422ead70baabc66e630e4905bb7",
+              "root": "681936be33fe6225d6db1b6110d6ba19148eefafe12d3d754e9d737f7ee03ad3",
+              "auditPath": [
+                "ceb180ccd420ea3eeaa33297dc034b5e70f79e8cdffc141ed914e1f7e33f928e",
+                "6958d16294984b262ea95b49084c73c935a634b9f682423d70d3f440f7a7f0b2",
+                "a1cbf4b51b8093e271c80753be9c8a1dcc9bb995b7a8defb5bb92fe87f9a2fdf",
+                "822f251b914cf8c98ca512dee64720fd3855fddbfabc2c1ae406e53384363f3c",
+                "fa5b913182621dbfa7f00b57ca09d6481ec58c0827b2c519e47590175718c726",
+                "837031a49a3d0b35b9aeab2eebd7852d55ed49afe2917ccf6f2eac243d4fca27"
+              ],
+              "index": 34
+            }
+          },
+          {
+            "atom": "v1.fact.sprint.item_4_1_implement_incrementalmerkletree_priority_p1_size_l_status_done_src_plan_conf_high_scope_project_dt_2026_03_04",
+            "similarity": 0.107143,
+            "rank": 4,
+            "shardId": 3,
+            "proof": {
+              "leaf": "f9e8b270787e463aa386b03cc33cd36500d5f48cc5540f1dac4ca223157fbd41",
+              "root": "842524f941c67834a4be84c86909ee65407733db0203c521464bae7aebcf8695",
+              "auditPath": [
+                "a915abb8e3d17976f5b53a56109c8355903dd346b8311f2f1d7c4352b11c3075",
+                "66a414a8df6f4f2cde51369bc4531f23a438f0262030377b414b44ae37694ed5",
+                "7e28480b5f0b92a3ebdf199ae18dc7fce6d2d7b5ac6739758c99cf95b81d90a4",
+                "0ccbcdcf974ffb3caa5ed3ee59fe74dd6d621b815ff04780f66ee48a89b95f3e",
+                "e24a2408e3854756bbebc96bd450da1f2a9cc0d9fbbca1be0496cdfe02104785",
+                "164bdb01e0318e22175535bac8f0c00383ed97d12e2fe243737044f027357956",
+                "8c5f540e253a6993d1b7235159763108c9bde3de14b0e1520a4a4a57303dae37"
+              ],
+              "index": 31
+            }
+          },
+          {
+            "atom": "v1.fact.sprint.item_3_1_implement_epochmanager_priority_p0_size_m_status_done_src_plan_conf_high_scope_project_dt_2026_03_04",
+            "similarity": 0.107143,
+            "rank": 5,
+            "shardId": 3,
+            "proof": {
+              "leaf": "5bb7ab779a92f3ba3a296c5cc87f778ceb5c66fdbc2b9d53cb22aefead586c80",
+              "root": "842524f941c67834a4be84c86909ee65407733db0203c521464bae7aebcf8695",
+              "auditPath": [
+                "ccddcf49b8daa3d72bb89c3c4fd49cd0fba30d8caf278688b14f1da6803bce70",
+                "10793c6e6ad4174cdc82040a803a9299c62d1910b06cd10262caf55f645991df",
+                "83bc4d7a10b5f8cd17988c51c4acb20f34e115a5d54937b79aef0b66b4778e07",
+                "0ccbcdcf974ffb3caa5ed3ee59fe74dd6d621b815ff04780f66ee48a89b95f3e",
+                "e24a2408e3854756bbebc96bd450da1f2a9cc0d9fbbca1be0496cdfe02104785",
+                "164bdb01e0318e22175535bac8f0c00383ed97d12e2fe243737044f027357956",
+                "8c5f540e253a6993d1b7235159763108c9bde3de14b0e1520a4a4a57303dae37"
+              ],
+              "index": 27
+            }
+          },
+          {
+            "atom": "v1.fact.sprint.item_2_2_implement_wal_recovery_priority_p0_size_m_status_done_src_plan_conf_high_scope_project_dt_2026_03_04",
+            "similarity": 0.107143,
+            "rank": 6,
+            "shardId": 2,
+            "proof": {
+              "leaf": "7171e5cf0167ddb5f850ba7d4a1c3ada922c984444dc004dbd76ec7c0ec76837",
+              "root": "3b38b763726f89d7e7d277af4ce50b6cca23f001056cca689dfe984f5d39d05d",
+              "auditPath": [
+                "580a78313f9916e7f21c7106c87993fcc46e1ec0ea233b5bdab8bd86583d7cb0",
+                "d12f6a86897434c69a65b15ba6e5fca95e548ce4e9d46be4d9df7430c29303b5",
+                "8bd718246c1f28e3dd19989dcf9c8bc834d6136f796ee23e046a133201fd3397",
+                "0bfdad8546bec8a54d35a69d82b5bff883b27e85352cac89bbdd26f672131d32",
+                "f98b37103d437363948fd950d7957c7a4aadf5d8624cf0007de17b9f67db7bdd",
+                "849013d0d267b2b082075a7541582eabe36b4b845870673538050f80b9031df2",
+                "93f0f7cff0a13bf9b81f127eb102bb0c46f1db6a1bf86845c3dbf2039da5769d"
+              ],
+              "index": 23
+            }
+          },
+          {
+            "atom": "v1.fact.sprint.item_2_3_wal_compaction_priority_p1_size_s_status_done_src_plan_conf_high_scope_project_dt_2026_03_04",
+            "similarity": 0.107143,
+            "rank": 7,
+            "shardId": 3,
+            "proof": {
+              "leaf": "ccddcf49b8daa3d72bb89c3c4fd49cd0fba30d8caf278688b14f1da6803bce70",
+              "root": "842524f941c67834a4be84c86909ee65407733db0203c521464bae7aebcf8695",
+              "auditPath": [
+                "5bb7ab779a92f3ba3a296c5cc87f778ceb5c66fdbc2b9d53cb22aefead586c80",
+                "10793c6e6ad4174cdc82040a803a9299c62d1910b06cd10262caf55f645991df",
+                "83bc4d7a10b5f8cd17988c51c4acb20f34e115a5d54937b79aef0b66b4778e07",
+                "0ccbcdcf974ffb3caa5ed3ee59fe74dd6d621b815ff04780f66ee48a89b95f3e",
+                "e24a2408e3854756bbebc96bd450da1f2a9cc0d9fbbca1be0496cdfe02104785",
+                "164bdb01e0318e22175535bac8f0c00383ed97d12e2fe243737044f027357956",
+                "8c5f540e253a6993d1b7235159763108c9bde3de14b0e1520a4a4a57303dae37"
+              ],
+              "index": 26
+            }
+          },
+          {
+            "atom": "v1.fact.sprint.item_11_1_implement_transitionpolicy_class_priority_p1_size_s_status_done_src_plan_conf_high_scope_project_dt_2026_03_04",
+            "similarity": 0.103448,
+            "rank": 8,
+            "shardId": 3,
+            "proof": {
+              "leaf": "8b0a2008602b74e4eb29cb507aabaa7a605228f20462ce1d6aa26a5741d17058",
+              "root": "842524f941c67834a4be84c86909ee65407733db0203c521464bae7aebcf8695",
+              "auditPath": [
+                "ad43d7ada5cfd833e9b1f3a224d60108edadc670c23161fdbf25c7fc41f01061",
+                "3e08191cf91130ee0796c815a7bef6cd9b06ee4dc8a3a2e6614369263d2103b5",
+                "8cc55ab02b96f19c90c68065ae4a59b264dbec3812301e62a31d91bf94d2d4a4",
+                "87a4209f20ee34df55784de154ae5fc26468fbc72c3f555de9c8d4c1796ce95d",
+                "7207dd7981af538f82949da73b7368bb90ef183ad3bf4493b713628d632d26c5",
+                "d3c97b92be50983ba2515a5eb72fc7c80b51baec9b95b9b0e7128c69ebc496bf",
+                "8c5f540e253a6993d1b7235159763108c9bde3de14b0e1520a4a4a57303dae37"
+              ],
+              "index": 54
+            }
+          },
+          {
+            "atom": "v1.fact.sprint.item_8_4_performance_benchmark_suite_priority_p2_size_s_status_done_src_plan_conf_high_scope_project_dt_2026_03_04",
+            "similarity": 0.103448,
+            "rank": 9,
+            "shardId": 3,
+            "proof": {
+              "leaf": "b29a64e7d3b292e423b8999d6891cfeea03868fee55b604f936172b36b7a5891",
+              "root": "842524f941c67834a4be84c86909ee65407733db0203c521464bae7aebcf8695",
+              "auditPath": [
+                "73486e99694c639c4cfb511a54259facc4868f175c05872749548ad01ea689f9",
+                "ea82143fa1cc3151b9840ee436f44d983374bf573baa41f76b76b0927438056e",
+                "3254f0901ffe66663310f2b0cdcd8a9772e905e7a1a95ddf45e4fe6e71fc0362",
+                "8343652061ba6579b1dd2f1f04ee506d1b80a13fc5a2aa27620cc572f9d3901e",
+                "301c344c015b0708bd556873cf1bacba72d0eb403449b29441444aec63d9ca73",
+                "d3c97b92be50983ba2515a5eb72fc7c80b51baec9b95b9b0e7128c69ebc496bf",
+                "8c5f540e253a6993d1b7235159763108c9bde3de14b0e1520a4a4a57303dae37"
+              ],
+              "index": 45
+            }
+          },
+          {
+            "atom": "v1.fact.sprint.item_7_4_health_check_endpoint_priority_p2_size_xs_status_done_src_plan_conf_high_scope_project_dt_2026_03_04",
+            "similarity": 0.103448,
+            "rank": 10,
+            "shardId": 3,
+            "proof": {
+              "leaf": "7ed613383d9eb7e3b1e15a7dab0e432226ca70a1d11df92ab89aad9e79a44289",
+              "root": "842524f941c67834a4be84c86909ee65407733db0203c521464bae7aebcf8695",
+              "auditPath": [
+                "611dbd4af5094fdeb4d2ec43830c6cd68ca98d2ea2e25527e14c65fa90600f09",
+                "249ce829a3e706ef4577711cd99b164d4cad17b73282ebef564903312bc9b715",
+                "481819b062f3a8f9244dc6b5b2821b87a29006ec6c175750f61ba56da9bec12b",
+                "8343652061ba6579b1dd2f1f04ee506d1b80a13fc5a2aa27620cc572f9d3901e",
+                "301c344c015b0708bd556873cf1bacba72d0eb403449b29441444aec63d9ca73",
+                "d3c97b92be50983ba2515a5eb72fc7c80b51baec9b95b9b0e7128c69ebc496bf",
+                "8c5f540e253a6993d1b7235159763108c9bde3de14b0e1520a4a4a57303dae37"
+              ],
+              "index": 43
+            }
+          }
+        ],
+        "searchTimeMs": 19,
+        "treeVersion": 5
+      }
+    },
+    "itemCount": 50,
+    "relationCount": 50,
+    "sampleItems": [
+      "v1.fact.sprint.item_1_5_update_masterkernel_for_snapshot_model_priority_p1_size_s_status_done_src_plan_conf_high_scope_project_dt_2026_03_04",
+      "v1.fact.sprint.item_3_3_add_commit_scheduling_policy_priority_p1_size_s_status_done_src_plan_conf_high_scope_project_dt_2026_03_04",
+      "v1.fact.sprint.item_8_1_concurrent_read_write_stress_test_priority_p0_size_l_status_done_src_plan_conf_high_scope_project_dt_2026_03_04",
+      "v1.fact.sprint.item_9_3_recall_speed_benchmark_engine_priority_p0_size_l_status_done_src_plan_conf_high_scope_project_dt_2026_03_04",
+      "v1.fact.sprint.item_9_7_regression_tracking_priority_p2_size_s_status_done_src_plan_conf_high_scope_project_dt_2026_03_04",
+      "v1.fact.sprint.item_11_2_integrate_transitionpolicy_into_access_batchaccess_priority_p1_size_m_status_done_src_plan_conf_high_scope_project_dt_2026_03_04",
+      "v1.fact.sprint.item_11_4_post_policy_and_get_policy_endpoints_priority_p2_size_s_status_done_src_plan_conf_high_scope_project_dt_2026_03_04",
+      "v1.fact.sprint.item_12_2_type_transition_distribution_metric_priority_p2_size_s_status_done_src_plan_conf_high_scope_project_dt_2026_03_04"
+    ]
+  }
+}

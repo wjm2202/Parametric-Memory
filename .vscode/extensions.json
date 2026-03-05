@@ -1,0 +1,23 @@
+{
+  "recommendations": [
+    // ─── TypeScript & Node ───────────────────────────────────────────────────
+    "ms-vscode.vscode-typescript-next",   // Latest TypeScript language features
+    "esbenp.prettier-vscode",             // Formatter (matches project style)
+    "dbaeumer.vscode-eslint",             // ESLint integration
+
+    // ─── Testing ─────────────────────────────────────────────────────────────
+    "vitest.explorer",                    // Vitest test runner UI (matches npm test)
+
+    // ─── Git ─────────────────────────────────────────────────────────────────
+    "eamodio.gitlens",                    // Git history and blame
+
+    // ─── Claude / AI ─────────────────────────────────────────────────────────
+    "anthropics.claude-code",             // Claude Code VSCode extension
+
+    // ─── Utilities ───────────────────────────────────────────────────────────
+    "mikestead.dotenv",                   // .env file syntax highlighting
+    "redhat.vscode-yaml",                 // YAML (docker-compose, prometheus)
+    "ms-azuretools.vscode-docker",        // Docker file support
+    "bierner.markdown-mermaid"            // Mermaid diagrams in markdown preview
+  ]
+}
