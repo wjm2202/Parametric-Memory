@@ -266,6 +266,24 @@ describe('MCP tool catalog wiring', () => {
         expect(url).toContain('asOfMs=12345');
     });
 
+    it('memory_atoms_delete sends DELETE with minimal JSON body', async () => {
+        const fetchMock = mockFetchReturning({ status: 'Success' });
+        const defs = createToolDefinitions({
+            baseUrl: 'http://127.0.0.1:3000',
+            fetchImpl: fetchMock as unknown as typeof fetch,
+        });
+        const tool = defs.find(t => t.name === 'memory_atoms_delete');
+        expect(tool).toBeDefined();
+
+        await tool!.handler({ atom: 'v1.fact.example' });
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        expect(url).toBe('http://127.0.0.1:3000/atoms/v1.fact.example');
+        expect(init.method).toBe('DELETE');
+        expect(init.body).toBe(JSON.stringify({}));
+    });
+
     it('memory_weekly_eval_status reads due-state from weekly_eval_state.json', async () => {
         const dir = mkdtempSync(join(tmpdir(), 'mmpm-weekly-status-'));
         const stateFile = join(dir, 'weekly_eval_state.json');

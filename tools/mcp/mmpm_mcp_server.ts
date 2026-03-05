@@ -430,7 +430,7 @@ export function createToolDefinitions(options: MmpmMcpOptions = {}): ToolDef[] {
                 required: ['atom'],
                 additionalProperties: false,
             },
-            handler: async args => callApi('DELETE', `/atoms/${encodeURIComponent(String(args.atom))}`),
+            handler: async args => callApi('DELETE', `/atoms/${encodeURIComponent(String(args.atom))}`, {}),
             mutating: true,
         },
         {

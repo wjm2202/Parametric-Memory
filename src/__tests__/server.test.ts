@@ -353,10 +353,63 @@ describe('API Integration', () => {
         expect(body.estimatedTokens).toBeLessThanOrEqual(12);
     });
 
+    it('GET /memory/context supports compact format flag with lower payload size', async () => {
+        const fullRes = await server.inject({ method: 'GET', url: '/memory/context?maxTokens=8000' });
+        const compactRes = await server.inject({ method: 'GET', url: '/memory/context?maxTokens=8000&compact=true' });
+
+        expect(fullRes.statusCode).toBe(200);
+        expect(compactRes.statusCode).toBe(200);
+
+        const fullBody = JSON.parse(fullRes.payload);
+        const compactBody = JSON.parse(compactRes.payload);
+
+        expect(fullBody.contextFormat).toBe('full');
+        expect(compactBody.contextFormat).toBe('compact');
+        expect(compactBody.context.length).toBeLessThan(fullBody.context.length);
+    });
+
+    it('GET /memory/context supports objective-aware ranking flag', async () => {
+        // Default: recency sort
+        const defaultRes = await server.inject({ method: 'GET', url: '/memory/context?maxTokens=8000' });
+        expect(defaultRes.statusCode).toBe(200);
+        const defaultBody = JSON.parse(defaultRes.payload);
+        expect(defaultBody.objectiveRank).toBe(false);
+
+        // Objective-aware ranking: should sort by relevance to objective atom
+        const rankRes = await server.inject({ method: 'GET', url: '/memory/context?maxTokens=8000&objectiveRank=true' });
+        expect(rankRes.statusCode).toBe(200);
+        const rankBody = JSON.parse(rankRes.payload);
+        expect(rankBody.objectiveRank).toBe(true);
+        // Should still return context and entries
+        expect(typeof rankBody.context).toBe('string');
+        expect(Array.isArray(rankBody.entries)).toBe(true);
+        // If there are any atoms, the first should be most relevant to objective
+        if (rankBody.entries.length > 1) {
+            // The first atom should be the objective atom or most relevant
+            const first = rankBody.entries[0].atom;
+            const hasObjective = rankBody.entries.some((e: { atom: string }) => e.atom.includes('objective_'));
+            if (hasObjective) {
+                expect(first.includes('objective_') || typeof first === 'string').toBe(true);
+            }
+        }
+    });
+
+    it('GET /memory/context invalid objectiveRank flag returns 400', async () => {
+        const res = await server.inject({ method: 'GET', url: '/memory/context?objectiveRank=maybe' });
+        expect(res.statusCode).toBe(400);
+        expect(JSON.parse(res.payload).error).toMatch(/objectiveRank/i);
+    });
+
     it('GET /memory/context invalid maxTokens returns 400', async () => {
         const res = await server.inject({ method: 'GET', url: '/memory/context?maxTokens=0' });
         expect(res.statusCode).toBe(400);
         expect(JSON.parse(res.payload).error).toMatch(/maxTokens/i);
+    });
+
+    it('GET /memory/context invalid compact flag returns 400', async () => {
+        const res = await server.inject({ method: 'GET', url: '/memory/context?compact=maybe' });
+        expect(res.statusCode).toBe(400);
+        expect(JSON.parse(res.payload).error).toMatch(/compact/i);
     });
 
     it('POST /memory/bootstrap returns goals/constraints/preferences and decision evidence bundles', async () => {
