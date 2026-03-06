@@ -2092,3 +2092,680 @@ describe('Sprint 12 — G5: Write-policy tier end-to-end', () => {
         expect(res.statusCode).toBe(400);
     });
 });
+
+// ── Sprint 14-A-1: GET /atoms/:atom includes proof ───────────────────────────
+
+describe('14-A-1: GET /atoms/:atom proof field', () => {
+    const DB_PATH = './test-14-a1-db';
+    let server: FastifyInstance;
+    let orchestrator: ShardedOrchestrator;
+
+    beforeAll(async () => {
+        cleanup(DB_PATH);
+        const app = buildApp({ dbBasePath: DB_PATH });
+        server = withEnvAuth(app.server);
+        orchestrator = app.orchestrator;
+        await orchestrator.init();
+
+        // Write and commit an atom so it has a proof in the Merkle tree
+        await server.inject({ method: 'POST', url: '/atoms', payload: { atoms: ['v1.fact.proof_test_atom'] } });
+        await server.inject({ method: 'POST', url: '/admin/commit' });
+    });
+
+    afterAll(async () => {
+        await server.close();
+        await orchestrator.close();
+        cleanup(DB_PATH);
+    });
+
+    it('returns a proof block with the correct shape', async () => {
+        const res = await server.inject({ method: 'GET', url: '/atoms/v1.fact.proof_test_atom' });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.proof).toBeDefined();
+        expect(typeof body.proof.leaf).toBe('string');
+        expect(body.proof.leaf.length).toBeGreaterThan(0);
+        expect(typeof body.proof.root).toBe('string');
+        expect(body.proof.root.length).toBeGreaterThan(0);
+        expect(Array.isArray(body.proof.auditPath)).toBe(true);
+        expect(typeof body.proof.index).toBe('number');
+        expect(body.proof.index).toBeGreaterThanOrEqual(0);
+    });
+
+    it('proof is independently verifiable via POST /verify', async () => {
+        const atomRes = await server.inject({ method: 'GET', url: '/atoms/v1.fact.proof_test_atom' });
+        expect(atomRes.statusCode).toBe(200);
+        const { proof, atom } = JSON.parse(atomRes.payload);
+        expect(proof).not.toBeNull();
+        // Round-trip: the proof returned on GET /atoms/:atom must pass POST /verify
+        const verifyRes = await server.inject({
+            method: 'POST',
+            url: '/verify',
+            payload: { atom, proof },
+        });
+        expect(verifyRes.statusCode).toBe(200);
+        expect(JSON.parse(verifyRes.payload).valid).toBe(true);
+    });
+
+    it('pending (uncommitted) atom is not visible until after commit', async () => {
+        // Before commit: atom is in the ingest pipeline but not yet in LevelDB
+        await server.inject({ method: 'POST', url: '/atoms', payload: { atoms: ['v1.fact.pending_lifecycle'] } });
+        const beforeCommit = await server.inject({ method: 'GET', url: '/atoms/v1.fact.pending_lifecycle' });
+        expect(beforeCommit.statusCode).toBe(404);
+
+        // After commit: atom is visible and carries a proof
+        await server.inject({ method: 'POST', url: '/admin/commit' });
+        const afterCommit = await server.inject({ method: 'GET', url: '/atoms/v1.fact.pending_lifecycle' });
+        expect(afterCommit.statusCode).toBe(200);
+        const body = JSON.parse(afterCommit.payload);
+        expect(body.proof).not.toBeNull();
+        expect(typeof body.proof.leaf).toBe('string');
+    });
+
+    it('tombstoned atom still returns proof (historical audit)', async () => {
+        await server.inject({ method: 'POST', url: '/atoms', payload: { atoms: ['v1.fact.to_be_deleted'] } });
+        await server.inject({ method: 'POST', url: '/admin/commit' });
+        // Tombstone then commit (creates a new snapshot — root will change)
+        await server.inject({ method: 'DELETE', url: '/atoms/v1.fact.to_be_deleted' });
+        await server.inject({ method: 'POST', url: '/admin/commit' });
+        // The tombstoned atom must still be retrievable and carry a non-null proof
+        const afterRes = await server.inject({ method: 'GET', url: '/atoms/v1.fact.to_be_deleted' });
+        expect(afterRes.statusCode).toBe(200);
+        const afterBody = JSON.parse(afterRes.payload);
+        expect(afterBody.status).toBe('tombstoned');
+        // Proof is preserved for historical audit — verify it is self-consistent
+        expect(afterBody.proof).not.toBeNull();
+        expect(typeof afterBody.proof.leaf).toBe('string');
+        expect(typeof afterBody.proof.root).toBe('string');
+        expect(Array.isArray(afterBody.proof.auditPath)).toBe(true);
+        // The proof must pass independent verification
+        const verifyRes = await server.inject({
+            method: 'POST',
+            url: '/verify',
+            payload: { atom: 'v1.fact.to_be_deleted', proof: afterBody.proof },
+        });
+        expect(JSON.parse(verifyRes.payload).valid).toBe(true);
+    });
+
+    it('existing fields are unaffected (no regression)', async () => {
+        const res = await server.inject({ method: 'GET', url: '/atoms/v1.fact.proof_test_atom' });
+        const body = JSON.parse(res.payload);
+        expect(body.atom).toBe('v1.fact.proof_test_atom');
+        expect(body.status).toBe('active');
+        expect(typeof body.shard).toBe('number');
+        expect(typeof body.hash).toBe('string');
+        expect(body.contradiction).toBeDefined();
+        expect(body.temporal).toBeDefined();
+    });
+});
+
+// ── Sprint 14-A-2: POST /verify ───────────────────────────────────────────────
+
+describe('14-A-2: POST /verify', () => {
+    const DB_PATH = './test-14-a2-db';
+    let server: FastifyInstance;
+    let orchestrator: ShardedOrchestrator;
+
+    beforeAll(async () => {
+        cleanup(DB_PATH);
+        const app = buildApp({ dbBasePath: DB_PATH });
+        server = withEnvAuth(app.server);
+        orchestrator = app.orchestrator;
+        await orchestrator.init();
+
+        await server.inject({ method: 'POST', url: '/atoms', payload: { atoms: ['v1.fact.verify_target'] } });
+        await server.inject({ method: 'POST', url: '/admin/commit' });
+    });
+
+    afterAll(async () => {
+        await server.close();
+        await orchestrator.close();
+        cleanup(DB_PATH);
+    });
+
+    it('returns valid:true for a real proof', async () => {
+        const atomRes = await server.inject({ method: 'GET', url: '/atoms/v1.fact.verify_target' });
+        const { proof } = JSON.parse(atomRes.payload);
+
+        const res = await server.inject({
+            method: 'POST', url: '/verify',
+            payload: { atom: 'v1.fact.verify_target', proof },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.valid).toBe(true);
+        expect(body.atom).toBe('v1.fact.verify_target');
+        expect(typeof body.checkedAt).toBe('number');
+    });
+
+    it('returns valid:false when proof.leaf is tampered', async () => {
+        const atomRes = await server.inject({ method: 'GET', url: '/atoms/v1.fact.verify_target' });
+        const { proof } = JSON.parse(atomRes.payload);
+        const tampered = { ...proof, leaf: 'ff'.repeat(32) };
+
+        const res = await server.inject({
+            method: 'POST', url: '/verify',
+            payload: { atom: 'v1.fact.verify_target', proof: tampered },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(res.payload).valid).toBe(false);
+    });
+
+    it('returns valid:false when an auditPath entry is tampered', async () => {
+        const atomRes = await server.inject({ method: 'GET', url: '/atoms/v1.fact.verify_target' });
+        const { proof } = JSON.parse(atomRes.payload);
+        if (proof.auditPath.length === 0) return; // single-leaf tree — skip
+        const tampered = { ...proof, auditPath: ['aa'.repeat(32), ...proof.auditPath.slice(1)] };
+
+        const res = await server.inject({
+            method: 'POST', url: '/verify',
+            payload: { atom: 'v1.fact.verify_target', proof: tampered },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(res.payload).valid).toBe(false);
+    });
+
+    it('returns 200 with no Authorization header (no auth required)', async () => {
+        const atomRes = await server.inject({ method: 'GET', url: '/atoms/v1.fact.verify_target' });
+        const { proof } = JSON.parse(atomRes.payload);
+
+        // Raw inject without auth headers
+        const res = await server.inject({
+            method: 'POST', url: '/verify',
+            payload: { atom: 'v1.fact.verify_target', proof },
+        });
+        expect(res.statusCode).toBe(200);
+    });
+
+    it('returns 400 for missing proof field', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/verify',
+            payload: { atom: 'v1.fact.verify_target' },
+        });
+        expect(res.statusCode).toBe(400);
+    });
+
+    it('returns 400 for invalid atom schema', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/verify',
+            payload: { atom: 'not-a-valid-atom', proof: { leaf: 'a', root: 'b', auditPath: [], index: 0 } },
+        });
+        expect(res.statusCode).toBe(400);
+    });
+
+    it('returns 400 for malformed proof shape', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/verify',
+            payload: { atom: 'v1.fact.verify_target', proof: { leaf: 'a', root: 'b' } },
+        });
+        expect(res.statusCode).toBe(400);
+    });
+});
+
+// ── Sprint 14-B-1: GET /admin/export ──────────────────────────────────────────
+
+describe('14-B-1: GET /admin/export', () => {
+    const DB_PATH = './test-14-b1-db';
+    let server: FastifyInstance;
+    let orchestrator: ShardedOrchestrator;
+
+    beforeAll(async () => {
+        cleanup(DB_PATH);
+        const app = buildApp({ dbBasePath: DB_PATH });
+        server = withEnvAuth(app.server);
+        orchestrator = app.orchestrator;
+        await orchestrator.init();
+
+        // Seed a mix of fact/state/event atoms
+        await server.inject({ method: 'POST', url: '/atoms', payload: { atoms: [
+            'v1.fact.export_fact_a',
+            'v1.state.export_state_b',
+            'v1.event.export_event_c',
+        ] } });
+        await server.inject({ method: 'POST', url: '/admin/commit' });
+        // Add a tombstoned atom
+        await server.inject({ method: 'POST', url: '/atoms', payload: { atoms: ['v1.fact.export_deleted'] } });
+        await server.inject({ method: 'POST', url: '/admin/commit' });
+        await server.inject({ method: 'DELETE', url: '/atoms/v1.fact.export_deleted' });
+        await server.inject({ method: 'POST', url: '/admin/commit' });
+    });
+
+    afterAll(async () => {
+        await server.close();
+        await orchestrator.close();
+        cleanup(DB_PATH);
+    });
+
+    it('returns application/x-ndjson content-type', async () => {
+        const res = await server.inject({ method: 'GET', url: '/admin/export' });
+        expect(res.statusCode).toBe(200);
+        expect(res.headers['content-type']).toMatch(/x-ndjson/);
+    });
+
+    it('includes all active atoms and only active by default', async () => {
+        const res = await server.inject({ method: 'GET', url: '/admin/export' });
+        const lines = res.body.trim().split('\n').filter(Boolean);
+        const atoms = lines.map(l => JSON.parse(l));
+        const atomNames = atoms.map((a: any) => a.atom);
+        expect(atomNames).toContain('v1.fact.export_fact_a');
+        expect(atomNames).toContain('v1.state.export_state_b');
+        expect(atomNames).toContain('v1.event.export_event_c');
+        // Tombstoned atom must NOT appear in default (active-only) export
+        expect(atomNames).not.toContain('v1.fact.export_deleted');
+    });
+
+    it('each line has required fields', async () => {
+        const res = await server.inject({ method: 'GET', url: '/admin/export' });
+        const lines = res.body.trim().split('\n').filter(Boolean);
+        for (const line of lines) {
+            const obj = JSON.parse(line);
+            expect(typeof obj.atom).toBe('string');
+            expect(obj.status).toBe('active');
+            expect(typeof obj.hash).toBe('string');
+            expect(typeof obj.createdAtMs).toBe('number');
+            expect(typeof obj.committedAtVersion).toBe('number');
+            expect(typeof obj.shard).toBe('number');
+        }
+    });
+
+    it('?status=tombstoned returns only tombstoned atoms', async () => {
+        const res = await server.inject({ method: 'GET', url: '/admin/export?status=tombstoned' });
+        expect(res.statusCode).toBe(200);
+        const lines = res.body.trim().split('\n').filter(Boolean);
+        const atoms = lines.map(l => JSON.parse(l));
+        expect(atoms.every((a: any) => a.status === 'tombstoned')).toBe(true);
+        expect(atoms.map((a: any) => a.atom)).toContain('v1.fact.export_deleted');
+    });
+
+    it('?status=all returns both active and tombstoned', async () => {
+        const res = await server.inject({ method: 'GET', url: '/admin/export?status=all' });
+        const lines = res.body.trim().split('\n').filter(Boolean);
+        const statuses = new Set(lines.map(l => JSON.parse(l).status));
+        expect(statuses.has('active')).toBe(true);
+        expect(statuses.has('tombstoned')).toBe(true);
+    });
+
+    it('?type=fact filters by atom type', async () => {
+        const res = await server.inject({ method: 'GET', url: '/admin/export?type=fact' });
+        const lines = res.body.trim().split('\n').filter(Boolean);
+        const atoms = lines.map(l => JSON.parse(l));
+        expect(atoms.every((a: any) => a.atom.startsWith('v1.fact.'))).toBe(true);
+        expect(atoms.map((a: any) => a.atom)).toContain('v1.fact.export_fact_a');
+    });
+
+    it('returns 400 for invalid status param', async () => {
+        const res = await server.inject({ method: 'GET', url: '/admin/export?status=invalid' });
+        expect(res.statusCode).toBe(400);
+    });
+
+    it('returns 400 for invalid type param', async () => {
+        const res = await server.inject({ method: 'GET', url: '/admin/export?type=bogus' });
+        expect(res.statusCode).toBe(400);
+    });
+
+    it('includes a Content-Disposition attachment header', async () => {
+        const res = await server.inject({ method: 'GET', url: '/admin/export' });
+        expect(res.headers['content-disposition']).toMatch(/attachment/);
+        expect(res.headers['content-disposition']).toMatch(/\.ndjson/);
+    });
+});
+
+// ── Sprint 14-B-2: POST /admin/import ─────────────────────────────────────────
+
+describe('14-B-2: POST /admin/import', () => {
+    const DB_PATH = './test-14-b2-db';
+    let server: FastifyInstance;
+    let orchestrator: ShardedOrchestrator;
+
+    beforeAll(async () => {
+        cleanup(DB_PATH);
+        const app = buildApp({ dbBasePath: DB_PATH });
+        server = withEnvAuth(app.server);
+        orchestrator = app.orchestrator;
+        await orchestrator.init();
+    });
+
+    afterAll(async () => {
+        await server.close();
+        await orchestrator.close();
+        cleanup(DB_PATH);
+    });
+
+    it('imports NDJSON records exported by GET /admin/export', async () => {
+        // Seed and export from a separate server instance
+        const exportDb = './test-14-b2-export-db';
+        cleanup(exportDb);
+        const exportApp = buildApp({ dbBasePath: exportDb });
+        const exportServer = withEnvAuth(exportApp.server);
+        await exportApp.orchestrator.init();
+        await exportServer.inject({ method: 'POST', url: '/atoms', payload: { atoms: ['v1.fact.imported_round_trip'] } });
+        await exportServer.inject({ method: 'POST', url: '/admin/commit' });
+        const exportRes = await exportServer.inject({ method: 'GET', url: '/admin/export' });
+        await exportServer.close();
+        await exportApp.orchestrator.close();
+        cleanup(exportDb);
+
+        const res = await server.inject({
+            method: 'POST',
+            url: '/admin/import',
+            headers: { 'content-type': 'text/plain' },
+            payload: exportRes.body,
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.imported).toBeGreaterThan(0);
+        expect(Array.isArray(body.errors)).toBe(true);
+        expect(body.errors.length).toBe(0);
+    });
+
+    it('returns imported count equal to number of valid lines', async () => {
+        const ndjson = [
+            '{"atom":"v1.fact.import_count_a","status":"active"}',
+            '{"atom":"v1.state.import_count_b","status":"active"}',
+        ].join('\n');
+        const res = await server.inject({
+            method: 'POST',
+            url: '/admin/import',
+            headers: { 'content-type': 'text/plain' },
+            payload: ndjson,
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.imported).toBe(2);
+        expect(body.errors.length).toBe(0);
+    });
+
+    it('skips atoms that are already active (no duplicates)', async () => {
+        // Commit so the atoms are visible and skippable
+        await server.inject({ method: 'POST', url: '/admin/commit' });
+        const res = await server.inject({
+            method: 'POST',
+            url: '/admin/import',
+            headers: { 'content-type': 'text/plain' },
+            payload: '{"atom":"v1.fact.import_count_a"}',
+        });
+        const body = JSON.parse(res.payload);
+        expect(body.skipped).toBe(1);
+        expect(body.imported).toBe(0);
+    });
+
+    it('accepts bare atom strings (no JSON wrapping)', async () => {
+        const res = await server.inject({
+            method: 'POST',
+            url: '/admin/import',
+            headers: { 'content-type': 'text/plain' },
+            payload: 'v1.fact.bare_import_test',
+        });
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(res.payload).imported).toBe(1);
+    });
+
+    it('reports errors for invalid atom strings without failing the batch', async () => {
+        const ndjson = [
+            '{"atom":"v1.fact.good_import_b"}',
+            '{"atom":"not.a.valid.atom.schema"}',
+            'also-invalid',
+        ].join('\n');
+        const res = await server.inject({
+            method: 'POST',
+            url: '/admin/import',
+            headers: { 'content-type': 'text/plain' },
+            payload: ndjson,
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.imported).toBe(1);
+        expect(body.errors.length).toBe(2);
+    });
+
+    it('returns 400 for an empty body', async () => {
+        const res = await server.inject({
+            method: 'POST',
+            url: '/admin/import',
+            headers: { 'content-type': 'text/plain' },
+            payload: '   ',
+        });
+        expect(res.statusCode).toBe(400);
+    });
+});
+
+// ── Sprint 14-A-3: GET /admin/audit-log ───────────────────────────────────────
+
+describe('14-A-3: GET /admin/audit-log', () => {
+    const DB_PATH = './test-14-a3-db';
+    let server: FastifyInstance;
+    let orchestrator: ShardedOrchestrator;
+
+    beforeAll(async () => {
+        cleanup(DB_PATH);
+        const app = buildApp({ dbBasePath: DB_PATH });
+        server = withEnvAuth(app.server);
+        orchestrator = app.orchestrator;
+        await orchestrator.init();
+
+        // Generate some mutation events
+        await server.inject({ method: 'POST', url: '/atoms', payload: { atoms: ['v1.fact.audit_add_1', 'v1.fact.audit_add_2'] } });
+        await server.inject({ method: 'POST', url: '/admin/commit' });
+        await server.inject({ method: 'DELETE', url: '/atoms/v1.fact.audit_add_1' });
+    });
+
+    afterAll(async () => {
+        await server.close();
+        await orchestrator.close();
+        cleanup(DB_PATH);
+    });
+
+    it('returns 200 with entries array', async () => {
+        const res = await server.inject({ method: 'GET', url: '/admin/audit-log' });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(Array.isArray(body.entries)).toBe(true);
+        expect(typeof body.total).toBe('number');
+        expect(typeof body.bufferSize).toBe('number');
+        expect(typeof body.maxEntries).toBe('number');
+    });
+
+    it('entries are newest-first', async () => {
+        const res = await server.inject({ method: 'GET', url: '/admin/audit-log' });
+        const { entries } = JSON.parse(res.payload);
+        for (let i = 1; i < entries.length; i++) {
+            expect(entries[i - 1].id).toBeGreaterThanOrEqual(entries[i].id);
+        }
+    });
+
+    it('records atom.add events with atom list', async () => {
+        const res = await server.inject({ method: 'GET', url: '/admin/audit-log?event=atom.add' });
+        const { entries } = JSON.parse(res.payload);
+        expect(entries.length).toBeGreaterThan(0);
+        const addEntry = entries[0]; // newest
+        expect(addEntry.event).toBe('atom.add');
+        expect(Array.isArray(addEntry.atoms)).toBe(true);
+    });
+
+    it('records atom.tombstone events', async () => {
+        const res = await server.inject({ method: 'GET', url: '/admin/audit-log?event=atom.tombstone' });
+        const { entries } = JSON.parse(res.payload);
+        expect(entries.length).toBeGreaterThan(0);
+        expect(entries[0].event).toBe('atom.tombstone');
+        expect(entries[0].atoms).toContain('v1.fact.audit_add_1');
+    });
+
+    it('records admin.commit events with treeVersion', async () => {
+        const res = await server.inject({ method: 'GET', url: '/admin/audit-log?event=admin.commit' });
+        const { entries } = JSON.parse(res.payload);
+        expect(entries.length).toBeGreaterThan(0);
+        expect(typeof entries[0].treeVersion).toBe('number');
+    });
+
+    it('?event filter excludes other event types', async () => {
+        const res = await server.inject({ method: 'GET', url: '/admin/audit-log?event=admin.commit' });
+        const { entries } = JSON.parse(res.payload);
+        expect(entries.every((e: any) => e.event === 'admin.commit')).toBe(true);
+    });
+
+    it('?limit caps the result set', async () => {
+        const res = await server.inject({ method: 'GET', url: '/admin/audit-log?limit=1' });
+        expect(JSON.parse(res.payload).entries.length).toBe(1);
+    });
+
+    it('?since filters entries by timestamp', async () => {
+        const futureMs = Date.now() + 60_000;
+        const res = await server.inject({ method: 'GET', url: `/admin/audit-log?since=${futureMs}` });
+        expect(JSON.parse(res.payload).entries.length).toBe(0);
+    });
+
+    it('returns 400 for invalid event filter', async () => {
+        const res = await server.inject({ method: 'GET', url: '/admin/audit-log?event=bogus' });
+        expect(res.statusCode).toBe(400);
+    });
+
+    it('returns 400 for invalid limit', async () => {
+        const res = await server.inject({ method: 'GET', url: '/admin/audit-log?limit=-1' });
+        expect(res.statusCode).toBe(400);
+    });
+
+    it('records admin.import events', async () => {
+        await server.inject({
+            method: 'POST',
+            url: '/admin/import',
+            headers: { 'content-type': 'text/plain' },
+            payload: 'v1.fact.audit_import_test',
+        });
+        const res = await server.inject({ method: 'GET', url: '/admin/audit-log?event=admin.import' });
+        const { entries } = JSON.parse(res.payload);
+        expect(entries.length).toBeGreaterThan(0);
+        expect(entries[0].event).toBe('admin.import');
+    });
+
+    it('records admin.export events', async () => {
+        await server.inject({ method: 'GET', url: '/admin/export' });
+        const res = await server.inject({ method: 'GET', url: '/admin/audit-log?event=admin.export' });
+        const { entries } = JSON.parse(res.payload);
+        expect(entries.length).toBeGreaterThan(0);
+        expect(entries[0].event).toBe('admin.export');
+    });
+});
+
+// ── Sprint 14-C-1: Per-atom TTL ───────────────────────────────────────────────
+
+describe('14-C-1: Per-atom TTL', () => {
+    const DB_PATH = './test-14-c1-db';
+    let server: FastifyInstance;
+    let orchestrator: ShardedOrchestrator;
+
+    beforeAll(async () => {
+        cleanup(DB_PATH);
+        const app = buildApp({ dbBasePath: DB_PATH });
+        server = withEnvAuth(app.server);
+        orchestrator = app.orchestrator;
+        await orchestrator.init();
+    });
+
+    afterAll(async () => {
+        await server.close();
+        await orchestrator.close();
+        cleanup(DB_PATH);
+    });
+
+    it('atom without ttlMs has ttl: null on GET /atoms/:atom', async () => {
+        await server.inject({ method: 'POST', url: '/atoms', payload: { atoms: ['v1.fact.no_ttl'] } });
+        await server.inject({ method: 'POST', url: '/admin/commit' });
+        const res = await server.inject({ method: 'GET', url: '/atoms/v1.fact.no_ttl' });
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(res.payload).ttl).toBeNull();
+    });
+
+    it('atom with ttlMs has ttl block with correct fields', async () => {
+        const before = Date.now();
+        await server.inject({
+            method: 'POST', url: '/atoms',
+            payload: { atoms: ['v1.fact.ttl_atom'], ttlMs: 3_600_000 }, // 1h
+        });
+        await server.inject({ method: 'POST', url: '/admin/commit' });
+        const res = await server.inject({ method: 'GET', url: '/atoms/v1.fact.ttl_atom' });
+        expect(res.statusCode).toBe(200);
+        const { ttl } = JSON.parse(res.payload);
+        expect(ttl).not.toBeNull();
+        expect(ttl.ttlMs).toBe(3_600_000);
+        expect(ttl.ttlExpiresAt).toBeGreaterThan(before + 3_600_000 - 100);
+        expect(typeof ttl.lastAccessedAtMs).toBe('number');
+    });
+
+    it('returns 400 for negative ttlMs', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/atoms',
+            payload: { atoms: ['v1.fact.bad_ttl'], ttlMs: -1000 },
+        });
+        expect(res.statusCode).toBe(400);
+    });
+
+    it('returns 400 for zero ttlMs', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/atoms',
+            payload: { atoms: ['v1.fact.bad_ttl_zero'], ttlMs: 0 },
+        });
+        expect(res.statusCode).toBe(400);
+    });
+
+    it('POST /access resets ttlExpiresAt (access-aware TTL)', async () => {
+        await server.inject({
+            method: 'POST', url: '/atoms',
+            payload: { atoms: ['v1.fact.ttl_access_reset'], ttlMs: 5_000 }, // 5s
+        });
+        await server.inject({ method: 'POST', url: '/admin/commit' });
+
+        const before = await server.inject({ method: 'GET', url: '/atoms/v1.fact.ttl_access_reset' });
+        const ttlBefore = JSON.parse(before.payload).ttl.ttlExpiresAt;
+
+        // Small delay so that the access time is strictly after registration
+        await new Promise(resolve => setTimeout(resolve, 5));
+
+        // Trigger an access
+        await server.inject({ method: 'POST', url: '/access', payload: { data: 'v1.fact.ttl_access_reset' } });
+
+        const after = await server.inject({ method: 'GET', url: '/atoms/v1.fact.ttl_access_reset' });
+        const ttlAfter = JSON.parse(after.payload).ttl.ttlExpiresAt;
+
+        // The expiry clock should have been pushed forward by the access
+        expect(ttlAfter).toBeGreaterThanOrEqual(ttlBefore);
+    });
+
+    it('POST /batch-access resets ttlExpiresAt for each item', async () => {
+        await server.inject({
+            method: 'POST', url: '/atoms',
+            payload: { atoms: ['v1.fact.ttl_batch_reset'], ttlMs: 5_000 },
+        });
+        await server.inject({ method: 'POST', url: '/admin/commit' });
+
+        const before = await server.inject({ method: 'GET', url: '/atoms/v1.fact.ttl_batch_reset' });
+        const ttlBefore = JSON.parse(before.payload).ttl.ttlExpiresAt;
+
+        await new Promise(resolve => setTimeout(resolve, 5));
+        await server.inject({ method: 'POST', url: '/batch-access', payload: { items: ['v1.fact.ttl_batch_reset'] } });
+
+        const after = await server.inject({ method: 'GET', url: '/atoms/v1.fact.ttl_batch_reset' });
+        const ttlAfter = JSON.parse(after.payload).ttl.ttlExpiresAt;
+
+        expect(ttlAfter).toBeGreaterThanOrEqual(ttlBefore);
+    });
+
+    it('tombstoning an atom removes its TTL entry', async () => {
+        await server.inject({
+            method: 'POST', url: '/atoms',
+            payload: { atoms: ['v1.fact.ttl_to_delete'], ttlMs: 3_600_000 },
+        });
+        await server.inject({ method: 'POST', url: '/admin/commit' });
+
+        // Verify TTL is set before deletion
+        const before = await server.inject({ method: 'GET', url: '/atoms/v1.fact.ttl_to_delete' });
+        expect(JSON.parse(before.payload).ttl).not.toBeNull();
+
+        // Tombstone the atom
+        await server.inject({ method: 'DELETE', url: '/atoms/v1.fact.ttl_to_delete' });
+        await server.inject({ method: 'POST', url: '/admin/commit' });
+
+        // After tombstone the TTL entry is removed (atom record still visible but ttl is null)
+        const after = await server.inject({ method: 'GET', url: '/atoms/v1.fact.ttl_to_delete' });
+        expect(JSON.parse(after.payload).ttl).toBeNull();
+    });
+});

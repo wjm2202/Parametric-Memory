@@ -68,7 +68,7 @@ Environment variables:
 | `PORT` | `3000` | HTTP server port |
 | `DB_BASE_PATH` | `./mmpm-data` | LevelDB storage directory |
 | `SHARD_COUNT` | `4` | Number of shards |
-| `API_KEY` | *(none)* | Optional bearer token for auth |
+| `MMPM_API_KEY` | *(none)* | Optional bearer token for auth. Generate: `openssl rand -hex 32` |
 | `WRITE_POLICY` | `auto` | `auto` \| `review` \| `publish-all` |
 
 ---
@@ -108,7 +108,7 @@ GET /atoms/v1.fact.user_preference_dark_mode
 POST /access
 Content-Type: application/json
 
-{ "atom": "v1.fact.user_preference_dark_mode" }
+{ "data": "v1.fact.user_preference_dark_mode" }
 ```
 
 ```json
@@ -234,6 +234,7 @@ Atoms are strings in the format `v1.<type>.<value>`:
 | `event` | `v1.event.order_placed_2024_03` | Timestamped occurrences |
 | `state` | `v1.state.checkout_step_3` | Current agent or workflow state |
 | `relation` | `v1.relation.user_owns_order_42` | Entity relationships |
+| `procedure` | `v1.procedure.pip_install.always_add_break_system_packages` | Discovered techniques and working approaches |
 | `other` | `v1.other.custom_key` | Unclassified atoms |
 
 Atoms are namespace-scoped: the value portion can encode namespace hierarchy (`user.42.preference.theme`).

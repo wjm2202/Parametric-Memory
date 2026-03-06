@@ -116,13 +116,15 @@ function parseStringArray(value: unknown): string[] {
 }
 
 function createApiCaller(options: ResolvedMmpmMcpOptions) {
-    return async (method: HttpMethod, path: string, body?: unknown): Promise<unknown> => {
+    return async (method: HttpMethod, path: string, body?: unknown, contentType?: string): Promise<unknown> => {
         const hasBody = body !== undefined;
-        const headers = buildHeaders(options.apiKey, hasBody);
+        const isJson = !contentType || contentType === 'application/json';
+        const headers = buildHeaders(options.apiKey, hasBody && isJson);
+        if (hasBody && contentType && !isJson) headers['content-type'] = contentType;
         const response = await options.fetchImpl(`${options.baseUrl}${path}`, {
             method,
             headers,
-            body: hasBody ? JSON.stringify(body) : undefined,
+            body: hasBody ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined,
         });
 
         const text = await response.text();
@@ -179,7 +181,7 @@ export function createToolDefinitions(options: MmpmMcpOptions = {}): ToolDef[] {
             inputSchema: {
                 type: 'object',
                 properties: {
-                    type: { type: 'string', enum: ['fact', 'event', 'relation', 'state', 'other'] },
+                    type: { type: 'string', enum: ['fact', 'event', 'relation', 'state', 'procedure', 'other'] },
                     prefix: { type: 'string' },
                     limit: { type: 'number' },
                     offset: { type: 'number' },
@@ -256,7 +258,7 @@ export function createToolDefinitions(options: MmpmMcpOptions = {}): ToolDef[] {
                 type: 'object',
                 properties: {
                     maxAgeDays: { type: 'number', description: 'Atoms older than this many days are considered stale (default: 30).' },
-                    type: { type: 'string', enum: ['fact', 'event', 'relation', 'state', 'other'], description: 'Filter by atom type.' },
+                    type: { type: 'string', enum: ['fact', 'event', 'relation', 'state', 'procedure', 'other'], description: 'Filter by atom type.' },
                 },
                 additionalProperties: false,
             },
@@ -285,6 +287,74 @@ export function createToolDefinitions(options: MmpmMcpOptions = {}): ToolDef[] {
             description: 'Read Prometheus metrics text. Wraps GET /metrics.',
             inputSchema: { type: 'object', properties: {}, additionalProperties: false },
             handler: async () => callApi('GET', '/metrics'),
+        },
+        {
+            name: 'memory_audit_log',
+            description:
+                'Query the in-memory audit log of mutation events (add, tombstone, commit, import, export). ' +
+                'Entries are sorted newest-first. ' +
+                'Useful for reviewing recent changes or debugging unexpected state. ' +
+                'Note: the log resets on server restart. ' +
+                'Wraps GET /admin/audit-log.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    limit: {
+                        type: 'number',
+                        description: 'Maximum entries to return (default 100).',
+                    },
+                    since: {
+                        type: 'number',
+                        description: 'Only include entries with timestampMs >= this value (Unix ms).',
+                    },
+                    event: {
+                        type: 'string',
+                        enum: ['atom.add', 'atom.tombstone', 'admin.commit', 'admin.import', 'admin.export'],
+                        description: 'Filter by event type (optional).',
+                    },
+                },
+                additionalProperties: false,
+            },
+            handler: async args => {
+                const params = new URLSearchParams();
+                if (args.limit !== undefined)  params.set('limit', String(args.limit));
+                if (args.since !== undefined)  params.set('since', String(args.since));
+                if (args.event !== undefined)  params.set('event', String(args.event));
+                const qs = params.toString();
+                return callApi('GET', `/admin/audit-log${qs ? `?${qs}` : ''}`);
+            },
+        },
+        {
+            name: 'memory_verify',
+            description:
+                'Verify a Merkle proof returned by GET /atoms/:atom. ' +
+                'Returns { valid: boolean, atom, checkedAt } — no credentials required. ' +
+                'Use this to confirm an atom was genuinely committed to the tree and has not been tampered with. ' +
+                'Wraps POST /verify.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    atom: {
+                        type: 'string',
+                        description: 'The atom string (e.g. v1.fact.some_atom) whose proof is being verified.',
+                    },
+                    proof: {
+                        type: 'object',
+                        description: 'The proof object returned from GET /atoms/:atom.',
+                        properties: {
+                            leaf:      { type: 'string' },
+                            root:      { type: 'string' },
+                            auditPath: { type: 'array', items: { type: 'string' } },
+                            index:     { type: 'number' },
+                        },
+                        required: ['leaf', 'root', 'auditPath', 'index'],
+                        additionalProperties: false,
+                    },
+                },
+                required: ['atom', 'proof'],
+                additionalProperties: false,
+            },
+            handler: async args => callApi('POST', '/verify', { atom: args.atom, proof: args.proof }),
         },
         {
             name: 'memory_weekly_eval_status',
@@ -510,6 +580,61 @@ export function createToolDefinitions(options: MmpmMcpOptions = {}): ToolDef[] {
                     weekly: readWeeklyEvalStatus(resolved.weeklyEvalStateFile),
                 };
             },
+            mutating: true,
+        },
+        // ── 14-B-1: Export ────────────────────────────────────────────────────
+        {
+            name: 'memory_atoms_export',
+            description:
+                'Export all atoms as NDJSON for backup or migration. ' +
+                'Each line is a JSON object: { atom, status, hash, createdAtMs, committedAtVersion, shard }. ' +
+                'Defaults to active atoms only; use status="tombstoned" or status="all" to include tombstoned atoms. ' +
+                'Wraps GET /admin/export.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    status: {
+                        type: 'string',
+                        enum: ['active', 'tombstoned', 'all'],
+                        description: 'Which atoms to include (default: active).',
+                    },
+                    type: {
+                        type: 'string',
+                        enum: ['fact', 'state', 'event', 'relation', 'other'],
+                        description: 'Filter by atom type segment (optional).',
+                    },
+                },
+                additionalProperties: false,
+            },
+            handler: async args => {
+                const params = new URLSearchParams();
+                if (args.status) params.set('status', String(args.status));
+                if (args.type)   params.set('type',   String(args.type));
+                const qs = params.toString();
+                return callApi('GET', `/admin/export${qs ? `?${qs}` : ''}`);
+            },
+        },
+        // ── 14-B-2: Import ────────────────────────────────────────────────────
+        {
+            name: 'memory_atoms_import',
+            description:
+                'Import atoms from an NDJSON snapshot (as produced by memory_atoms_export). ' +
+                'Each line should be a JSON object with an "atom" field, or a bare atom string. ' +
+                'Already-active atoms are skipped; invalid lines are collected in the errors array. ' +
+                'Returns { imported, skipped, errors }. ' +
+                'Wraps POST /admin/import.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    ndjson: {
+                        type: 'string',
+                        description: 'Newline-delimited JSON string of atom records to import.',
+                    },
+                },
+                required: ['ndjson'],
+                additionalProperties: false,
+            },
+            handler: async args => callApi('POST', '/admin/import', String(args.ndjson), 'text/plain'),
             mutating: true,
         },
     ];

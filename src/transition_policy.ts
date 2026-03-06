@@ -7,7 +7,8 @@ const TYPE_TO_INDEX: Record<AtomType, number> = {
     event: 1,
     relation: 2,
     state: 3,
-    other: 4,
+    procedure: 4,
+    other: 5,
 };
 
 export class TransitionPolicy {

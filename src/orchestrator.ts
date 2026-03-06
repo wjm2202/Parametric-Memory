@@ -598,6 +598,25 @@ export class ShardedOrchestrator {
         }
     }
 
+    /**
+     * Returns the Merkle proof for a committed atom, or null if the atom is
+     * not found or still pending commit (no proof yet).
+     *
+     * Tombstoned atoms retain their proof so historical audits remain possible —
+     * the proof was valid at the version the atom was committed and can still be
+     * independently verified against that version's root hash.
+     */
+    getAtomProof(atom: DataAtom): MerkleProof | null {
+        const shardIdx = this.router.getShardIndex(atom);
+        const shard = this.shards.get(shardIdx);
+        if (!shard) return null;
+        // Use getAtomRecord (not getHash) so tombstoned atoms still yield a hash.
+        const record = shard.getAtomRecord(atom);
+        if (!record) return null; // not found
+        const resolved = shard.resolveByHash(record.hash);
+        return resolved?.proof ?? null; // null if still pending (not yet in snapshot)
+    }
+
     private resolveHashAcrossShards(hash: Hash): { atom: DataAtom; proof: MerkleProof } | null {
         const shardIdx = this.hashToShard.get(hash);
         if (shardIdx === undefined) return null;

@@ -18,6 +18,10 @@ import {
 import { logger } from './logger';
 import { assertAtomsV1, ATOM_TYPES, AtomType, encodeAtomV1, isAtomV1, normalizeAtomInput, parseAtomV1 } from './atom_schema';
 import { TransitionPolicy, TypePolicyConfig } from './transition_policy';
+import { MerkleSnapshot } from './merkle_snapshot';
+import { MerkleProof } from './types';
+import { AuditLog, AuditEventType } from './audit_log';
+import { TtlRegistry } from './ttl_registry';
 
 // Collect Node.js / process metrics automatically (visible at GET /metrics)
 collectDefaultMetrics();
@@ -30,7 +34,7 @@ interface BuildAppOpts {
     apiKey?: string;
 }
 
-const SCHEMA_ERROR = "schema v1 required: use 'v1.<type>.<value>' or object { type, value } with type in {fact,event,relation,state,other}.";
+const SCHEMA_ERROR = "schema v1 required: use 'v1.<type>.<value>' or object { type, value } with type in {fact,event,relation,state,procedure,other}.";
 const DEFAULT_CONTEXT_MAX_TOKENS = 512;
 const MAX_CONTEXT_MAX_TOKENS = 8000;
 const DEFAULT_SEARCH_LIMIT = 10;
@@ -716,8 +720,22 @@ function loadSeedFile(filePath: string): string[] | null {
     }
 }
 
-export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; orchestrator: ShardedOrchestrator; pipeline: IngestionPipeline } {
-    const server = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' } });
+export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; orchestrator: ShardedOrchestrator; pipeline: IngestionPipeline; auditLog: AuditLog } {
+    // 14-H-1: Thread x-request-id across every request so log lines and error
+    // responses share a correlation ID.  Clients that set their own ID are
+    // honoured; otherwise a short monotonic counter is used.
+    let _reqCounter = 0;
+    const server = Fastify({
+        logger: { level: process.env.LOG_LEVEL ?? 'info' },
+        requestIdHeader: 'x-request-id',
+        genReqId: () => String(++_reqCounter),
+    });
+    // 14-A-3: Audit log — bounded ring buffer of mutation events.
+    const auditLog = new AuditLog(parseInt(process.env.MMPM_AUDIT_LOG_MAX_ENTRIES ?? '1000', 10));
+
+    // 14-C-1: TTL registry — optional per-atom expiry with access-aware reset.
+    const ttlRegistry = new TtlRegistry();
+
     server.addContentTypeParser('application/json', { parseAs: 'string' }, (_request, body, done) => {
         const rawBody = typeof body === 'string' ? body : body.toString('utf8');
         if (rawBody.trim().length === 0) {
@@ -765,7 +783,10 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
     });
     let writePolicy: WritePolicyConfig = createDefaultWritePolicy();
 
-    const probePaths = new Set(['/metrics', '/health', '/ready']);
+    // Paths that bypass auth and readiness checks.
+    // POST /verify is public by design — third-party auditors must be able to
+    // verify proofs without API credentials.
+    const probePaths = new Set(['/metrics', '/health', '/ready', '/verify']);
 
     const resolveTemporalScope = (asOfMsInput: unknown, asOfVersionInput: unknown):
         | { ok: true; scope: TemporalScope }
@@ -874,6 +895,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
                 return reply.status(400).send({ error: `Property 'data' invalid — ${SCHEMA_ERROR}` });
             }
             const report = await orchestrator.access(item);
+            ttlRegistry.touch(item); // 14-C-1: reset TTL clock on access
             const result = report.predictedNext !== null ? 'hit' : 'miss';
             accessCounter.inc({ result });
             requestDuration.observe(report.latencyMs);
@@ -926,6 +948,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             }
 
             const results = await orchestrator.batchAccess(normalized as string[]);
+            ttlRegistry.touchAll(normalized as string[]); // 14-C-1: reset TTL clocks on batch access
             return { results };
         } catch (e: any) {
             return reply.status(500).send({ error: e.message });
@@ -1530,12 +1553,22 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
      */
     server.post('/atoms', async (request, reply) => {
         try {
-            const { atoms, reviewApproved } = request.body as { atoms?: unknown; reviewApproved?: unknown };
+            const { atoms, reviewApproved, ttlMs } = request.body as {
+                atoms?: unknown;
+                reviewApproved?: unknown;
+                /** 14-C-1: Optional TTL in milliseconds applied to all atoms in this batch. */
+                ttlMs?: unknown;
+            };
             if (!Array.isArray(atoms) || atoms.length === 0) {
                 return reply.status(400).send({ error: "'atoms' must be a non-empty array." });
             }
             if (reviewApproved !== undefined && typeof reviewApproved !== 'boolean') {
                 return reply.status(400).send({ error: "Property 'reviewApproved' must be boolean when provided." });
+            }
+            // Validate optional TTL
+            const ttlMsNum = ttlMs !== undefined ? Number(ttlMs) : undefined;
+            if (ttlMsNum !== undefined && (!Number.isFinite(ttlMsNum) || ttlMsNum <= 0)) {
+                return reply.status(400).send({ error: "Property 'ttlMs' must be a positive number when provided." });
             }
             const normalized = atoms.map(normalizeAtomInput);
             if (normalized.some(x => x === null)) {
@@ -1584,6 +1617,17 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
                 });
             }
             const receipt = await pipeline.enqueue(writeEvaluation.allowedAtoms);
+            // 14-C-1: Register TTL if requested
+            if (ttlMsNum !== undefined) {
+                for (const atom of writeEvaluation.allowedAtoms) {
+                    ttlRegistry.set(atom, ttlMsNum);
+                }
+            }
+            auditLog.record('atom.add', {
+                atoms: writeEvaluation.allowedAtoms,
+                count: writeEvaluation.allowedAtoms.length,
+                requestId: request.id as string,
+            });
             return {
                 status: 'Queued',
                 ...receipt,
@@ -1614,7 +1658,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
      *
      * Query params:
      *   maxAgeDays  — integer > 0, default 30
-     *   type        — fact | event | relation | state | other (optional filter)
+     *   type        — fact | event | relation | state | procedure | other (optional filter)
      *
      * Returns: { stale: [{ atom, type, createdAtMs, ageDays }], count, asOfMs, maxAgeDays }
      */
@@ -1627,7 +1671,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
         }
 
         if (query.type !== undefined && !isAtomType(query.type)) {
-            return reply.status(400).send({ error: "Query param 'type' must be one of: fact,event,relation,state,other." });
+            return reply.status(400).send({ error: "Query param 'type' must be one of: fact,event,relation,state,procedure,other." });
         }
 
         const now = Date.now();
@@ -1669,15 +1713,247 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
      *
      * Returns: { status, flushedCount }
      */
-    server.post('/admin/commit', async (_, reply) => {
+    server.post('/admin/commit', async (request, reply) => {
         try {
             const before = pipeline.getStats().totalCommitted;
             await pipeline.flush();
             const after = pipeline.getStats().totalCommitted;
-            return { status: 'Committed', flushedCount: after - before };
+            const flushedCount = after - before;
+            auditLog.record('admin.commit', {
+                count: flushedCount,
+                requestId: request.id as string,
+                treeVersion: orchestrator.getMasterVersion(),
+            });
+            return { status: 'Committed', flushedCount };
         } catch (e: any) {
             return reply.status(500).send({ error: e.message });
         }
+    });
+
+    /**
+     * GET /admin/audit-log  —  Query the in-memory audit log of mutation events.
+     *
+     * Query params:
+     *   ?limit=N         Maximum entries to return (default 100, max 1000).
+     *   ?since=<ms>      Only return entries with timestampMs >= this value.
+     *   ?event=<type>    Filter by event type: atom.add | atom.tombstone |
+     *                    admin.commit | admin.import | admin.export
+     *
+     * Returns: { entries: [...], total, bufferSize, maxEntries }
+     * Entries are sorted newest-first.
+     *
+     * Note: The log is in-memory and resets on server restart.
+     */
+    server.get('/admin/audit-log', async (request, reply) => {
+        const query = (request.query ?? {}) as Record<string, unknown>;
+
+        const VALID_EVENTS = new Set(['atom.add', 'atom.tombstone', 'admin.commit', 'admin.import', 'admin.export']);
+
+        const limitRaw = typeof query.limit === 'string' ? parseInt(query.limit, 10) : 100;
+        if (!Number.isFinite(limitRaw) || limitRaw < 1) {
+            return reply.status(400).send({ error: "Query param 'limit' must be a positive integer." });
+        }
+
+        const sinceRaw = typeof query.since === 'string' ? parseInt(query.since, 10) : undefined;
+        if (sinceRaw !== undefined && !Number.isFinite(sinceRaw)) {
+            return reply.status(400).send({ error: "Query param 'since' must be a Unix ms timestamp." });
+        }
+
+        const eventFilter = typeof query.event === 'string' ? query.event : undefined;
+        if (eventFilter && !VALID_EVENTS.has(eventFilter)) {
+            return reply.status(400).send({
+                error: `Query param 'event' must be one of: ${[...VALID_EVENTS].join(' | ')}.`,
+            });
+        }
+
+        const entries = auditLog.query({
+            limit: limitRaw,
+            since: sinceRaw,
+            event: eventFilter as AuditEventType | undefined,
+        });
+
+        return {
+            entries,
+            total: auditLog.totalRecorded,
+            bufferSize: auditLog.size,
+            maxEntries: auditLog.maxEntries,
+        };
+    });
+
+    /**
+     * GET /admin/export  —  Snapshot all atoms as NDJSON for backup / migration.
+     *
+     * Each line is a JSON record:
+     *   { atom, status, hash, createdAtMs, committedAtVersion, shard }
+     *
+     * Query params:
+     *   ?status=active|tombstoned|all  (default: active)
+     *   ?type=fact|state|event|relation|procedure|other   (filter by atom type segment)
+     *
+     * The response body is newline-delimited JSON (application/x-ndjson).
+     * Every active atom that has been committed is included; pending atoms
+     * (not yet in LevelDB) are excluded.
+     */
+    server.get('/admin/export', async (request, reply) => {
+        const query = (request.query ?? {}) as Record<string, unknown>;
+        const statusFilter = typeof query.status === 'string' ? query.status : 'active';
+        const typeFilter   = typeof query.type   === 'string' ? query.type   : null;
+
+        if (!['active', 'tombstoned', 'all'].includes(statusFilter)) {
+            return reply.status(400).send({ error: "Query param 'status' must be active | tombstoned | all." });
+        }
+        if (typeFilter && !['fact', 'state', 'event', 'relation', 'procedure', 'other'].includes(typeFilter)) {
+            return reply.status(400).send({ error: "Query param 'type' must be fact | state | event | relation | procedure | other." });
+        }
+
+        const entries = orchestrator.listAtoms();
+        const lines: string[] = [];
+
+        for (const entry of entries) {
+            if (statusFilter !== 'all' && entry.status !== statusFilter) continue;
+            if (typeFilter) {
+                // atom format: v1.<type>.<value>
+                const parts = entry.atom.split('.');
+                if (parts[1] !== typeFilter) continue;
+            }
+            const record = orchestrator.inspectAtom(entry.atom);
+            if (!record) continue; // should not happen, but guard
+            lines.push(JSON.stringify({
+                atom: record.atom,
+                status: record.status,
+                hash: record.hash,
+                createdAtMs: record.createdAtMs,
+                committedAtVersion: record.committedAtVersion,
+                shard: record.shard,
+            }));
+        }
+
+        const dateStr = new Date().toISOString().slice(0, 10);
+        auditLog.record('admin.export', { count: lines.length, requestId: request.id as string });
+        reply.header('Content-Type', 'application/x-ndjson');
+        reply.header('Content-Disposition', `attachment; filename="mmpm-export-${dateStr}.ndjson"`);
+        return reply.send(lines.join('\n') + (lines.length > 0 ? '\n' : ''));
+    });
+
+    /**
+     * POST /admin/import  —  Ingest atoms from an NDJSON snapshot.
+     *
+     * Accepts the same NDJSON format produced by GET /admin/export, or any
+     * newline-delimited JSON where each line has an "atom" string field.
+     * Plain atom strings (without JSON wrapping) are also accepted per line.
+     *
+     * Returns: { imported, skipped, errors }
+     *   imported — atoms accepted into the ingest pipeline
+     *   skipped  — lines that were empty or already present
+     *   errors   — lines that could not be parsed or had an invalid atom string
+     */
+    server.post('/admin/import', async (request, reply) => {
+        const rawBody = typeof request.body === 'string'
+            ? request.body
+            : JSON.stringify(request.body ?? '');
+
+        const lines = rawBody.split('\n').map(l => l.trim()).filter(Boolean);
+        if (lines.length === 0) {
+            return reply.status(400).send({ error: 'Request body is empty — expected NDJSON atom records.' });
+        }
+
+        const toIngest: string[] = [];
+        let skipped = 0;
+        const errors: string[] = [];
+
+        for (const line of lines) {
+            let atom: string | null = null;
+            try {
+                if (line.startsWith('{')) {
+                    const obj = JSON.parse(line);
+                    atom = typeof obj.atom === 'string' ? obj.atom : null;
+                } else {
+                    // bare atom string
+                    atom = line;
+                }
+            } catch {
+                errors.push(`JSON parse error: ${line.slice(0, 80)}`);
+                continue;
+            }
+
+            if (!atom || !isAtomV1(atom)) {
+                errors.push(`Invalid atom: ${String(atom ?? line).slice(0, 80)}`);
+                continue;
+            }
+
+            // Skip atoms already present and active to avoid duplicates
+            const existing = orchestrator.inspectAtom(atom);
+            if (existing && existing.status === 'active') {
+                skipped++;
+                continue;
+            }
+
+            toIngest.push(atom);
+        }
+
+        if (toIngest.length > 0) {
+            await pipeline.enqueue(toIngest);
+        }
+
+        auditLog.record('admin.import', {
+            atoms: toIngest,
+            count: toIngest.length,
+            requestId: request.id as string,
+        });
+
+        return { imported: toIngest.length, skipped, errors };
+    });
+
+    /**
+     * POST /verify  —  Standalone Merkle proof verification. No auth required.
+     *
+     * Accepts { atom, proof: { leaf, root, auditPath, index } } and recomputes
+     * the Merkle path entirely from the supplied values — no DB read.
+     * Returns { valid, atom, checkedAt }.
+     *
+     * Third-party auditors can call this endpoint without API credentials to
+     * independently verify any proof retrieved from GET /atoms/:atom or
+     * GET /memory/bootstrap.
+     */
+    server.post('/verify', async (request, reply) => {
+        const body = request.body as Record<string, unknown> | null;
+        if (!body || typeof body !== 'object') {
+            return reply.status(400).send({ error: 'Request body must be JSON object with atom and proof fields.' });
+        }
+        const { atom, proof } = body as { atom?: unknown; proof?: unknown };
+
+        if (typeof atom !== 'string' || !isAtomV1(atom)) {
+            return reply.status(400).send({ error: `'atom' field invalid — ${SCHEMA_ERROR}` });
+        }
+
+        // Validate proof shape
+        if (
+            !proof ||
+            typeof proof !== 'object' ||
+            typeof (proof as any).leaf !== 'string' ||
+            typeof (proof as any).root !== 'string' ||
+            !Array.isArray((proof as any).auditPath) ||
+            typeof (proof as any).index !== 'number'
+        ) {
+            return reply.status(400).send({
+                error: "Field 'proof' must be an object with: leaf (string), root (string), auditPath (string[]), index (number).",
+            });
+        }
+
+        const merkleProof: MerkleProof = {
+            leaf: (proof as any).leaf,
+            root: (proof as any).root,
+            auditPath: (proof as any).auditPath,
+            index: (proof as any).index,
+        };
+
+        const valid = MerkleSnapshot.verifyProof(merkleProof);
+
+        return {
+            valid,
+            atom,
+            checkedAt: Date.now(),
+        };
     });
 
     /**
@@ -1696,6 +1972,13 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
         }
         try {
             const treeVersion = await orchestrator.removeAtom(atom);
+            ttlRegistry.delete(atom); // 14-C-1: remove TTL tracking after tombstone
+            auditLog.record('atom.tombstone', {
+                atoms: [atom],
+                count: 1,
+                requestId: request.id as string,
+                treeVersion,
+            });
             return { status: 'Success', tombstonedAtom: atom, treeVersion };
         } catch (e: any) {
             return reply.status(404).send({ error: e.message });
@@ -1718,7 +2001,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
 
         if (query.type !== undefined) {
             if (!isAtomType(query.type)) {
-                return reply.status(400).send({ error: "Query param 'type' must be one of: fact,event,relation,state,other." });
+                return reply.status(400).send({ error: "Query param 'type' must be one of: fact,event,relation,state,procedure,other." });
             }
             atoms = atoms.filter(entry => parseAtomV1(entry.atom)?.type === query.type);
         }
@@ -1788,14 +2071,49 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             createdAtMs: entry.createdAtMs,
         })));
 
+        const proof = orchestrator.getAtomProof(atom) ?? null;
+        // 14-C-1: Include TTL metadata if this atom has a TTL registered
+        const ttlEntry = ttlRegistry.get(atom) ?? null;
+
         return {
             ...record,
+            proof,
+            ttl: ttlEntry
+                ? {
+                    ttlMs: ttlEntry.ttlMs,
+                    ttlExpiresAt: ttlEntry.ttlExpiresAt,
+                    lastAccessedAtMs: ttlEntry.lastAccessedAtMs,
+                }
+                : null,
             contradiction: getFactConflictForAtom(record.atom, conflictIndex),
             temporal: temporal.scope,
         };
     });
 
-    return { server, orchestrator, pipeline };
+    // 14-C-1: Background TTL reaper — checks expired atoms and tombstones them.
+    const reaperIntervalMs = parseInt(process.env.MMPM_TTL_REAPER_INTERVAL_MS ?? '60000', 10);
+    const reaperTimer = setInterval(async () => {
+        const expired = ttlRegistry.expired();
+        for (const entry of expired) {
+            try {
+                await orchestrator.removeAtom(entry.atom as any);
+                ttlRegistry.delete(entry.atom);
+                auditLog.record('atom.tombstone', {
+                    atoms: [entry.atom],
+                    count: 1,
+                    treeVersion: orchestrator.getMasterVersion(),
+                });
+                logger.info({ atom: entry.atom, ttlMs: entry.ttlMs }, 'TTL reaper tombstoned expired atom');
+            } catch {
+                // Atom may already be tombstoned — that's fine
+                ttlRegistry.delete(entry.atom);
+            }
+        }
+    }, reaperIntervalMs);
+    // Ensure the timer doesn't keep the process alive on graceful shutdown
+    if (typeof reaperTimer.unref === 'function') reaperTimer.unref();
+
+    return { server, orchestrator, pipeline, auditLog };
 }
 
 // Only run when invoked directly
@@ -1833,7 +2151,17 @@ if (require.main === module) {
             await orchestrator.init();
             pipeline.start();
             await server.listen({ port: PORT, host: HOST });
-            logger.info(`MMPM Cluster Online — Shards: ${NUM_SHARDS} | ${HOST}:${PORT}`);
+            // 14-H-2: Single structured startup line — easy to grep and parse.
+            logger.info({
+                event: 'server_ready',
+                port: PORT,
+                host: HOST,
+                shards: NUM_SHARDS,
+                dbBasePath: process.env.DB_BASE_PATH ?? './mmpm-db',
+                logLevel: process.env.LOG_LEVEL ?? 'info',
+                writePolicy: process.env.WRITE_POLICY ?? 'auto-write',
+                apiKeySet: Boolean(process.env.MMPM_API_KEY),
+            }, 'MMPM server ready');
         } catch (err) {
             logger.error(err);
             process.exit(1);

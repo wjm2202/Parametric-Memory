@@ -1,7 +1,7 @@
 import { DataAtom } from './types';
 
 export const ATOM_SCHEMA_VERSION = 'v1' as const;
-export const ATOM_TYPES = ['fact', 'event', 'relation', 'state', 'other'] as const;
+export const ATOM_TYPES = ['fact', 'event', 'relation', 'state', 'procedure', 'other'] as const;
 
 export type AtomType = typeof ATOM_TYPES[number];
 
@@ -17,7 +17,7 @@ type AtomV1Input = {
     value?: unknown;
 };
 
-const V1_PATTERN = /^v1\.(fact|event|relation|state|other)\.(.+)$/;
+const V1_PATTERN = /^v1\.(fact|event|relation|state|procedure|other)\.(.+)$/;
 
 function isAtomType(input: unknown): input is AtomType {
     return typeof input === 'string' && (ATOM_TYPES as readonly string[]).includes(input);
@@ -81,7 +81,7 @@ export function normalizeAtomInput(input: unknown): DataAtom | null {
 export function assertAtomV1(atom: DataAtom, label: string = 'atom'): void {
     if (!isAtomV1(atom)) {
         throw new Error(
-            `${label} must be schema v1: 'v1.<type>.<value>' with type in {fact,event,relation,state,other}.`
+            `${label} must be schema v1: 'v1.<type>.<value>' with type in {fact,event,relation,state,procedure,other}.`
         );
     }
 }
