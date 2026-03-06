@@ -46,7 +46,7 @@
   },
   "keywords": [],
   "author": "",
-  "license": "AGPL OR SSPL OR BSL",
+  "license": "AGPL-3.0",
   "description": "Composable, explainable, auditable memory substrate for agentic and AI workflows. See BUSINESS_PLAN.md for details.",
   "devDependencies": {
     "@types/node": "^25.3.3",
