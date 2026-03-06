@@ -1818,6 +1818,16 @@ if (require.main === module) {
     process.on('SIGTERM', shutdown);
     process.on('SIGINT', shutdown);
 
+    // Crash safety — ensure fatal errors are always logged before exit
+    process.on('uncaughtException', (err) => {
+        logger.fatal({ err }, 'uncaughtException — process will exit');
+        process.exit(1);
+    });
+    process.on('unhandledRejection', (reason) => {
+        logger.fatal({ reason }, 'unhandledRejection — process will exit');
+        process.exit(1);
+    });
+
     (async () => {
         try {
             await orchestrator.init();

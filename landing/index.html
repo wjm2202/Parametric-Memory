@@ -280,6 +280,51 @@
     .c-green { color: #4ade80; }
     .c-yellow { color: #fbbf24; }
 
+    /* ── PILLARS ── */
+    .pillars {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1px;
+      background: var(--border);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-bottom: 64px;
+      overflow: hidden;
+    }
+
+    .pillar {
+      background: var(--bg2);
+      padding: 28px 24px;
+    }
+
+    .pillar-icon {
+      display: block;
+      font-size: 18px;
+      color: var(--teal);
+      margin-bottom: 12px;
+      line-height: 1;
+    }
+
+    .pillar-label {
+      display: block;
+      font-size: 11px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--teal);
+      margin-bottom: 10px;
+    }
+
+    .pillar-text {
+      font-size: 12px;
+      color: var(--dim);
+      line-height: 1.75;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+
+    @media (max-width: 600px) {
+      .pillars { grid-template-columns: 1fr; }
+    }
+
     /* ── TAGLINE ── */
     .tagline-section {
       text-align: center;
@@ -369,9 +414,7 @@
     <p class="eyebrow">open source · AGPL-3.0 · MCP compatible</p>
     <h1>memory with <em>proof.</em></h1>
     <p class="sub">
-      A cryptographically verifiable, Markov-predictive memory substrate for AI agents.
-      Every stored atom has a Merkle proof path. The system learns what comes next.
-      Every version is replayable.
+      Every other memory system trusts. MMPM proves.
     </p>
     <div class="cta-row">
       <a href="https://github.com/wjm2202/Parametric-Memory" class="btn btn-primary">
@@ -382,6 +425,25 @@
       </a>
     </div>
   </section>
+
+  <!-- POSITIONING PILLARS -->
+  <div class="pillars">
+    <div class="pillar">
+      <span class="pillar-icon">⬡</span>
+      <span class="pillar-label">Sovereignty</span>
+      <p class="pillar-text">Self-hosted. AGPL-3.0. Your data never leaves your infrastructure. The only credible open-source alternative to Mem0 and Zep — with production-grade observability baked in.</p>
+    </div>
+    <div class="pillar">
+      <span class="pillar-icon">✦</span>
+      <span class="pillar-label">Verifiability</span>
+      <p class="pillar-text">Merkle audit paths on every atom. Tamper-evident by design — table stakes for fintech, healthcare, and legal AI. Architecturally ahead of SOC 2 compliance patches.</p>
+    </div>
+    <div class="pillar">
+      <span class="pillar-icon">→</span>
+      <span class="pillar-label">Prediction</span>
+      <p class="pillar-text">The Markov transition layer learns what the agent needs next and pre-surfaces it with its own proof. 64% hit rate cold start. 0.032ms p95 proof verify. No competitor does this.</p>
+    </div>
+  </div>
 
   <!-- STATS -->
   <div class="stats">
@@ -446,7 +508,7 @@
 
   <!-- TAGLINE -->
   <div class="tagline-section">
-    <p class="big-tagline">most AI memory can retrieve.<br>none can <em>prove.</em></p>
+    <p class="big-tagline">every other memory system trusts.<br>MMPM <em>proves.</em></p>
     <a href="https://github.com/wjm2202/Parametric-Memory" class="btn btn-primary">
       github.com/wjm2202/Parametric-Memory
     </a>

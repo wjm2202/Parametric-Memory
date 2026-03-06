@@ -42,7 +42,9 @@
     "bench:track": "ts-node tools/harness/track.ts",
     "bench:track:save": "ts-node tools/harness/track.ts save --report-file tools/harness/results/latest.json --results-dir tools/harness/results",
     "mcp:serve": "ts-node tools/mcp/mmpm_mcp_server.ts",
-    "mcp:serve:unsafe": "MMPM_MCP_ENABLE_MUTATIONS=1 ts-node tools/mcp/mmpm_mcp_server.ts"
+    "mcp:serve:unsafe": "MMPM_MCP_ENABLE_MUTATIONS=1 ts-node tools/mcp/mmpm_mcp_server.ts",
+    "setup": "npm install && npm run build && (test -f .env || cp .env.example .env) && echo 'Ready. Run: node dist/server.js  or  docker-compose up'",
+    "skill:pack": "cd integrations && zip -r parametric-memory.skill claude-skill/ && echo 'Packaged integrations/parametric-memory.skill'"
   },
   "keywords": [],
   "author": "",

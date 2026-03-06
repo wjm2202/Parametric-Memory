@@ -258,6 +258,24 @@ Use a vector DB for "find things that are semantically similar to this query." U
 
 ---
 
+## Integrations
+
+MMPM ships with ready-made integrations for the most common AI development environments.
+
+**Claude Cowork skill** (`integrations/claude-skill/SKILL.md`) — Install in Claude Cowork to give Claude persistent, cryptographically verifiable memory backed by your local MMPM server. Drag `integrations/parametric-memory.skill` into Cowork to install in one step. Covers session-start context loading, atom storage, Markov prediction, and end-of-session save pattern.
+
+**VSCode / Claude Code** (`integrations/vscode/`) — Three integration paths: MCP server config for Cline, Continue, and GitHub Copilot; `CLAUDE.md.template` for Claude Code in terminal (drop in your project root); and `.vscode/tasks.json` snippets to start/stop MMPM as a VSCode task. See `integrations/vscode/README.md` for step-by-step setup.
+
+**Claude Desktop** (`integrations/claude-desktop/claude_desktop_config.json.example`) — Drop-in MCP config for Claude Desktop on macOS and Windows. Adds all MMPM tools directly to Claude's tool palette without any code.
+
+To rebuild the `.skill` package after editing the skill file:
+
+```bash
+npm run skill:pack
+```
+
+---
+
 ## Contributing
 
 Contributions welcome. Please open an issue before a large PR.

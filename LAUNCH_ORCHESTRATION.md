@@ -43,13 +43,14 @@ This document defines the sub-agent orchestration structure for executing the Pa
         │                 Landing page ✅  |  LICENSE file ✅  |  CI badge ⬜
         ▼
 [STAGE 2: Profiles]       GitHub profile README ✅  |  Repo metadata ✅
-        │                 Twitter/X @_EntityOne ⬜ (register manually)
+        │                 Twitter/X @_EntityOne ✅ (registered 2026-03-07)
+        │                 Twitter profile setup ✅ (display name, bio, location, website — 2026-03-07)
         │                 LinkedIn ⬜ (post manually on launch day)
         ▼
 [STAGE 3: Content Staged] Launch posts written ✅  |  LinkedIn post ✅
-        │                 Posts staged as drafts in Twitter ⬜ (after account created)
+        │                 Posts staged as drafts in Twitter ✅ (all 5 saved — 2026-03-07)
         ▼
-[STAGE 4: Repo Public]    git push origin graph + merge to main ⬜ (YOU run this)
+[STAGE 4: Repo Public]    git push origin graph + merge to main ✅ (done 2026-03-07)
         │                 v0.1.0 draft release ✅ (attach benchmark .md + publish April 6)
         │                 Repo → public April 6 ⬜
         ▼
