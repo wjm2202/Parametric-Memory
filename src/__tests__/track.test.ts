@@ -91,7 +91,7 @@ function baseReport(): BenchmarkReport {
                     cvVerify: 0,
                     latenciesMs: [0.05],
                     byType: {
-                        current:   { attempts: 10, failures: 0, avgVerifyMs: 0.05, p50VerifyMs: 0.05, p95VerifyMs: 0.05, p99VerifyMs: 0.05, cvVerify: 0, latenciesMs: [0.05] },
+                        current: { attempts: 10, failures: 0, avgVerifyMs: 0.05, p50VerifyMs: 0.05, p95VerifyMs: 0.05, p99VerifyMs: 0.05, cvVerify: 0, latenciesMs: [0.05] },
                         predicted: { attempts: 10, failures: 0, avgVerifyMs: 0.05, p50VerifyMs: 0.05, p95VerifyMs: 0.05, p99VerifyMs: 0.05, cvVerify: 0, latenciesMs: [0.05] },
                         shardRoot: { attempts: 10, failures: 0, avgVerifyMs: 0.05, p50VerifyMs: 0.05, p95VerifyMs: 0.05, p99VerifyMs: 0.05, cvVerify: 0, latenciesMs: [0.05] },
                     },
