@@ -100,7 +100,7 @@ NPM_VER="$(npm --version 2>/dev/null || echo 'unknown')"
 TS_VER="$(node -e "console.log(require('$REPO_ROOT/node_modules/typescript/package.json').version)" 2>/dev/null || echo 'unknown')"
 GIT_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo 'unknown')"
 GIT_BRANCH="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'unknown')"
-GIT_DIRTY="$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null | grep -c '' | awk '{print ($1 > 0) ? "true" : "false"}')"
+GIT_DIRTY="$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null | wc -l | awk '{print ($1 > 0) ? "true" : "false"}')"
 API_KEY_SET="$([ -n "${MMPM_API_KEY:-}" ] && echo 'true' || echo 'false')"
 
 # Load API key if present
