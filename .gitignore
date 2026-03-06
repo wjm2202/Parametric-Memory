@@ -13,6 +13,7 @@ mmpm-test-smoke-db*/
 mmpm-demo-db/
 test-shard-db*/
 test-*-db*/
+mmpm-harness-cli-db*/
 
 # ── Environment files ─────────────────────────────────────────────────
 # Block ALL .env variants — they may contain secrets
@@ -30,6 +31,15 @@ npm-debug.log*
 coverage/
 .nyc_output/
 vitest-results/
+# Root-level WAL files left by test runs
+*.wal
+# Temp test DB directories and debug dirs
+test-debug-g3/
+# Linux FUSE hidden files (CoWork / FUSE mounts)
+.fuse_hidden*
+# Planning / scratch documents not part of the committed source
+FEATURE_ROADMAP.md
+SPRINT_12_PLAN.md
 
 # ── Benchmark artifacts ─────────────────────────────────────────────────────
 tools/harness/results/**/
