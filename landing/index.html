@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Parametric-Memory — memory with proof.</title>
+  <meta name="description" content="A cryptographically verifiable, Markov-predictive memory substrate for AI agents. Every atom proven. Every sequence learned." />
+  <meta property="og:title" content="Parametric-Memory" />
+  <meta property="og:description" content="memory with proof." />
+  <meta property="og:url" content="https://parametric-memory.dev" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:site" content="@_EntityOne" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --teal: #00d4ff;
+      --bg: #0a0a0f;
+      --bg2: #0d1117;
+      --white: #ffffff;
+      --dim: rgba(255,255,255,0.45);
+      --border: rgba(0,212,255,0.15);
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--white);
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+      font-size: 14px;
+      line-height: 1.7;
+      min-height: 100vh;
+    }
+
+    /* ── GRID BACKGROUND ── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(0,212,255,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,212,255,0.03) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .wrap {
+      position: relative;
+      z-index: 1;
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* ── NAV ── */
+    nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 32px 0 0;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 20px;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      text-decoration: none;
+      color: var(--white);
+    }
+
+    .logo-icon {
+      width: 28px;
+      height: 28px;
+    }
+
+    .logo-text {
+      font-size: 13px;
+      letter-spacing: 0.05em;
+      color: var(--dim);
+    }
+
+    .logo-text span { color: var(--teal); }
+
+    nav a {
+      color: var(--dim);
+      text-decoration: none;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      transition: color 0.2s;
+    }
+
+    nav a:hover { color: var(--teal); }
+
+    /* ── HERO ── */
+    .hero {
+      padding: 96px 0 80px;
+      text-align: left;
+    }
+
+    .eyebrow {
+      font-size: 11px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--teal);
+      margin-bottom: 24px;
+    }
+
+    h1 {
+      font-size: clamp(32px, 6vw, 52px);
+      font-weight: 300;
+      line-height: 1.15;
+      letter-spacing: -0.02em;
+      margin-bottom: 24px;
+      color: var(--white);
+    }
+
+    h1 em {
+      font-style: normal;
+      color: var(--teal);
+    }
+
+    .sub {
+      font-size: 15px;
+      color: var(--dim);
+      max-width: 520px;
+      line-height: 1.8;
+      margin-bottom: 48px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+
+    .cta-row {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 20px;
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-decoration: none;
+      transition: all 0.2s;
+      cursor: pointer;
+      border: none;
+    }
+
+    .btn-primary {
+      background: var(--teal);
+      color: var(--bg);
+      font-weight: 600;
+    }
+
+    .btn-primary:hover {
+      background: #33ddff;
+      transform: translateY(-1px);
+    }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--dim);
+      border: 1px solid var(--border);
+    }
+
+    .btn-ghost:hover {
+      border-color: var(--teal);
+      color: var(--teal);
+    }
+
+    /* ── STATS BAR ── */
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1px;
+      background: var(--border);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin: 64px 0;
+      overflow: hidden;
+    }
+
+    .stat {
+      background: var(--bg2);
+      padding: 20px 16px;
+      text-align: center;
+    }
+
+    .stat-val {
+      display: block;
+      font-size: 20px;
+      font-weight: 400;
+      color: var(--teal);
+      letter-spacing: -0.02em;
+      margin-bottom: 4px;
+    }
+
+    .stat-label {
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    /* ── FEATURES ── */
+    .features {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1px;
+      background: var(--border);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-bottom: 64px;
+      overflow: hidden;
+    }
+
+    .feature {
+      background: var(--bg2);
+      padding: 28px 24px;
+    }
+
+    .feature-tag {
+      font-size: 10px;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--teal);
+      margin-bottom: 10px;
+      display: block;
+    }
+
+    .feature h3 {
+      font-size: 14px;
+      font-weight: 400;
+      color: var(--white);
+      margin-bottom: 8px;
+      letter-spacing: 0.01em;
+    }
+
+    .feature p {
+      font-size: 12px;
+      color: var(--dim);
+      line-height: 1.7;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+
+    /* ── CODE BLOCK ── */
+    .code-section {
+      margin-bottom: 64px;
+    }
+
+    .section-label {
+      font-size: 11px;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--dim);
+      margin-bottom: 16px;
+    }
+
+    pre {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 24px;
+      overflow-x: auto;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .c-dim { color: var(--dim); }
+    .c-teal { color: var(--teal); }
+    .c-white { color: var(--white); }
+    .c-green { color: #4ade80; }
+    .c-yellow { color: #fbbf24; }
+
+    /* ── TAGLINE ── */
+    .tagline-section {
+      text-align: center;
+      padding: 80px 0;
+      border-top: 1px solid var(--border);
+    }
+
+    .big-tagline {
+      font-size: clamp(28px, 5vw, 44px);
+      font-weight: 300;
+      letter-spacing: -0.02em;
+      color: var(--white);
+      margin-bottom: 24px;
+    }
+
+    .big-tagline em {
+      font-style: normal;
+      color: var(--teal);
+    }
+
+    /* ── FOOTER ── */
+    footer {
+      padding: 32px 0;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    footer span {
+      font-size: 11px;
+      color: var(--dim);
+      letter-spacing: 0.05em;
+    }
+
+    footer a {
+      color: var(--dim);
+      text-decoration: none;
+      font-size: 11px;
+      transition: color 0.2s;
+    }
+
+    footer a:hover { color: var(--teal); }
+
+    .footer-links { display: flex; gap: 24px; }
+
+    /* ── MOBILE ── */
+    @media (max-width: 600px) {
+      .stats { grid-template-columns: repeat(2, 1fr); }
+      .features { grid-template-columns: 1fr; }
+      footer { flex-direction: column; gap: 16px; text-align: center; }
+    }
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- NAV -->
+  <nav>
+    <a href="/" class="logo">
+      <!-- Inline SVG Merkle tree logo -->
+      <svg class="logo-icon" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="14" cy="3" r="2" fill="#00d4ff"/>
+        <circle cx="7" cy="10" r="2" fill="#ffffff"/>
+        <circle cx="21" cy="10" r="2" fill="#ffffff"/>
+        <circle cx="4" cy="18" r="2" fill="#ffffff"/>
+        <circle cx="10" cy="18" r="2" fill="#ffffff"/>
+        <circle cx="18" cy="18" r="2" fill="#ffffff"/>
+        <circle cx="24" cy="18" r="2" fill="#ffffff"/>
+        <line x1="14" y1="5" x2="7" y2="8" stroke="#00d4ff" stroke-width="1" opacity="0.7"/>
+        <line x1="14" y1="5" x2="21" y2="8" stroke="#00d4ff" stroke-width="1" opacity="0.7"/>
+        <line x1="7" y1="12" x2="4" y2="16" stroke="#ffffff" stroke-width="1" opacity="0.4"/>
+        <line x1="7" y1="12" x2="10" y2="16" stroke="#ffffff" stroke-width="1" opacity="0.4"/>
+        <line x1="21" y1="12" x2="18" y2="16" stroke="#ffffff" stroke-width="1" opacity="0.4"/>
+        <line x1="21" y1="12" x2="24" y2="16" stroke="#ffffff" stroke-width="1" opacity="0.4"/>
+        <!-- Markov arrow at root -->
+        <line x1="14" y1="1" x2="18" y2="1" stroke="#00d4ff" stroke-width="1"/>
+        <polyline points="17,0 18,1 17,2" fill="none" stroke="#00d4ff" stroke-width="1"/>
+      </svg>
+      <span class="logo-text"><span>Parametric</span>-Memory</span>
+    </a>
+    <a href="https://github.com/wjm2202/Parametric-Memory">GitHub →</a>
+  </nav>
+
+  <!-- HERO -->
+  <section class="hero">
+    <p class="eyebrow">open source · AGPL-3.0 · MCP compatible</p>
+    <h1>memory with <em>proof.</em></h1>
+    <p class="sub">
+      A cryptographically verifiable, Markov-predictive memory substrate for AI agents.
+      Every stored atom has a Merkle proof path. The system learns what comes next.
+      Every version is replayable.
+    </p>
+    <div class="cta-row">
+      <a href="https://github.com/wjm2202/Parametric-Memory" class="btn btn-primary">
+        View on GitHub
+      </a>
+      <a href="https://github.com/wjm2202/Parametric-Memory#readme" class="btn btn-ghost">
+        Read the docs
+      </a>
+    </div>
+  </section>
+
+  <!-- STATS -->
+  <div class="stats">
+    <div class="stat">
+      <span class="stat-val">3,888</span>
+      <span class="stat-label">ops / sec</span>
+    </div>
+    <div class="stat">
+      <span class="stat-val">64%</span>
+      <span class="stat-label">Markov hit rate</span>
+    </div>
+    <div class="stat">
+      <span class="stat-val">0.032ms</span>
+      <span class="stat-label">p95 proof verify</span>
+    </div>
+    <div class="stat">
+      <span class="stat-val">0</span>
+      <span class="stat-label">stale reads</span>
+    </div>
+  </div>
+
+  <!-- FEATURES -->
+  <div class="features">
+    <div class="feature">
+      <span class="feature-tag">Merkle proof chains</span>
+      <h3>Tamper-evident by design</h3>
+      <p>Every atom carries a cryptographic proof path verifiable against the current tree root. Tamper anything — the proof breaks.</p>
+    </div>
+    <div class="feature">
+      <span class="feature-tag">Markov engine</span>
+      <h3>Retrieval that predicts</h3>
+      <p>Transition weights update on every access. On retrieval, the system returns the predicted next atom — complete with its own proof.</p>
+    </div>
+    <div class="feature">
+      <span class="feature-tag">Temporal versioning</span>
+      <h3>Point-in-time replay</h3>
+      <p>Every commit increments a monotonic version. Any read accepts <code>asOfVersion</code> or <code>asOfMs</code> — replay the exact memory state at any past moment.</p>
+    </div>
+    <div class="feature">
+      <span class="feature-tag">MCP server</span>
+      <h3>Native Claude integration</h3>
+      <p>Ships a full Model Context Protocol server. Agents in Claude Desktop read and write MMPM memory natively, no HTTP plumbing required.</p>
+    </div>
+  </div>
+
+  <!-- QUICKSTART -->
+  <div class="code-section">
+    <p class="section-label">quickstart</p>
+    <pre><span class="c-dim"># one-line start</span>
+<span class="c-teal">docker-compose up</span>
+
+<span class="c-dim"># write an atom</span>
+<span class="c-teal">curl</span> <span class="c-white">-X POST localhost:3000/atoms</span> \
+  <span class="c-yellow">-d</span> <span class="c-green">'{"atom":"v1.fact.user_prefers_dark_mode"}'</span>
+
+<span class="c-dim"># access + get Markov prediction</span>
+<span class="c-teal">curl</span> <span class="c-white">-X POST localhost:3000/access</span> \
+  <span class="c-yellow">-d</span> <span class="c-green">'{"atom":"v1.fact.user_prefers_dark_mode"}'</span>
+
+<span class="c-dim"># → returns atom + predicted_next + proof.verified: true</span></pre>
+  </div>
+
+  <!-- TAGLINE -->
+  <div class="tagline-section">
+    <p class="big-tagline">most AI memory can retrieve.<br>none can <em>prove.</em></p>
+    <a href="https://github.com/wjm2202/Parametric-Memory" class="btn btn-primary">
+      github.com/wjm2202/Parametric-Memory
+    </a>
+  </div>
+
+  <!-- FOOTER -->
+  <footer>
+    <span>© 2026 entity one</span>
+    <div class="footer-links">
+      <a href="https://github.com/wjm2202/Parametric-Memory">GitHub</a>
+      <a href="https://x.com/_EntityOne">@_EntityOne</a>
+      <a href="https://github.com/wjm2202/Parametric-Memory/blob/main/README.md">Docs</a>
+    </div>
+  </footer>
+
+</div>
+</body>
+</html>
