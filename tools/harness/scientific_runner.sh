@@ -157,7 +157,7 @@ for i in $(seq 1 "$TRIALS"); do
   if [[ "$i" -gt 1 ]]; then sleep 2; fi
 
   cd "$REPO_ROOT"
-  npx ts-node tools/harness/cli.ts \
+  node_modules/.bin/ts-node tools/harness/cli.ts \
     --preset "$PROFILE" \
     --out "$TRIAL_OUT" \
     --prom-out "$RUN_DIR/trial_${TRIAL_NUM}.prom" \
