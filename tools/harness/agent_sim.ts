@@ -196,7 +196,7 @@ export async function runAgentSimulation(options: AgentSimOptions = {}): Promise
     const normWriteRatio = totalRatio > 0 ? writeRatio / totalRatio : 0;
     const normTrainRatio = totalRatio > 0 ? trainRatio / totalRatio : 0;
 
-    const atomPool = [...new Set(options.initialAtoms ?? ['AgentSeed_A', 'AgentSeed_B', 'AgentSeed_C'])];
+    const atomPool = [...new Set(options.initialAtoms ?? ['v1.state.AgentSeed_A', 'v1.state.AgentSeed_B', 'v1.state.AgentSeed_C'])];
     const committedPool = [...atomPool];
     const pendingPool: string[] = [];
     if (options.ensureInitialAtoms === true) {
@@ -377,7 +377,7 @@ export async function runAgentSimulation(options: AgentSimOptions = {}): Promise
                     stats.perAgentOps[agentId]++;
                     current = a;
                 } else if (roll < readRatio + normTrainRatio + normWriteRatio) {
-                    const atom = `Agent_${agentId}_${dynamicSeq++}`;
+                    const atom = `v1.state.Agent_${agentId}_${dynamicSeq++}`;
                     await ingestOneAtom(atom);
                     atomPool.push(atom);
                     if (useApi) pendingPool.push(atom);
@@ -460,7 +460,7 @@ async function runCli() {
             followPredictionRatio: parseArgNumber(argv, 'followPredictionRatio', 0.7),
             commitEveryWrites: parseArgNumber(argv, 'commitEveryWrites', 5),
             ensureInitialAtoms: true,
-            initialAtoms: ['AgentCli_A', 'AgentCli_B', 'AgentCli_C', 'AgentCli_D'],
+            initialAtoms: ['v1.state.AgentCli_A', 'v1.state.AgentCli_B', 'v1.state.AgentCli_C', 'v1.state.AgentCli_D'],
             seed: parseArgNumber(argv, 'seed', 42),
         });
         console.log(JSON.stringify(stats, null, 2));

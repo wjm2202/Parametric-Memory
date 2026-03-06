@@ -1,5 +1,8 @@
+import { performance } from 'perf_hooks';
 import { MerkleKernel } from './merkle';
 import { Hash, MerkleProof } from './types';
+
+const hrnow = (): number => performance.timeOrigin + performance.now();
 
 export class MasterKernel {
     private shardRoots: Hash[] = [];
@@ -119,7 +122,7 @@ export class MasterKernel {
         this.kernel = new MerkleKernel(this.shardRoots);
         this._version++;
         this.rootHistory.set(this._version, this.kernel.root);
-        this.versionTimestampHistory.set(this._version, Date.now());
+        this.versionTimestampHistory.set(this._version, hrnow());
 
         // Evict the oldest entries once the history window is exceeded.
         const evictVersion = this._version - this.HISTORY_WINDOW;

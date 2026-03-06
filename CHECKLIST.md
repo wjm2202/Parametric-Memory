@@ -27,9 +27,34 @@ Source of truth for detailed stories: `../MMPM_REFACTOR_PLAN.txt`.
 - [x] Concurrent AI-agent simulator (`tools/harness/agent_sim.ts`)
 - [x] Regression tracker / compare tool (`tools/harness/track.ts`)
 
-## Next Backlog Item
+## Sprint 12 — Hardening, Validation, and Citable Baseline
 
-- [ ] Backlog grooming: no unchecked story IDs currently listed in `MMPM_REFACTOR_PLAN.txt`
+Full plan: `SPRINT_12_PLAN.md`
+
+### Epic F — Proof Instrumentation
+- [ ] F1. Split proof-verify latency by proof type (current / predicted / shardRoot) in `recall_bench.ts` + `report.ts`
+
+### Epic G — Substrate Feature Validation
+- [ ] G1. Bootstrap endpoint contract tests (≥12 test cases)
+- [ ] G2. Namespace isolation correctness suite (≥8 scenarios, leakage rate = 0)
+- [ ] G3. Temporal retrieval correctness (`asOfMs` / `asOfVersion` across all endpoints)
+- [ ] G4. Contradiction surface-and-rank validation (≥6 conflict scenarios)
+- [ ] G5. Write-policy tier end-to-end (≥6 tests, 2 per tier)
+
+### Epic H — Citable Scientific Baseline
+- [ ] H1. Clean commit + full 10-trial concurrent citable run (git_dirty = false, results archived)
+
+### Epic I — Documentation and Memory Hygiene
+- [ ] I1. Update CHECKLIST.md (this file) with Sprint 13 placeholder
+- [ ] I2. Add 2026-03-06 session entry to `MMPM_REFACTOR_PLAN.txt`
+- [ ] I3. Stale atom audit — tombstone resolved investigation flags
+
+## Sprint 13 Candidates (not yet scoped)
+
+- [ ] Diff / state-delta API (`GET /atoms/diff?fromVersion=N&toVersion=M`)
+- [ ] Relation/graph traversal (ancestors, descendants, shortest path for `v1.relation.*`)
+- [ ] Per-atom access control (atom- or namespace-level read/write policy)
+- [ ] Python SDK (typed HTTP client matching MCP tool catalog)
 
 ## Operational Gates (Implemented)
 

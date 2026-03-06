@@ -26,6 +26,8 @@ export class ShardedOrchestrator {
     private policy: TransitionPolicy = TransitionPolicy.default();
     private readonly pendingHighWaterMark: number;
     private readonly backpressureRetryAfterSec: number;
+    /** Maps atom string → master version at which it was committed. */
+    private readonly atomCommittedAtVersion: Map<string, number> = new Map();
 
     constructor(
         numShards: number,
@@ -126,6 +128,13 @@ export class ShardedOrchestrator {
             shardVersions.set(id, shard.snapshotVersion);
         }
         this.master.batchUpdateShardRoots(rootUpdates, shardVersions);
+        // Record committedAtVersion for all seed atoms (they become visible at version 1).
+        const initVersion = this.master.currentVersion;
+        for (const { atom } of this.listAtoms()) {
+            if (!this.atomCommittedAtVersion.has(atom)) {
+                this.atomCommittedAtVersion.set(atom, initVersion);
+            }
+        }
         this.rebuildHashIndex();
         this.ready = true;
     }
@@ -464,10 +473,13 @@ export class ShardedOrchestrator {
         }
         this.master.batchUpdateShardRoots(rootUpdates, shardVersions);
 
+        // Record committedAtVersion for every newly-added atom.
+        const newVersion = this.master.currentVersion;
         for (const [shardIdx, shardAtoms] of buckets.entries()) {
             const shard = this.shards.get(shardIdx);
             if (!shard) continue;
             for (const atom of shardAtoms) {
+                this.atomCommittedAtVersion.set(atom, newVersion);
                 const hash = shard.getHash(atom);
                 if (hash) this.hashToShard.set(hash, shardIdx);
             }
@@ -521,6 +533,7 @@ export class ShardedOrchestrator {
         hash: Hash;
         committed: boolean;
         createdAtMs: number;
+        committedAtVersion: number;
         treeVersion: number;
         outgoingTransitions: { to: DataAtom; weight: number; effectiveWeight: number; lastUpdatedMs: number | null }[];
     } | null {
@@ -539,6 +552,7 @@ export class ShardedOrchestrator {
             hash: record.hash,
             committed: record.committed,
             createdAtMs: record.createdAtMs,
+            committedAtVersion: this.atomCommittedAtVersion.get(atom) ?? 0,
             treeVersion: this.master.currentVersion,
             outgoingTransitions: this.getWeights(atom) ?? [],
         };
