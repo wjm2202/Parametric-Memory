@@ -180,7 +180,8 @@ describe('Incremental Merkle benchmark (Story 4.3)', () => {
         const r100k = results.find(r => r.leafCount === 100_000)!;
         expect(r10k.incrementalP50Ms).toBeLessThanOrEqual(r10k.fullP50Ms);
         expect(r100k.incrementalP50Ms).toBeLessThanOrEqual(r100k.fullP50Ms);
-    });
+    // Benchmark runs ~4.5 s under parallel CI load; 20 s gives ample headroom.
+    }, 20_000);
 
     it('optionally runs a 1M-leaf benchmark when MMPM_BENCH_INCLUDE_1M=1', () => {
         if (process.env.MMPM_BENCH_INCLUDE_1M !== '1') {

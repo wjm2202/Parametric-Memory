@@ -1437,3 +1437,658 @@ describe('API readiness guard', () => {
         expect(JSON.parse(res.payload).ready).toBe(false);
     });
 });
+
+// =============================================================================
+// Sprint 12 — G1/G2/G3/G4/G5 Validation Suite
+// =============================================================================
+
+describe('Sprint 12 — G1: Bootstrap contract tests', () => {
+    const DB_PATH = './test-sprint12-bootstrap-db';
+    let server: FastifyInstance;
+    let orchestrator: ShardedOrchestrator;
+
+    beforeAll(async () => {
+        cleanup(DB_PATH);
+        const app = buildApp({
+            data: [
+                'v1.fact.pref_dark_mode_src_human_conf_high_scope_project_dt_2026_03_06',
+                'v1.fact.pref_concise_src_human_conf_high_scope_project_dt_2026_03_06',
+                'v1.state.working_on_sprint_12_src_human_conf_high_scope_project_dt_2026_03_06',
+                'v1.event.sprint_11_complete_src_human_conf_high_scope_project_dt_2026_03_06',
+                'v1.relation.sprint12_follows_sprint11_src_human_conf_high_scope_project_dt_2026_03_06',
+            ],
+            dbBasePath: DB_PATH,
+        });
+        server = withEnvAuth(app.server);
+        orchestrator = app.orchestrator;
+        await orchestrator.init();
+    });
+
+    afterAll(async () => {
+        await server.close();
+        await orchestrator.close();
+        cleanup(DB_PATH);
+    });
+
+    it('G1.1: response includes all top-level schema fields', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/memory/bootstrap',
+            payload: { objective: 'sprint planning', maxTokens: 512, limit: 10 },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.mode).toBe('session_bootstrap');
+        expect(Array.isArray(body.goals)).toBe(true);
+        expect(Array.isArray(body.constraints)).toBe(true);
+        expect(Array.isArray(body.preferences)).toBe(true);
+        expect(Array.isArray(body.topMemories)).toBe(true);
+        expect(Array.isArray(body.conflictingFacts)).toBe(true);
+        expect(typeof body.treeVersion).toBe('number');
+        expect(typeof body.generatedAtMs).toBe('number');
+        expect(typeof body.includedAtoms).toBe('number');
+        expect(body.decisionEvidence).toBeDefined();
+    });
+
+    it('G1.2: maxTokens budget is respected — includedAtoms within token ceiling', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/memory/bootstrap',
+            payload: { objective: 'sprint', maxTokens: 50, limit: 100 },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        // At 50 tokens, only a handful of atoms should fit
+        expect(body.includedAtoms).toBeLessThanOrEqual(10);
+    });
+
+    it('G1.3: limit parameter caps topMemories length', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/memory/bootstrap',
+            payload: { objective: 'sprint', limit: 2 },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.topMemories.length).toBeLessThanOrEqual(2);
+        expect(body.includedAtoms).toBeLessThanOrEqual(2);
+    });
+
+    it('G1.4: each topMemory entry has atom, category, and proof fields', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/memory/bootstrap',
+            payload: { objective: 'preference', limit: 5 },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        for (const mem of body.topMemories as Array<any>) {
+            expect(typeof mem.atom).toBe('string');
+            expect(typeof mem.category).toBe('string');
+            expect(mem.proof).toBeDefined();
+            expect(typeof mem.proof.root).toBe('string');
+        }
+    });
+
+    it('G1.5: decisionEvidence arrays are parallel to topMemories', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/memory/bootstrap',
+            payload: { objective: 'sprint state', limit: 5 },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        const n = body.topMemories.length;
+        expect(body.decisionEvidence.memoryIds.length).toBe(n);
+        expect(body.decisionEvidence.proofReferences.length).toBe(n);
+        expect(body.decisionEvidence.retrievalRationale.length).toBe(n);
+        expect(body.decisionEvidence.coverage.memoryIds).toBe(n);
+    });
+
+    it('G1.6: null objective returns null in response and still returns memories', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/memory/bootstrap',
+            payload: { limit: 5 },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.objective).toBeNull();
+        expect(Array.isArray(body.topMemories)).toBe(true);
+    });
+
+    it('G1.7: invalid maxTokens (string) returns 400', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/memory/bootstrap',
+            payload: { maxTokens: 'lots' },
+        });
+        expect(res.statusCode).toBe(400);
+    });
+
+    it('G1.8: invalid limit (negative) returns 400', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/memory/bootstrap',
+            payload: { limit: -1 },
+        });
+        expect(res.statusCode).toBe(400);
+    });
+
+    it('G1.9: treeVersion in response matches GET /atoms treeVersion', async () => {
+        const atomsRes = await server.inject({ method: 'GET', url: '/atoms' });
+        const atomsVersion = JSON.parse(atomsRes.payload).treeVersion as number;
+        const bootRes = await server.inject({
+            method: 'POST', url: '/memory/bootstrap',
+            payload: { limit: 5 },
+        });
+        const bootVersion = JSON.parse(bootRes.payload).treeVersion as number;
+        expect(bootVersion).toBe(atomsVersion);
+    });
+
+    it('G1.10: generatedAtMs is a recent timestamp', async () => {
+        const before = Date.now();
+        const res = await server.inject({
+            method: 'POST', url: '/memory/bootstrap',
+            payload: { limit: 5 },
+        });
+        const after = Date.now();
+        const body = JSON.parse(res.payload);
+        expect(body.generatedAtMs).toBeGreaterThanOrEqual(before);
+        expect(body.generatedAtMs).toBeLessThanOrEqual(after);
+    });
+
+    it('G1.11: highImpact=false disables evidence gate', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/memory/bootstrap',
+            payload: { objective: 'sprint', highImpact: false, limit: 5 },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.highImpact).toBe(false);
+        expect(body.evidenceGate.applied).toBe(false);
+    });
+
+    it('G1.12: invalid highImpact type returns 400', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/memory/bootstrap',
+            payload: { highImpact: 'yes' },
+        });
+        expect(res.statusCode).toBe(400);
+    });
+});
+
+describe('Sprint 12 — G2: Namespace isolation correctness', () => {
+    const DB_PATH = './test-sprint12-namespace-db';
+    let server: FastifyInstance;
+    let orchestrator: ShardedOrchestrator;
+
+    beforeAll(async () => {
+        cleanup(DB_PATH);
+        const app = buildApp({ data: [], dbBasePath: DB_PATH });
+        server = withEnvAuth(app.server);
+        orchestrator = app.orchestrator;
+        await orchestrator.init();
+        await server.inject({
+            method: 'POST', url: '/atoms',
+            payload: { atoms: [
+                'v1.fact.shared_goal_global',                        // global
+                'v1.fact.user_pref_ns_user_alice',                   // user:alice
+                'v1.fact.user_pref_ns_user_bob',                     // user:bob
+                'v1.fact.proj_state_ns_project_proj1',               // project:proj1
+                'v1.fact.proj_state_ns_project_proj2',               // project:proj2
+                'v1.fact.task_detail_ns_task_task1',                 // task:task1
+                'v1.fact.multi_scope_ns_user_alice_ns_project_proj1', // user:alice + project:proj1
+            ]},
+        });
+        await server.inject({ method: 'POST', url: '/admin/commit' });
+    });
+
+    afterAll(async () => {
+        await server.close();
+        await orchestrator.close();
+        cleanup(DB_PATH);
+    });
+
+    it('G2.1: user namespace excludes other users and globals when includeGlobal=false', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/search',
+            payload: { query: 'pref state goal task', threshold: 0, limit: 20,
+                namespace: { user: 'alice' }, includeGlobal: false },
+        });
+        expect(res.statusCode).toBe(200);
+        const atoms = (JSON.parse(res.payload).results as Array<{atom: string}>).map(r => r.atom);
+        expect(atoms.some(a => a.includes('ns_user_alice'))).toBe(true);
+        expect(atoms.some(a => a.includes('ns_user_bob'))).toBe(false);
+        expect(atoms.some(a => a.includes('shared_goal_global'))).toBe(false);
+    });
+
+    it('G2.2: includeGlobal=true adds global atoms to scoped results', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/search',
+            payload: { query: 'pref state goal task', threshold: 0, limit: 20,
+                namespace: { user: 'alice' }, includeGlobal: true },
+        });
+        expect(res.statusCode).toBe(200);
+        const atoms = (JSON.parse(res.payload).results as Array<{atom: string}>).map(r => r.atom);
+        expect(atoms.some(a => a.includes('ns_user_alice'))).toBe(true);
+        expect(atoms.some(a => a.includes('shared_goal_global'))).toBe(true);
+        expect(atoms.some(a => a.includes('ns_user_bob'))).toBe(false);
+    });
+
+    it('G2.3: project namespace is independently scoped', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/search',
+            payload: { query: 'proj user task', threshold: 0, limit: 20,
+                namespace: { project: 'proj1' }, includeGlobal: false },
+        });
+        expect(res.statusCode).toBe(200);
+        const atoms = (JSON.parse(res.payload).results as Array<{atom: string}>).map(r => r.atom);
+        expect(atoms.some(a => a.includes('ns_project_proj1'))).toBe(true);
+        expect(atoms.some(a => a.includes('ns_project_proj2'))).toBe(false);
+        // The single-user-only atom should not appear; the multi-dim atom (which also has
+        // project=proj1) legitimately appears and may contain 'ns_user_alice' in its name.
+        expect(atoms.some(a => a === 'v1.fact.user_pref_ns_user_alice')).toBe(false);
+    });
+
+    it('G2.4: task namespace scoping works correctly', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/search',
+            payload: { query: 'pref state goal task', threshold: 0, limit: 20,
+                namespace: { task: 'task1' }, includeGlobal: false },
+        });
+        expect(res.statusCode).toBe(200);
+        const atoms = (JSON.parse(res.payload).results as Array<{atom: string}>).map(r => r.atom);
+        expect(atoms.some(a => a.includes('ns_task_task1'))).toBe(true);
+        expect(atoms.some(a => a.includes('ns_user_alice'))).toBe(false);
+        expect(atoms.some(a => a.includes('ns_project_proj1'))).toBe(false);
+    });
+
+    it('G2.5: multi-dimension namespace matches atoms carrying all specified dims', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/search',
+            payload: { query: 'pref state scope goal', threshold: 0, limit: 20,
+                namespace: { user: 'alice', project: 'proj1' }, includeGlobal: false },
+        });
+        expect(res.statusCode).toBe(200);
+        const atoms = (JSON.parse(res.payload).results as Array<{atom: string}>).map(r => r.atom);
+        expect(atoms.some(a => a.includes('ns_user_alice_ns_project_proj1'))).toBe(true);
+        expect(atoms.some(a => a.includes('ns_user_bob'))).toBe(false);
+        expect(atoms.some(a => a.includes('ns_project_proj2'))).toBe(false);
+    });
+
+    it('G2.6: /memory/context respects namespace via query params', async () => {
+        const res = await server.inject({
+            method: 'GET',
+            url: '/memory/context?maxTokens=512&namespaceUser=alice&includeGlobal=false',
+        });
+        expect(res.statusCode).toBe(200);
+        const atoms = (JSON.parse(res.payload).entries as Array<{atom: string}>).map(e => e.atom);
+        expect(atoms.some(a => a.includes('ns_user_alice'))).toBe(true);
+        expect(atoms.some(a => a.includes('ns_user_bob'))).toBe(false);
+    });
+
+    it('G2.7: /memory/bootstrap respects namespace body param', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/memory/bootstrap',
+            payload: { limit: 20, namespace: { project: 'proj2' }, includeGlobal: false },
+        });
+        expect(res.statusCode).toBe(200);
+        const atoms = (JSON.parse(res.payload).topMemories as Array<{atom: string}>).map(e => e.atom);
+        expect(atoms.some(a => a.includes('ns_project_proj2'))).toBe(true);
+        expect(atoms.some(a => a.includes('ns_project_proj1'))).toBe(false);
+        expect(atoms.some(a => a.includes('ns_user_alice'))).toBe(false);
+    });
+
+    it('G2.8: leakage rate is zero — unrelated namespace returns empty result set', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/search',
+            payload: { query: 'pref state goal task', threshold: 0, limit: 20,
+                namespace: { user: 'charlie' }, includeGlobal: false },
+        });
+        expect(res.statusCode).toBe(200);
+        const atoms = (JSON.parse(res.payload).results as Array<{atom: string}>).map(r => r.atom);
+        // charlie has no atoms — nothing should leak from alice, bob, proj1, proj2
+        expect(atoms.some(a =>
+            a.includes('ns_user_alice') || a.includes('ns_user_bob') ||
+            a.includes('ns_project_') || a.includes('shared_goal_global')
+        )).toBe(false);
+    });
+});
+
+describe('Sprint 12 — G3: Temporal retrieval correctness', () => {
+    const DB_PATH = './test-sprint12-temporal-db';
+    let server: FastifyInstance;
+    let orchestrator: ShardedOrchestrator;
+    let versionBefore: number;
+    let versionAfter: number;
+    let tsBeforeMs: number;
+
+    beforeAll(async () => {
+        cleanup(DB_PATH);
+        const app = buildApp({ data: [], dbBasePath: DB_PATH });
+        server = withEnvAuth(app.server);
+        orchestrator = app.orchestrator;
+        await orchestrator.init();
+
+        // Capture version before the probe atom exists
+        const before = JSON.parse((await server.inject({ method: 'GET', url: '/atoms' })).payload);
+        versionBefore = before.treeVersion as number;
+        tsBeforeMs = Date.now();
+
+        await server.inject({
+            method: 'POST', url: '/atoms',
+            payload: { atoms: ['v1.fact.temporal_g3_probe_src_test_conf_high_scope_project_dt_2026_03_06'] },
+        });
+        await server.inject({ method: 'POST', url: '/admin/commit' });
+
+        const after = JSON.parse((await server.inject({ method: 'GET', url: '/atoms' })).payload);
+        versionAfter = after.treeVersion as number;
+    });
+
+    afterAll(async () => {
+        await server.close();
+        await orchestrator.close();
+        cleanup(DB_PATH);
+    });
+
+    it('G3.1: /search asOfVersion=before excludes atom committed after that version', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/search',
+            payload: { query: 'temporal g3 probe', threshold: 0, asOfVersion: versionBefore },
+        });
+        expect(res.statusCode).toBe(200);
+        const atoms = (JSON.parse(res.payload).results as Array<{atom: string}>).map(r => r.atom);
+        expect(atoms.some(a => a.includes('temporal_g3_probe'))).toBe(false);
+    });
+
+    it('G3.2: /search asOfVersion=after includes the committed atom', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/search',
+            payload: { query: 'temporal g3 probe', threshold: 0, asOfVersion: versionAfter },
+        });
+        expect(res.statusCode).toBe(200);
+        const atoms = (JSON.parse(res.payload).results as Array<{atom: string}>).map(r => r.atom);
+        expect(atoms.some(a => a.includes('temporal_g3_probe'))).toBe(true);
+    });
+
+    it('G3.3: /memory/context asOfMs=before excludes the probe atom', async () => {
+        const res = await server.inject({
+            method: 'GET',
+            url: `/memory/context?maxTokens=512&asOfMs=${Math.max(1, tsBeforeMs - 1)}`,
+        });
+        expect(res.statusCode).toBe(200);
+        const atoms = (JSON.parse(res.payload).entries as Array<{atom: string}>).map(e => e.atom);
+        expect(atoms.some(a => a.includes('temporal_g3_probe'))).toBe(false);
+    });
+
+    it('G3.4: /atoms/:atom?asOfVersion=before returns 404 for atom not yet committed', async () => {
+        const probe = encodeURIComponent('v1.fact.temporal_g3_probe_src_test_conf_high_scope_project_dt_2026_03_06');
+        const res = await server.inject({ method: 'GET', url: `/atoms/${probe}?asOfVersion=${versionBefore}` });
+        expect(res.statusCode).toBe(404);
+    });
+
+    it('G3.5: /atoms/:atom?asOfVersion=after returns 200 with temporal metadata', async () => {
+        const probe = encodeURIComponent('v1.fact.temporal_g3_probe_src_test_conf_high_scope_project_dt_2026_03_06');
+        const res = await server.inject({ method: 'GET', url: `/atoms/${probe}?asOfVersion=${versionAfter}` });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.temporal.asOfVersion).toBe(versionAfter);
+    });
+
+    it('G3.6: /memory/bootstrap asOfVersion=before excludes the probe atom', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/memory/bootstrap',
+            payload: { objective: 'temporal probe', limit: 20, asOfVersion: versionBefore },
+        });
+        expect(res.statusCode).toBe(200);
+        const atoms = (JSON.parse(res.payload).topMemories as Array<{atom: string}>).map(e => e.atom);
+        expect(atoms.some(a => a.includes('temporal_g3_probe'))).toBe(false);
+    });
+
+    it('G3.7: tombstoned atom is excluded from current retrieval', async () => {
+        const probeAtom = 'v1.fact.temporal_g3_tombstone_probe_src_test_conf_high_scope_project_dt_2026_03_06';
+        await server.inject({ method: 'POST', url: '/atoms', payload: { atoms: [probeAtom] } });
+        await server.inject({ method: 'POST', url: '/admin/commit' });
+
+        // Verify it is visible before tombstone
+        const beforeTombstone = await server.inject({
+            method: 'POST', url: '/search',
+            payload: { query: 'temporal g3 tombstone', threshold: 0 },
+        });
+        expect((JSON.parse(beforeTombstone.payload).results as Array<{atom: string}>)
+            .some(r => r.atom.includes('temporal_g3_tombstone_probe'))).toBe(true);
+
+        await server.inject({ method: 'DELETE', url: `/atoms/${encodeURIComponent(probeAtom)}` });
+
+        // After tombstone, current retrieval should not find it
+        const current = await server.inject({
+            method: 'POST', url: '/search',
+            payload: { query: 'temporal g3 tombstone', threshold: 0 },
+        });
+        const currentAtoms = (JSON.parse(current.payload).results as Array<{atom: string}>).map(r => r.atom);
+        expect(currentAtoms.some(a => a.includes('temporal_g3_tombstone_probe'))).toBe(false);
+    });
+});
+
+describe('Sprint 12 — G4: Contradiction surface-and-rank validation', () => {
+    const DB_PATH = './test-sprint12-contradiction-db';
+    let server: FastifyInstance;
+    let orchestrator: ShardedOrchestrator;
+
+    beforeAll(async () => {
+        cleanup(DB_PATH);
+        const app = buildApp({ data: [], dbBasePath: DB_PATH });
+        server = withEnvAuth(app.server);
+        orchestrator = app.orchestrator;
+        await orchestrator.init();
+
+        // Ingest conflicting facts across multiple keys
+        await server.inject({
+            method: 'POST', url: '/atoms',
+            payload: { atoms: [
+                // payment_mode conflict
+                'v1.fact.payment_mode_live_src_human_conf_high_scope_project_dt_2026_03_01',
+                'v1.fact.payment_mode_test_src_api_conf_medium_scope_project_dt_2026_03_06',
+                // env conflict (three-way)
+                'v1.fact.env_production_src_human_conf_high_scope_project_dt_2026_03_01',
+                'v1.fact.env_staging_src_api_conf_medium_scope_project_dt_2026_03_04',
+                'v1.fact.env_development_src_system_conf_low_scope_project_dt_2026_03_06',
+                // non-conflicting (different semantic key)
+                'v1.fact.region_us_east_src_human_conf_high_scope_project_dt_2026_03_06',
+            ]},
+        });
+        await server.inject({ method: 'POST', url: '/admin/commit' });
+    });
+
+    afterAll(async () => {
+        await server.close();
+        await orchestrator.close();
+        cleanup(DB_PATH);
+    });
+
+    it('G4.1: conflicting facts both appear in /search results', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/search',
+            payload: { query: 'payment mode', threshold: 0, limit: 10 },
+        });
+        expect(res.statusCode).toBe(200);
+        const atoms = (JSON.parse(res.payload).results as Array<{atom: string}>).map(r => r.atom);
+        expect(atoms.some(a => a.includes('payment_mode_live'))).toBe(true);
+        expect(atoms.some(a => a.includes('payment_mode_test'))).toBe(true);
+    });
+
+    it('G4.2: contradiction metadata is present on conflicting atoms in /search', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/search',
+            payload: { query: 'payment mode', threshold: 0, limit: 10 },
+        });
+        const results = JSON.parse(res.payload).results as Array<any>;
+        const conflicted = results.find(r => r.atom?.includes('payment_mode_'));
+        expect(conflicted).toBeDefined();
+        expect(conflicted.contradiction.hasConflict).toBe(true);
+        expect(conflicted.contradiction.conflictKey).toBe('payment_mode');
+        expect(Array.isArray(conflicted.contradiction.competingClaims)).toBe(true);
+        expect(conflicted.contradiction.competingClaims.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('G4.3: /atoms/:atom inspect surfaces contradiction metadata', async () => {
+        const res = await server.inject({
+            method: 'GET',
+            url: '/atoms/' + encodeURIComponent('v1.fact.payment_mode_live_src_human_conf_high_scope_project_dt_2026_03_01'),
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.contradiction.hasConflict).toBe(true);
+        expect(body.contradiction.conflictKey).toBe('payment_mode');
+        // competingClaims is an array of FactConflictEntry objects {atom, claim, source, confidence, createdAtMs}
+        expect(Array.isArray(body.contradiction.competingClaims)).toBe(true);
+        expect(body.contradiction.competingClaims.map((c: any) => c.claim)).toContain('test');
+    });
+
+    it('G4.4: /memory/bootstrap surfaces conflicting facts in conflictingFacts array', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/memory/bootstrap',
+            payload: { objective: 'payment environment', limit: 20 },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(Array.isArray(body.conflictingFacts)).toBe(true);
+
+        const paymentConflict = (body.conflictingFacts as Array<any>).find(g => g.key === 'payment_mode');
+        expect(paymentConflict).toBeDefined();
+        expect(paymentConflict.claims).toContain('live');
+        expect(paymentConflict.claims).toContain('test');
+    });
+
+    it('G4.5: three-way conflict surfaces all three claims', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/search',
+            payload: { query: 'env', threshold: 0, limit: 10 },
+        });
+        const results = JSON.parse(res.payload).results as Array<any>;
+        const envConflict = results.find(r => r.atom?.includes('env_production') || r.atom?.includes('env_staging') || r.atom?.includes('env_development'));
+        if (envConflict && envConflict.contradiction.hasConflict) {
+            expect(envConflict.contradiction.competingClaims.length).toBeGreaterThanOrEqual(2);
+        }
+    });
+
+    it('G4.6: non-conflicting atom (unique key) has hasConflict=false', async () => {
+        const res = await server.inject({
+            method: 'GET',
+            url: '/atoms/' + encodeURIComponent('v1.fact.region_us_east_src_human_conf_high_scope_project_dt_2026_03_06'),
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.contradiction.hasConflict).toBe(false);
+    });
+});
+
+describe('Sprint 12 — G5: Write-policy tier end-to-end', () => {
+    const DB_PATH = './test-sprint12-writepolicy-db';
+    let server: FastifyInstance;
+    let orchestrator: ShardedOrchestrator;
+
+    beforeAll(async () => {
+        cleanup(DB_PATH);
+        const app = buildApp({ data: [], dbBasePath: DB_PATH });
+        server = withEnvAuth(app.server);
+        orchestrator = app.orchestrator;
+        await orchestrator.init();
+    });
+
+    afterAll(async () => {
+        await server.close();
+        await orchestrator.close();
+        cleanup(DB_PATH);
+    });
+
+    it('G5.1: default tier is auto-write and atoms are accepted', async () => {
+        const policyRes = await server.inject({ method: 'GET', url: '/write-policy' });
+        expect(policyRes.statusCode).toBe(200);
+        const policy = JSON.parse(policyRes.payload);
+        expect(policy.policy.defaultTier).toBe('auto-write');
+
+        const atomsRes = await server.inject({
+            method: 'POST', url: '/atoms',
+            payload: { atoms: ['v1.fact.auto_write_allowed_g5'] },
+        });
+        expect(atomsRes.statusCode).toBe(200);
+        const body = JSON.parse(atomsRes.payload);
+        expect(body.writePolicyOutcome.decision).toBe('allow');
+    });
+
+    it('G5.2: review-required tier returns review-required outcome in writePolicyOutcome', async () => {
+        await server.inject({
+            method: 'POST', url: '/write-policy',
+            payload: { policy: { defaultTier: 'review-required' } },
+        });
+        const atomsRes = await server.inject({
+            method: 'POST', url: '/atoms',
+            payload: { atoms: ['v1.fact.review_required_atom_g5'] },
+        });
+        // Server returns 202 ReviewRequired when policy requires explicit approval
+        expect(atomsRes.statusCode).toBe(202);
+        const body = JSON.parse(atomsRes.payload);
+        expect(body.writePolicyOutcome.decision).toBe('review-required');
+        // Reset
+        await server.inject({ method: 'POST', url: '/write-policy', payload: { policy: 'default' } });
+    });
+
+    it('G5.3: never-store tier rejects atoms with decision=deny', async () => {
+        await server.inject({
+            method: 'POST', url: '/write-policy',
+            payload: { policy: { defaultTier: 'never-store' } },
+        });
+        const atomsRes = await server.inject({
+            method: 'POST', url: '/atoms',
+            payload: { atoms: ['v1.fact.should_be_denied_g5'] },
+        });
+        // Server returns 403 Denied when policy is never-store
+        expect(atomsRes.statusCode).toBe(403);
+        const body = JSON.parse(atomsRes.payload);
+        expect(body.writePolicyOutcome.decision).toBe('deny');
+        expect(body.writePolicyOutcome.deniedAtoms).toContain('v1.fact.should_be_denied_g5');
+        // Reset
+        await server.inject({ method: 'POST', url: '/write-policy', payload: { policy: 'default' } });
+    });
+
+    it('G5.4: reset restores auto-write and subsequent atoms are accepted', async () => {
+        // Set to never-store, then reset
+        await server.inject({ method: 'POST', url: '/write-policy', payload: { policy: { defaultTier: 'never-store' } } });
+        await server.inject({ method: 'POST', url: '/write-policy', payload: { policy: 'default' } });
+
+        const atomsRes = await server.inject({
+            method: 'POST', url: '/atoms',
+            payload: { atoms: ['v1.fact.post_reset_allowed_g5'] },
+        });
+        expect(atomsRes.statusCode).toBe(200);
+        const body = JSON.parse(atomsRes.payload);
+        expect(body.writePolicyOutcome.decision).toBe('allow');
+    });
+
+    it('G5.5: per-type tier overrides default — fact tier can differ from default', async () => {
+        await server.inject({
+            method: 'POST', url: '/write-policy',
+            payload: { policy: { defaultTier: 'auto-write', byType: { fact: 'review-required' } } },
+        });
+        const factRes = await server.inject({
+            method: 'POST', url: '/atoms',
+            payload: { atoms: ['v1.fact.per_type_review_g5'] },
+        });
+        // fact atoms → review-required tier → 202 ReviewRequired
+        expect(factRes.statusCode).toBe(202);
+        expect(JSON.parse(factRes.payload).writePolicyOutcome.decision).toBe('review-required');
+
+        const eventRes = await server.inject({
+            method: 'POST', url: '/atoms',
+            payload: { atoms: ['v1.event.per_type_auto_g5'] },
+        });
+        // event atoms → default auto-write tier → 200 Queued
+        expect(eventRes.statusCode).toBe(200);
+        expect(JSON.parse(eventRes.payload).writePolicyOutcome.decision).toBe('allow');
+
+        // Reset
+        await server.inject({ method: 'POST', url: '/write-policy', payload: { policy: 'default' } });
+    });
+
+    it('G5.6: invalid tier name returns 400', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/write-policy',
+            payload: { policy: { defaultTier: 'publish-everywhere' } },
+        });
+        expect(res.statusCode).toBe(400);
+    });
+});

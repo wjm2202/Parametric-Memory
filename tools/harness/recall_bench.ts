@@ -58,8 +58,28 @@ export interface RecallBenchStats {
         attempts: number;
         failures: number;
         avgVerifyMs: number;
+        p50VerifyMs: number;
+        p95VerifyMs: number;
+        p99VerifyMs: number;
+        cvVerify: number;
         latenciesMs: number[];
+        byType: {
+            current:   ProofTypeStats;
+            predicted: ProofTypeStats;
+            shardRoot: ProofTypeStats;
+        };
     };
+}
+
+export interface ProofTypeStats {
+    attempts: number;
+    failures: number;
+    avgVerifyMs: number;
+    p50VerifyMs: number;
+    p95VerifyMs: number;
+    p99VerifyMs: number;
+    cvVerify: number;
+    latenciesMs: number[];
 }
 
 function percentile(sorted: number[], p: number): number {
@@ -193,6 +213,11 @@ export async function runRecallBenchmark(
     let proofFailures = 0;
     const proofVerifyLatencies: number[] = [];
 
+    // Per-type accumulators for F1 — split current / predicted / shardRoot populations
+    const proofTypeLatencies = { current: [] as number[], predicted: [] as number[], shardRoot: [] as number[] };
+    const proofTypeAttempts  = { current: 0, predicted: 0, shardRoot: 0 };
+    const proofTypeFailures  = { current: 0, predicted: 0, shardRoot: 0 };
+
     const access = async (atom: string): Promise<AccessResponse> => {
         if (useApi) {
             const res = await postJson(baseUrl, '/access', { data: atom }, options.apiKey);
@@ -209,18 +234,35 @@ export async function runRecallBenchmark(
     const verifyProofs = (report: AccessResponse) => {
         if (!report.currentProof) return;
 
-        const t0 = performance.now();
-        proofAttempts++;
-        if (!MerkleKernel.verifyProof(report.currentProof)) proofFailures++;
-        if (report.predictedProof) {
+        // Time each proof individually so latenciesMs reflects a single
+        // proof verification, not a variable-count batch. Batching 1–3 proofs
+        // into a single measurement was the source of CV=0.232 variance.
+        // F1: also record into per-type buckets to separate the two audit-depth
+        // populations (current/predicted ~9 hops vs shardRoot ~2 hops).
+        type ProofType = 'current' | 'predicted' | 'shardRoot';
+        const verifyOne = (proof: any, type: ProofType): boolean => {
+            const t0 = performance.now();
             proofAttempts++;
-            if (!MerkleKernel.verifyProof(report.predictedProof)) proofFailures++;
+            proofTypeAttempts[type]++;
+            const ok = MerkleKernel.verifyProof(proof);
+            const elapsed = performance.now() - t0;
+            proofVerifyLatencies.push(elapsed);
+            proofTypeLatencies[type].push(elapsed);
+            return ok;
+        };
+
+        if (!verifyOne(report.currentProof, 'current')) {
+            proofFailures++;
+            proofTypeFailures.current++;
         }
-        if (report.shardRootProof) {
-            proofAttempts++;
-            if (!MerkleKernel.verifyProof(report.shardRootProof)) proofFailures++;
+        if (report.predictedProof && !verifyOne(report.predictedProof, 'predicted')) {
+            proofFailures++;
+            proofTypeFailures.predicted++;
         }
-        proofVerifyLatencies.push(performance.now() - t0);
+        if (report.shardRootProof && !verifyOne(report.shardRootProof, 'shardRoot')) {
+            proofFailures++;
+            proofTypeFailures.shardRoot++;
+        }
     };
 
     // 1) Sequential recall
@@ -354,14 +396,39 @@ export async function runRecallBenchmark(
         avgLatencySavedByPredictionMs: latencySavings.length > 0
             ? latencySavings.reduce((s, v) => s + v, 0) / latencySavings.length
             : 0,
-        proofVerification: {
-            attempts: proofAttempts,
-            failures: proofFailures,
-            avgVerifyMs: proofVerifyLatencies.length > 0
-                ? proofVerifyLatencies.reduce((s, v) => s + v, 0) / proofVerifyLatencies.length
-                : 0,
-            latenciesMs: proofVerifyLatencies,
-        },
+        proofVerification: (() => {
+            const buildStats = (
+                latencies: number[],
+                attempts: number,
+                failures: number,
+            ) => {
+                const sorted = [...latencies].sort((a, b) => a - b);
+                const avg = sorted.length > 0
+                    ? sorted.reduce((s, v) => s + v, 0) / sorted.length
+                    : 0;
+                const variance = sorted.length > 1
+                    ? sorted.reduce((s, v) => s + (v - avg) ** 2, 0) / sorted.length
+                    : 0;
+                return {
+                    attempts,
+                    failures,
+                    avgVerifyMs: avg,
+                    p50VerifyMs: percentile(sorted, 50),
+                    p95VerifyMs: percentile(sorted, 95),
+                    p99VerifyMs: percentile(sorted, 99),
+                    cvVerify: avg > 0 ? Math.sqrt(variance) / avg : 0,
+                    latenciesMs: latencies,
+                };
+            };
+            return {
+                ...buildStats(proofVerifyLatencies, proofAttempts, proofFailures),
+                byType: {
+                    current:   buildStats(proofTypeLatencies.current,   proofTypeAttempts.current,   proofTypeFailures.current),
+                    predicted: buildStats(proofTypeLatencies.predicted,  proofTypeAttempts.predicted,  proofTypeFailures.predicted),
+                    shardRoot: buildStats(proofTypeLatencies.shardRoot,  proofTypeAttempts.shardRoot,  proofTypeFailures.shardRoot),
+                },
+            };
+        })(),
     };
 }
 

@@ -171,3 +171,10 @@ Prefer high-confidence, recent, and task-scoped memory.
 - A sprint must not be reported as complete if this gate fails.
 
 This policy is mandatory for consistent, measurable memory behavior.
+
+### Payment services and stored credit cards (mandatory)
+
+- Claude must **always ask for explicit confirmation** before taking any action involving payment services (Stripe, PayPal, Razorpay, Airwallex, etc.) or stored payment methods.
+- This includes: creating charges, invoices, subscriptions, products, prices, or payment links; accessing or listing stored cards; triggering any billing event.
+- Even if a payment connector is connected and authenticated, Claude must pause and confirm the specific action and amount with the user before proceeding.
+- Never infer consent from context — each payment action requires fresh, explicit approval.

@@ -249,7 +249,9 @@ function extractAtomNamespace(atom: string): Omit<NamespaceScope, 'includeGlobal
     const parsed = parseAtomV1(atom);
     const value = parsed?.value.toLowerCase() ?? atom.toLowerCase();
     const found: Omit<NamespaceScope, 'includeGlobal'> = {};
-    const regex = /(?:^|_)(?:ns|namespace)_(user|project|task)_([a-z0-9_-]+)/g;
+    // Non-greedy with lookahead so multi-dim atoms (e.g. ns_user_alice_ns_project_proj1)
+    // yield separate matches per dimension instead of one greedy match.
+    const regex = /(?:^|_)(?:ns|namespace)_(user|project|task)_([a-z0-9_-]+?)(?=_(?:ns|namespace)_(?:user|project|task)_|$)/g;
     let match: RegExpExecArray | null;
     while ((match = regex.exec(value)) !== null) {
         const key = match[1] as 'user' | 'project' | 'task';
@@ -1110,6 +1112,10 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             .map(entry => orchestrator.inspectAtom(entry.atom))
             .filter(entry => {
                 if (!entry) return false;
+                // Use integer version comparison when asOfVersion is set — no timing ambiguity.
+                if (temporal.scope.asOfVersion !== null) {
+                    return entry.committedAtVersion <= temporal.scope.asOfVersion;
+                }
                 if (temporal.scope.effectiveAsOfMs === null) return true;
                 return entry.createdAtMs <= temporal.scope.effectiveAsOfMs;
             })
@@ -1244,6 +1250,10 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             .map(entry => orchestrator.inspectAtom(entry.atom))
             .filter(entry => {
                 if (!entry) return false;
+                // Use integer version comparison when asOfVersion is set — no timing ambiguity.
+                if (temporal.scope.asOfVersion !== null) {
+                    return entry.committedAtVersion <= temporal.scope.asOfVersion;
+                }
                 if (temporal.scope.effectiveAsOfMs === null) return true;
                 return entry.createdAtMs <= temporal.scope.effectiveAsOfMs;
             })
@@ -1388,6 +1398,10 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             .map(entry => orchestrator.inspectAtom(entry.atom))
             .filter(entry => {
                 if (!entry) return false;
+                // Use integer version comparison when asOfVersion is set — no timing ambiguity.
+                if (temporal.scope.asOfVersion !== null) {
+                    return entry.committedAtVersion <= temporal.scope.asOfVersion;
+                }
                 if (temporal.scope.effectiveAsOfMs === null) return true;
                 return entry.createdAtMs <= temporal.scope.effectiveAsOfMs;
             })
@@ -1755,7 +1769,12 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
         if (!record) {
             return reply.status(404).send({ error: `Atom '${atom}' not found in any shard.` });
         }
-        if (temporal.scope.effectiveAsOfMs !== null && record.createdAtMs > temporal.scope.effectiveAsOfMs) {
+        // Use integer version comparison when asOfVersion is set — no timing ambiguity.
+        if (temporal.scope.asOfVersion !== null) {
+            if (record.committedAtVersion > temporal.scope.asOfVersion) {
+                return reply.status(404).send({ error: `Atom '${atom}' did not exist at requested temporal scope.` });
+            }
+        } else if (temporal.scope.effectiveAsOfMs !== null && record.createdAtMs > temporal.scope.effectiveAsOfMs) {
             return reply.status(404).send({ error: `Atom '${atom}' did not exist at requested temporal scope.` });
         }
 

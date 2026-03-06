@@ -58,7 +58,16 @@ function makeRecallStats(): RecallBenchStats {
             attempts: 20,
             failures: 0,
             avgVerifyMs: 0.3,
+            p50VerifyMs: 0.3,
+            p95VerifyMs: 0.4,
+            p99VerifyMs: 0.4,
+            cvVerify: 0.15,
             latenciesMs: [0.2, 0.3, 0.4],
+            byType: {
+                current:   { attempts: 10, failures: 0, avgVerifyMs: 0.35, p50VerifyMs: 0.35, p95VerifyMs: 0.4, p99VerifyMs: 0.4, cvVerify: 0.1, latenciesMs: [0.3, 0.35, 0.4] },
+                predicted: { attempts: 7,  failures: 0, avgVerifyMs: 0.30, p50VerifyMs: 0.30, p95VerifyMs: 0.35, p99VerifyMs: 0.35, cvVerify: 0.1, latenciesMs: [0.25, 0.3, 0.35] },
+                shardRoot: { attempts: 3,  failures: 0, avgVerifyMs: 0.15, p50VerifyMs: 0.15, p95VerifyMs: 0.2, p99VerifyMs: 0.2, cvVerify: 0.1, latenciesMs: [0.1, 0.15, 0.2] },
+            },
         },
     };
 }

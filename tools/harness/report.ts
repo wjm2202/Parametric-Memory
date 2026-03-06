@@ -3,7 +3,7 @@ import { readFile, writeFile } from 'fs/promises';
 import { dirname, resolve } from 'path';
 import { mkdirSync } from 'fs';
 import { IngestDriverStats } from './ingest_driver';
-import { RecallBenchStats } from './recall_bench';
+import { RecallBenchStats, ProofTypeStats } from './recall_bench';
 
 export interface AgentSimStats {
     durationMs: number;
@@ -51,6 +51,10 @@ export interface BenchmarkReport {
         commitP95Ms: number;
         commitP99Ms: number;
         proofVerifyAvgMs: number;
+        proofVerifyP50Ms: number;
+        proofVerifyP95Ms: number;
+        proofVerifyP99Ms: number;
+        proofVerifyCv: number;
     };
     prediction: {
         hitRate: number;
@@ -177,6 +181,10 @@ export function buildBenchmarkReport(input: BuildReportInput): BenchmarkReport {
             commitP95Ms: percentile(commitLatencies, 95),
             commitP99Ms: percentile(commitLatencies, 99),
             proofVerifyAvgMs: input.recall.proofVerification.avgVerifyMs,
+            proofVerifyP50Ms: input.recall.proofVerification.p50VerifyMs,
+            proofVerifyP95Ms: input.recall.proofVerification.p95VerifyMs,
+            proofVerifyP99Ms: input.recall.proofVerification.p99VerifyMs,
+            proofVerifyCv: input.recall.proofVerification.cvVerify,
         },
         prediction: {
             hitRate: input.recall.predictionHitRate,
@@ -217,7 +225,18 @@ export function renderTerminalReport(report: BenchmarkReport): string {
         `  access p50/p95/p99: ${num(report.latency.accessP50Ms)} / ${num(report.latency.accessP95Ms)} / ${num(report.latency.accessP99Ms)}`,
         `  context load p50/p95/p99: ${num(report.latency.contextLoadP50Ms)} / ${num(report.latency.contextLoadP95Ms)} / ${num(report.latency.contextLoadP99Ms)}`,
         `  commit p50/p95/p99: ${num(report.latency.commitP50Ms)} / ${num(report.latency.commitP95Ms)} / ${num(report.latency.commitP99Ms)}`,
-        `  proof verify avg: ${num(report.latency.proofVerifyAvgMs)}`,
+        `  proof verify avg/p50/p95/p99: ${num(report.latency.proofVerifyAvgMs)} / ${num(report.latency.proofVerifyP50Ms)} / ${num(report.latency.proofVerifyP95Ms)} / ${num(report.latency.proofVerifyP99Ms)} ms  CV=${num(report.latency.proofVerifyCv)}`,
+        (() => {
+            const byType = report.detail.recall.proofVerification.byType;
+            if (!byType) return '    [per-type breakdown unavailable]';
+            const fmt = (label: string, s: ProofTypeStats) =>
+                `    [${label}] n=${s.attempts} avg=${num(s.avgVerifyMs)} p95=${num(s.p95VerifyMs)} ms  CV=${num(s.cvVerify)}`;
+            return [
+                fmt('current  ', byType.current),
+                fmt('predicted', byType.predicted),
+                fmt('shardRoot', byType.shardRoot),
+            ].join('\n');
+        })(),
         '',
         'Prediction',
         `  hit rate: ${percent(report.prediction.hitRate)} | avg latency saved: ${num(report.prediction.avgLatencySavedMs)} ms | miss penalty: ${num(report.prediction.missPenaltyMs)} ms`,
@@ -259,7 +278,23 @@ export function toPrometheusMetrics(report: BenchmarkReport): string {
     gauge('mmpm_harness_latency_access_p99_ms', 'Access latency p99 in milliseconds', report.latency.accessP99Ms, runLabels);
     gauge('mmpm_harness_latency_context_load_p95_ms', 'Context-load latency p95 in milliseconds', report.latency.contextLoadP95Ms, runLabels);
     gauge('mmpm_harness_latency_commit_p95_ms', 'Commit latency p95 in milliseconds', report.latency.commitP95Ms, runLabels);
-    gauge('mmpm_harness_latency_proof_verify_avg_ms', 'Average proof verification time in milliseconds', report.latency.proofVerifyAvgMs, runLabels);
+    gauge('mmpm_harness_latency_proof_verify_avg_ms', 'Average proof verification time in milliseconds (per-proof)', report.latency.proofVerifyAvgMs, runLabels);
+    gauge('mmpm_harness_latency_proof_verify_p50_ms', 'p50 proof verification time in milliseconds (per-proof)', report.latency.proofVerifyP50Ms, runLabels);
+    gauge('mmpm_harness_latency_proof_verify_p95_ms', 'p95 proof verification time in milliseconds (per-proof)', report.latency.proofVerifyP95Ms, runLabels);
+    gauge('mmpm_harness_latency_proof_verify_p99_ms', 'p99 proof verification time in milliseconds (per-proof)', report.latency.proofVerifyP99Ms, runLabels);
+    gauge('mmpm_harness_latency_proof_verify_cv', 'Coefficient of variation for per-proof verify latency', report.latency.proofVerifyCv, runLabels);
+
+    // F1: per-type breakdown — separates current/predicted (~9-hop) from shardRoot (~2-hop)
+    const byType = report.detail.recall.proofVerification.byType;
+    for (const [type, stats] of Object.entries(byType ?? {}) as [string, ProofTypeStats][]) {
+        const typeLabel = { ...runLabels, proof_type: type };
+        gauge('mmpm_harness_latency_proof_verify_avg_ms_by_type',  'Per-type average proof verification time ms',  stats.avgVerifyMs,  typeLabel);
+        gauge('mmpm_harness_latency_proof_verify_p95_ms_by_type',  'Per-type p95 proof verification time ms',      stats.p95VerifyMs,  typeLabel);
+        gauge('mmpm_harness_latency_proof_verify_p99_ms_by_type',  'Per-type p99 proof verification time ms',      stats.p99VerifyMs,  typeLabel);
+        gauge('mmpm_harness_latency_proof_verify_cv_by_type',      'Per-type CV for proof verification latency',   stats.cvVerify,     typeLabel);
+        gauge('mmpm_harness_proof_verify_attempts_by_type',        'Per-type proof verification attempt count',    stats.attempts,     typeLabel);
+        gauge('mmpm_harness_proof_verify_failures_by_type',        'Per-type proof verification failure count',    stats.failures,     typeLabel);
+    }
 
     gauge('mmpm_harness_prediction_hit_rate_ratio', 'Prediction hit rate ratio', report.prediction.hitRate, runLabels);
     gauge('mmpm_harness_prediction_avg_latency_saved_ms', 'Average latency saved from prediction in milliseconds', report.prediction.avgLatencySavedMs, runLabels);

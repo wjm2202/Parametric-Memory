@@ -1,11 +1,11 @@
 import { ClassicLevel as Level } from 'classic-level';
+import { performance } from 'perf_hooks';
 import { DataAtom, Hash, MerkleProof, TOMBSTONE_HASH } from './types';
 import { MerkleSnapshot } from './merkle_snapshot';
 import { PendingWrites } from './pending_writes';
 import { EpochManager, ReadTicket } from './epoch';
 import { ShardWAL } from './wal';
 import { createHash } from 'crypto';
-import { performance } from 'perf_hooks';
 import { logger } from './logger';
 import {
     commitLatency,
@@ -19,6 +19,9 @@ import {
 import { assertAtomV1, AtomType, parseAtomV1 } from './atom_schema';
 import { CsrTransitionMatrix } from './csr_matrix';
 import { TransitionPolicy } from './transition_policy';
+
+/** High-resolution Unix timestamp in ms (sub-millisecond precision). */
+const hrnow = (): number => performance.timeOrigin + performance.now();
 
 export type ShardAccessResult = {
     proof: MerkleProof;
@@ -239,13 +242,13 @@ export class ShardWorker {
                     if (raw === undefined) {
                         throw new Error(`Missing timestamp value for key ${tsKey}`);
                     }
-                    const parsed = parseInt(raw, 10);
+                    const parsed = parseFloat(raw);
                     if (!Number.isFinite(parsed) || parsed <= 0) {
                         throw new Error(`Invalid timestamp value for key ${tsKey}`);
                     }
                     createdAtMs = parsed;
                 } catch {
-                    createdAtMs = Date.now();
+                    createdAtMs = hrnow();
                     await this.db.put(tsKey, String(createdAtMs))
                         .catch((err: unknown) => logger.error({ err }, 'Timestamp backfill persist error'));
                 }
@@ -471,7 +474,7 @@ export class ShardWorker {
             if (this.dataIndex.has(atom)) continue;
 
             const idx = this.data.length;
-            const createdAtMs = Date.now();
+            const createdAtMs = hrnow();
 
             // 1. WAL first — fsync ensures we can recover from here
             await this.wal.writeAdd(atom, idx);
