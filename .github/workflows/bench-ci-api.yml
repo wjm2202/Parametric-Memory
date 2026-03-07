@@ -22,7 +22,7 @@ jobs:
         run: npm ci
 
       - name: Run TypeScript typechecks (app + tests)
-        run: npm run typecheck:all
+        run: npm run typecheck
 
       - name: Show Docker versions
         run: |

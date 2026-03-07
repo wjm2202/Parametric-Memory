@@ -397,23 +397,22 @@ export class ShardWorker {
             }
 
             // ── 8b. Resolve Markov weights ───────────────────────────────
+            // Scan all wu: timestamp keys in a single iterator pass instead of
+            // issuing one db.get() per weight — turns O(N) random-access reads
+            // into a single sequential sweep, cutting startup I/O significantly.
+            const wuMap = new Map<string, number>();
+            for await (const [key, value] of this.db.iterator({ gte: 'wu:', lte: 'wu:~' })) {
+                const parsed = parseInt(value, 10);
+                if (Number.isFinite(parsed) && parsed > 0) wuMap.set(key, parsed);
+            }
+
+            const nowMs = Date.now();
             for (const [fromIdx, toHash, weight] of rawWeights) {
                 if (!this.transitions.has(fromIdx)) this.transitions.set(fromIdx, new Map());
                 this.transitions.get(fromIdx)!.set(toHash, weight);
 
-                let updatedAtMs = Date.now();
                 const tsKey = `wu:${String(fromIdx).padStart(10, '0')}:${toHash}`;
-                try {
-                    const rawTs = await this.db.get(tsKey);
-                    if (rawTs !== undefined) {
-                        const parsedTs = parseInt(rawTs, 10);
-                        if (Number.isFinite(parsedTs) && parsedTs > 0) {
-                            updatedAtMs = parsedTs;
-                        }
-                    }
-                } catch {
-                    // Weight entries may not have timestamp metadata yet.
-                }
+                const updatedAtMs = wuMap.get(tsKey) ?? nowMs;
 
                 if (!this.transitionUpdatedAt.has(fromIdx)) this.transitionUpdatedAt.set(fromIdx, new Map());
                 this.transitionUpdatedAt.get(fromIdx)!.set(toHash, updatedAtMs);
