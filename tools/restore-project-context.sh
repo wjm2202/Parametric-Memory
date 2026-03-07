@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# ── Restore project-context atoms to a running MMPM instance ──────────────────
+# ── DEPRECATED — use npm run restore instead ──────────────────────────────────
 #
-# Usage (from repo root):
-#   bash tools/restore-project-context.sh
+#   npm run restore -- --file memory/project-context.json
 #
-# Reads memory/project-context.json and POSTs all atoms to the MMPM server.
-# Idempotent — already-existing atoms are silently accepted.
+# This script is kept for reference only. The TypeScript restore tool
+# (tools/restore.ts) supersedes it with pagination, dry-run support,
+# and proper error handling.
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 

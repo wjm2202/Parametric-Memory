@@ -24,6 +24,8 @@
     "load:live": "ts-node tools/harness/continuous_client.ts --profile balanced --duration-ms 3600000 --target-ops 120 --concurrency 8 --metrics-port 9470 --metrics-host 0.0.0.0",
     "mcp:serve": "ts-node tools/mcp/mmpm_mcp_server.ts",
     "mcp:serve:unsafe": "MMPM_MCP_ENABLE_MUTATIONS=1 ts-node tools/mcp/mmpm_mcp_server.ts",
+    "backup": "ts-node tools/backup.ts",
+    "restore": "ts-node tools/restore.ts",
     "setup": "npm install && npm run build && (test -f .env || cp .env.example .env) && echo 'Ready. Edit .env then: ./start.sh'",
     "skill:pack": "cd integrations && zip -r parametric-memory.skill claude-skill/ && echo 'Packaged integrations/parametric-memory.skill'"
   },
