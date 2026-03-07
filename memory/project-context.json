@@ -78,7 +78,7 @@
   "v1.state.sprint_15_S15_6_fix_CONTRIBUTING_md_typecheck_reference_todo",
   "v1.state.sprint_15_S15_7_fix_stop_portability_lsof_to_cross_platform_todo",
   "v1.state.sprint_15_S15_8_server_deployment_guide_todo",
-  "v1.state.sprint_15_S15_9_per_client_API_key_support_todo",
+  "v1.state.sprint_15_S15_9_per_client_identity_support_todo",
   "v1.state.sprint_15_S15_13_license_change_done",
 
   "v1.fact.DB_must_live_outside_git_repo_to_survive_git_operations",

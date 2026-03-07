@@ -33,9 +33,21 @@ These instructions are always-on for this repository.
 ## Session-end protocol
 
 1. Persist key new atoms.
-2. Tombstone obsolete state atoms with `memory_atoms_delete`.
+2. Tombstone obsolete state atoms via `session_checkpoint`'s `tombstone` field — do **not** call `memory_atoms_delete` directly (it is a dangerous-tier tool requiring `mcp:serve:unsafe`).
 3. Train one summary successful sequence via `memory_train`.
 4. Flush writes with `memory_commit`.
+
+## MCP permission tiers
+
+The MCP server runs in one of three modes. Use the correct mode for the task:
+
+| Script | Read | Write (add/train/checkpoint/commit) | Dangerous (delete/import/policy) |
+|--------|------|-------------------------------------|----------------------------------|
+| `mcp:serve:readonly` | ✅ | ❌ | ❌ |
+| `mcp:serve` *(default)* | ✅ | ✅ | ❌ |
+| `mcp:serve:unsafe` | ✅ | ✅ | ✅ |
+
+Normal memory operations (`session_checkpoint`, `memory_atoms_add`, `memory_train`, `memory_commit`) are available in the default `mcp:serve` mode. Destructive operations (`memory_atoms_delete`, `memory_atoms_import`, `memory_policy_set`, `memory_write_policy_set`) require `mcp:serve:unsafe`.
 
 ## Validation and quality
 

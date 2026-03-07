@@ -115,8 +115,10 @@ async function enqueueAtomsWithBackpressure(
     throw new Error(`POST /atoms failed with status ${res.status}`);
 }
 
-async function readPolicyFilteredMetricFromApi(baseUrl: string): Promise<number> {
-    const res = await fetch(`${baseUrl}/metrics`);
+async function readPolicyFilteredMetricFromApi(baseUrl: string, apiKey?: string): Promise<number> {
+    const headers: Record<string, string> = {};
+    if (apiKey) headers['authorization'] = `Bearer ${apiKey}`;
+    const res = await fetch(`${baseUrl}/metrics`, { headers });
     if (!res.ok) return 0;
     const body = await res.text();
     let total = 0;
@@ -215,7 +217,7 @@ export async function runAgentSimulation(options: AgentSimOptions = {}): Promise
     }
 
     const policyMetricBaseline = useApi
-        ? await readPolicyFilteredMetricFromApi(baseUrl)
+        ? await readPolicyFilteredMetricFromApi(baseUrl, apiKey)
         : await readPolicyFilteredMetricFromLocalRegister();
 
     const stats: AgentSimulationStats & {
@@ -413,7 +415,7 @@ export async function runAgentSimulation(options: AgentSimOptions = {}): Promise
 
     stats.avgBatchSize = stats.batchReads > 0 ? observedBatchItems / stats.batchReads : 0;
     const policyMetricEnd = useApi
-        ? await readPolicyFilteredMetricFromApi(baseUrl)
+        ? await readPolicyFilteredMetricFromApi(baseUrl, apiKey)
         : await readPolicyFilteredMetricFromLocalRegister();
     stats.policyFilteredPredictions = Math.max(0, policyMetricEnd - policyMetricBaseline);
 

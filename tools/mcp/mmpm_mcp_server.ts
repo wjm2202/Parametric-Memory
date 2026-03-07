@@ -23,12 +23,16 @@ export type ToolDef = {
     inputSchema: Record<string, unknown>;
     handler: (args: Record<string, unknown>) => Promise<unknown>;
     mutating?: boolean;
+    /** dangerous tools are destructive/admin ops (delete, import, policy changes).
+     *  They require MMPM_MCP_ENABLE_DANGEROUS=1 in addition to mutations being enabled. */
+    dangerous?: boolean;
 };
 
 type ResolvedMmpmMcpOptions = {
     baseUrl: string;
     apiKey: string;
     enableMutations: boolean;
+    enableDangerous: boolean;
     enableSemanticTools: boolean;
     toolCatalogFile: string;
     weeklyEvalStateFile: string;
@@ -44,6 +48,7 @@ function resolveOptions(options: MmpmMcpOptions = {}): ResolvedMmpmMcpOptions {
         baseUrl: options.baseUrl ?? process.env.MMPM_MCP_BASE_URL ?? 'http://127.0.0.1:3000',
         apiKey: options.apiKey ?? process.env.MMPM_MCP_API_KEY ?? process.env.MMPM_API_KEY ?? '',
         enableMutations: options.enableMutations ?? process.env.MMPM_MCP_ENABLE_MUTATIONS === '1',
+        enableDangerous: options.enableDangerous ?? process.env.MMPM_MCP_ENABLE_DANGEROUS === '1',
         enableSemanticTools: options.enableSemanticTools ?? process.env.MMPM_MCP_ENABLE_SEMANTIC_TOOLS === '1',
         toolCatalogFile: options.toolCatalogFile ?? join(process.cwd(), 'tools', 'mcp', 'mmpm_tool_catalog.json'),
         weeklyEvalStateFile: options.weeklyEvalStateFile ?? join(process.cwd(), 'tools', 'harness', 'weekly_eval_state.json'),
@@ -588,6 +593,7 @@ export function createToolDefinitions(options: MmpmMcpOptions = {}): ToolDef[] {
             },
             handler: async args => callApi('DELETE', `/atoms/${encodeURIComponent(String(args.atom))}`, {}),
             mutating: true,
+            dangerous: true,
         },
         {
             name: 'memory_policy_set',
@@ -602,6 +608,7 @@ export function createToolDefinitions(options: MmpmMcpOptions = {}): ToolDef[] {
             },
             handler: async args => callApi('POST', '/policy', { policy: args.policy }),
             mutating: true,
+            dangerous: true,
         },
         {
             name: 'memory_write_policy_set',
@@ -616,6 +623,7 @@ export function createToolDefinitions(options: MmpmMcpOptions = {}): ToolDef[] {
             },
             handler: async args => callApi('POST', '/write-policy', { policy: args.policy }),
             mutating: true,
+            dangerous: true,
         },
         {
             name: 'memory_commit',
@@ -703,6 +711,7 @@ export function createToolDefinitions(options: MmpmMcpOptions = {}): ToolDef[] {
             },
             handler: async args => callApi('POST', '/admin/import', String(args.ndjson), 'text/plain'),
             mutating: true,
+            dangerous: true,
         },
     ];
 }
@@ -710,6 +719,9 @@ export function createToolDefinitions(options: MmpmMcpOptions = {}): ToolDef[] {
 export function selectVisibleTools(toolDefs: ToolDef[], options: MmpmMcpOptions = {}): ToolDef[] {
     const resolved = resolveOptions(options);
     return toolDefs.filter(t => {
+        // Dangerous tools (delete, import, policy changes) require explicit opt-in
+        if (t.dangerous && !resolved.enableDangerous) return false;
+        // Standard mutating tools (add, train, checkpoint, commit) require mutations enabled
         if (t.mutating && !resolved.enableMutations) return false;
         if ((t.name === 'memory_search' || t.name === 'memory_context') && !resolved.enableSemanticTools) return false;
         return true;
