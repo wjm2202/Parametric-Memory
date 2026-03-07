@@ -12,7 +12,9 @@
 #   What it creates:
 #     .env                           MMPM connection config
 #     .gitignore                     node_modules, dist, .env
-#     CLAUDE.md                      Instructs Claude to load/save memory
+#     .github/copilot-instructions.md  Auto-applied to all Copilot Chat requests
+#     SKILL.md                       AI skill file — memory protocol for any assistant
+#     CLAUDE.md                      Claude-specific memory instructions (MCP-first)
 #     package.json                   build / dev / start / clean scripts
 #     tsconfig.json                  Sensible TypeScript defaults
 #     src/index.ts                   Entry point with memory client example
@@ -90,7 +92,147 @@ EOF
   echo "  ✓ .gitignore"
 fi
 
-# ── 5. CLAUDE.md ──────────────────────────────────────────────────────────────
+# ── 5. .github/copilot-instructions.md ───────────────────────────────────────
+# Auto-applied to all GitHub Copilot Chat requests in this workspace.
+mkdir -p .github
+cat > .github/copilot-instructions.md << EOF
+# Copilot Instructions — $PROJECT_NAME
+
+This workspace is connected to a local MMPM memory server. You must use it.
+
+## Every session — mandatory
+
+At the start of every session, load memory before doing anything else.
+
+**Preferred — MCP tools (parametric-memory server must be connected):**
+1. \`memory_ready\` — confirm server is up and mutations are enabled
+2. \`memory_session_bootstrap\` — loads context, state, and Markov predictions in one call
+3. \`memory_atoms_list\` with \`type: "state"\` if bootstrap context is sparse
+
+**Fallback — if MCP is not connected:**
+\`\`\`bash
+curl -s -X POST \\
+  -H "Authorization: Bearer \$MMPM_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  \$MMPM_URL/memory/bootstrap \\
+  -d '{}'
+\`\`\`
+
+## During the session
+
+Save at each meaningful learning — do not wait until the end.
+
+**MCP:** \`session_checkpoint\` with \`atoms\` containing new facts, state, or events.
+**Fallback:** \`POST /atoms\` then \`POST /admin/commit\`.
+
+## End of session — mandatory
+
+Always call \`session_checkpoint\` before closing. Never skip this.
+
+\`\`\`
+session_checkpoint({
+  atoms:     ["v1.event.completed_X_DATE", "v1.state.${PROJECT_NAME}_next_task"],
+  tombstone: ["v1.state.${PROJECT_NAME}_old_state"],
+  train:     ["v1.event.session_started", "v1.state.${PROJECT_NAME}_next_task", "v1.event.completed_X_DATE"]
+})
+\`\`\`
+
+## Atom format
+
+\`v1.<type>.<value>\` — snake_case, no spaces. Use \`${PROJECT_NAME}_\` prefix for this project.
+
+| Type | Use for |
+|------|---------|
+| \`fact\` | Stable truths, preferences, project info |
+| \`state\` | Current working context, next steps |
+| \`event\` | Completed milestones with date |
+| \`relation\` | Links between systems or concepts |
+| \`procedure\` | Repeatable multi-step processes |
+
+## MCP tools
+
+| Tool | Purpose |
+|------|---------|
+| \`memory_ready\` | Session preflight — confirms server + mutations enabled |
+| \`memory_session_bootstrap\` | Session start — loads all context in one call |
+| \`session_checkpoint\` | Save + tombstone + train + commit in one call |
+| \`memory_atoms_list\` | Browse atoms by type or prefix |
+| \`memory_access\` | Markov recall for one atom |
+| \`memory_atoms_stale\` | Find atoms to clean up |
+EOF
+echo "  ✓ .github/copilot-instructions.md"
+
+# ── 6. SKILL.md ───────────────────────────────────────────────────────────────
+cat > SKILL.md << EOF
+# MMPM Memory Skill — $PROJECT_NAME
+
+**Gives your AI assistant persistent memory across sessions via a local MMPM server.**
+
+## Session protocol
+
+### Start of every session
+1. \`memory_ready\` — confirm server is up and mutations enabled
+2. \`memory_session_bootstrap\` — load context, state, predictions in one call
+3. \`memory_atoms_list\` with \`type: "state"\` if context is sparse
+4. Summarise: current task, recent decisions, where we left off
+
+### During the session
+- \`session_checkpoint\` at each meaningful learning — it commits automatically
+- Do not wait until session end
+
+### End of every session — mandatory
+- \`session_checkpoint\` with all new atoms, tombstoned states, and session arc
+- Never close a session without this call
+
+## MCP tools
+
+| Tool | Purpose |
+|------|---------|
+| \`memory_ready\` | Preflight — server up + mutations enabled |
+| \`memory_session_bootstrap\` | Session start — loads all context in one call |
+| \`session_checkpoint\` | Save + tombstone + train + commit (primary save tool) |
+| \`memory_atoms_list\` | Browse atoms by type (\`fact\`, \`state\`, \`event\`, etc.) |
+| \`memory_access\` | Markov recall for one atom |
+| \`memory_atoms_stale\` | Find atoms not accessed recently |
+| \`memory_verify\` | Verify a Merkle proof |
+
+## Atom format
+
+\`v1.<type>.<value>\` — snake_case. Use \`${PROJECT_NAME}_\` prefix for this project.
+
+| Type | Use for | Example |
+|------|---------|---------|
+| \`fact\` | Stable truths, preferences | \`v1.fact.${PROJECT_NAME}_uses_typescript\` |
+| \`state\` | Active work context | \`v1.state.${PROJECT_NAME}_working_on_auth\` |
+| \`event\` | Completed milestones | \`v1.event.${PROJECT_NAME}_v1_released_DATE\` |
+| \`relation\` | Links between concepts | \`v1.relation.${PROJECT_NAME}_api_depends_on_db\` |
+| \`procedure\` | Repeatable processes | \`v1.procedure.${PROJECT_NAME}_run_tests_before_merge\` |
+
+## Server
+
+- URL: \`$MMPM_URL\`
+- DB: \`~/.mmpm/data\` (outside the repo)
+- Start: \`cd /path/to/parametric-memory && ./start.sh\`
+- MCP config: see \`.vscode/mcp.json\` (requires \`MMPM_MCP_ENABLE_MUTATIONS=1\`)
+
+## Curl fallback
+
+\`\`\`bash
+# Session start
+curl -s -X POST -H "Authorization: Bearer \$MMPM_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  \$MMPM_URL/memory/bootstrap -d '{}'
+
+# Save atom + commit
+curl -s -X POST -H "Authorization: Bearer \$MMPM_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  \$MMPM_URL/atoms -d '{"atoms":["v1.fact.${PROJECT_NAME}_example"]}'
+curl -s -X POST -H "Authorization: Bearer \$MMPM_API_KEY" \$MMPM_URL/admin/commit
+\`\`\`
+EOF
+echo "  ✓ SKILL.md"
+
+# ── 7. CLAUDE.md ──────────────────────────────────────────────────────────────
 cat > CLAUDE.md << EOF
 # $PROJECT_NAME
 
@@ -198,7 +340,7 @@ Memory operations are available via the Command Palette (**Ctrl/Cmd+Shift+P → 
 EOF
 echo "  ✓ CLAUDE.md"
 
-# ── 6. src/index.ts ───────────────────────────────────────────────────────────
+# ── 8. src/index.ts ───────────────────────────────────────────────────────────
 mkdir -p src
 cat > src/index.ts << 'EOF'
 import * as dotenv from 'dotenv';
@@ -239,7 +381,7 @@ main().catch(console.error);
 EOF
 echo "  ✓ src/index.ts"
 
-# ── 7. .vscode/settings.json ──────────────────────────────────────────────────
+# ── 9. .vscode/settings.json ──────────────────────────────────────────────────
 mkdir -p .vscode
 cat > .vscode/settings.json << 'EOF'
 {
@@ -280,7 +422,7 @@ cat > .vscode/settings.json << 'EOF'
 EOF
 echo "  ✓ .vscode/settings.json"
 
-# ── 8. .vscode/mcp.json ───────────────────────────────────────────────────────
+# ── 10. .vscode/mcp.json ──────────────────────────────────────────────────────
 # Used by GitHub Copilot (VS Code 1.99+) and other MCP-aware extensions.
 # Edit MMPM_DIR in .env to point at your parametric-memory repo, then update
 # the args path below to match.
@@ -303,7 +445,7 @@ cat > .vscode/mcp.json << EOF
 EOF
 echo "  ✓ .vscode/mcp.json"
 
-# ── 10. .vscode/extensions.json ───────────────────────────────────────────────
+# ── 11. .vscode/extensions.json ───────────────────────────────────────────────
 cat > .vscode/extensions.json << 'EOF'
 {
   "recommendations": [
@@ -319,7 +461,7 @@ cat > .vscode/extensions.json << 'EOF'
 EOF
 echo "  ✓ .vscode/extensions.json"
 
-# ── 11. .vscode/tasks.json ────────────────────────────────────────────────────
+# ── 12. .vscode/tasks.json ────────────────────────────────────────────────────
 cat > .vscode/tasks.json << EOF
 {
   "version": "2.0.0",
@@ -457,7 +599,7 @@ cat > .vscode/tasks.json << EOF
 EOF
 echo "  ✓ .vscode/tasks.json"
 
-# ── 12. .vscode/launch.json ───────────────────────────────────────────────────
+# ── 13. .vscode/launch.json ───────────────────────────────────────────────────
 cat > .vscode/launch.json << 'EOF'
 {
   "version": "0.2.0",
@@ -494,7 +636,7 @@ cat > .vscode/launch.json << 'EOF'
 EOF
 echo "  ✓ .vscode/launch.json"
 
-# ── 13. Install TypeScript deps ───────────────────────────────────────────────
+# ── 14. Install TypeScript deps ───────────────────────────────────────────────
 echo "  Installing TypeScript dependencies..."
 if npm install --save-dev typescript ts-node @types/node --quiet 2>/dev/null; then
   echo "  ✓ dependencies installed"
