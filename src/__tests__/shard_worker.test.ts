@@ -3,14 +3,15 @@ import { ShardWorker } from '../shard_worker';
 import { MerkleKernel } from '../merkle';
 import { CsrTransitionMatrix } from '../csr_matrix';
 import { TransitionPolicy } from '../transition_policy';
-import { rmSync } from 'fs';
+import { mkdtempSync, rmSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
 
 const dbDirs: string[] = [];
-let counter = 0;
 const atom = (value: string) => `v1.other.${value}`;
 
 function freshDb(): string {
-    const path = `./test-shard-db-${Date.now()}-${counter++}`;
+    const path = mkdtempSync(join(tmpdir(), 'mmpm-shard-test-'));
     dbDirs.push(path);
     return path;
 }
@@ -238,67 +239,75 @@ describe('ShardWorker', () => {
         vi.useFakeTimers();
         vi.setSystemTime(new Date('2026-03-04T00:00:00.000Z'));
 
+        const fakeClock = () => Date.now();
         const worker = new ShardWorker([atom('A'), atom('B'), atom('C')], freshDb(), {
             confidenceHalfLifeMs: 1000,
+            clock: fakeClock,
         });
         await worker.init();
 
-        const hashA = worker.getHash(atom('A'))!;
-        const hashB = worker.getHash(atom('B'))!;
-        const hashC = worker.getHash(atom('C'))!;
+        try {
+            const hashA = worker.getHash(atom('A'))!;
+            const hashB = worker.getHash(atom('B'))!;
+            const hashC = worker.getHash(atom('C'))!;
 
-        await worker.recordTransition(hashA, hashB); // older edge
+            await worker.recordTransition(hashA, hashB); // older edge
 
-        vi.setSystemTime(new Date('2026-03-04T00:00:03.000Z'));
-        await worker.recordTransition(hashA, hashC); // fresher edge
+            vi.setSystemTime(new Date('2026-03-04T00:00:03.000Z'));
+            await worker.recordTransition(hashA, hashC); // fresher edge
 
-        const result = await worker.access(atom('A'));
-        expect(result.next).toBe(atom('C'));
+            const result = await worker.access(atom('A'));
+            expect(result.next).toBe(atom('C'));
 
-        const weights = worker.getWeights(atom('A'))!;
-        const toB = weights.find(w => w.to === atom('B'))!;
-        const toC = weights.find(w => w.to === atom('C'))!;
-        expect(toB.weight).toBe(1);
-        expect(toC.weight).toBe(1);
-        expect(toB.effectiveWeight).toBeLessThan(toC.effectiveWeight);
-
-        await worker.close();
-        vi.useRealTimers();
+            const weights = worker.getWeights(atom('A'))!;
+            const toB = weights.find(w => w.to === atom('B'))!;
+            const toC = weights.find(w => w.to === atom('C'))!;
+            expect(toB.weight).toBe(1);
+            expect(toC.weight).toBe(1);
+            expect(toB.effectiveWeight).toBeLessThan(toC.effectiveWeight);
+        } finally {
+            await worker.close();
+            vi.useRealTimers();
+        }
     });
 
     it('confidence lifecycle: reinforcement increases confidence and updates timestamp', async () => {
         vi.useFakeTimers();
         vi.setSystemTime(new Date('2026-03-04T00:00:00.000Z'));
 
+        const fakeClock = () => Date.now();
         const worker = new ShardWorker([atom('A'), atom('B'), atom('C')], freshDb(), {
             confidenceHalfLifeMs: 1000,
+            clock: fakeClock,
         });
         await worker.init();
 
-        const hashA = worker.getHash(atom('A'))!;
-        const hashB = worker.getHash(atom('B'))!;
-        const hashC = worker.getHash(atom('C'))!;
+        try {
+            const hashA = worker.getHash(atom('A'))!;
+            const hashB = worker.getHash(atom('B'))!;
+            const hashC = worker.getHash(atom('C'))!;
 
-        await worker.recordTransition(hashA, hashB);
-        vi.setSystemTime(new Date('2026-03-04T00:00:02.000Z'));
-        await worker.recordTransition(hashA, hashC);
+            await worker.recordTransition(hashA, hashB);
+            vi.setSystemTime(new Date('2026-03-04T00:00:02.000Z'));
+            await worker.recordTransition(hashA, hashC);
 
-        let first = await worker.access(atom('A'));
-        expect(first.next).toBe(atom('C'));
+            let first = await worker.access(atom('A'));
+            expect(first.next).toBe(atom('C'));
 
-        vi.setSystemTime(new Date('2026-03-04T00:00:03.000Z'));
-        await worker.recordTransition(hashA, hashB); // reinforcement of B
+            vi.setSystemTime(new Date('2026-03-04T00:00:03.000Z'));
+            await worker.recordTransition(hashA, hashB); // reinforcement of B
 
-        const second = await worker.access(atom('A'));
-        expect(second.next).toBe(atom('B'));
+            const second = await worker.access(atom('A'));
+            expect(second.next).toBe(atom('B'));
 
-        const weights = worker.getWeights(atom('A'))!;
-        const reinforced = weights.find(w => w.to === atom('B'))!;
-        expect(reinforced.weight).toBe(2);
-        expect(reinforced.lastUpdatedMs).toBe(Date.now());
-
-        await worker.close();
-        vi.useRealTimers();
+            const weights = worker.getWeights(atom('A'))!;
+            const reinforced = weights.find(w => w.to === atom('B'))!;
+            expect(reinforced.weight).toBe(2);
+            expect(reinforced.lastUpdatedMs).toBe(Date.now());
+        } finally {
+            await worker.close();
+            vi.useRealTimers();
+        }
     });
 });
 

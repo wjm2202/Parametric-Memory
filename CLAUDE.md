@@ -20,8 +20,14 @@ prompt it to save. Every session ends with a `session_checkpoint` call.
 
 Call these tools in order at the start of every session:
 
-1. **Check server is ready**
+1. **Check server is ready — start it if not**
    - Tool: `memory_ready`
+   - If the server is **not reachable** (tool fails or returns not ready):
+     1. Run `./start.sh` from the project root directory in the background
+     2. Wait 1 second, then check `memory_ready` (or `curl -s http://localhost:3000/ready`)
+     3. Only proceed once `{"ready":true}` is returned
+     4. If the server does not become ready within 5 seconds, report the
+        failure to the user and stop
 
 2. **Check weekly evaluation freshness**
    - Tool: `memory_weekly_eval_status`
@@ -204,3 +210,15 @@ is authenticated, each payment action requires fresh explicit approval.
 | Verify a proof | `memory_verify` |
 | Check weekly eval | `memory_weekly_eval_status` |
 | Run weekly eval | `memory_weekly_eval_run` |
+
+### MCP permission tiers
+
+The server exposes tools in three modes. The default `mcp:serve` covers all normal operations.
+
+| Script | Read | Write (add/train/checkpoint/commit) | Dangerous (delete/import/policy) |
+|--------|------|-------------------------------------|----------------------------------|
+| `mcp:serve:readonly` | ✅ | ❌ | ❌ |
+| `mcp:serve` *(default)* | ✅ | ✅ | ❌ |
+| `mcp:serve:unsafe` | ✅ | ✅ | ✅ |
+
+**Always tombstone via `session_checkpoint`'s `tombstone` field** — not by calling `memory_atoms_delete` directly. `memory_atoms_delete` is a dangerous-tier tool and is unavailable in the default mode.

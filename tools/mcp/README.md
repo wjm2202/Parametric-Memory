@@ -6,15 +6,32 @@ This MCP server exposes the existing MMPM HTTP API as MCP tools/resources so Cla
 
 - Tools for implemented endpoints (`/access`, `/batch-access`, `/train`, `/atoms`, `/policy`, `/health`, `/ready`, `/metrics`, etc.)
 - Resources for health/ready/policy/metrics and the in-repo tool catalog
-- Read-only by default; mutating tools are opt-in
+- Three permission tiers: read-only, write (default), and dangerous (admin ops)
 
 ## Run
 
 From `markov-merkle-memory`:
 
 ```bash
+# Default — read + write (session_checkpoint, add, train, commit). Recommended.
 npm run mcp:serve
+
+# Read-only — no mutations at all
+npm run mcp:serve:readonly
+
+# Unsafe — read + write + dangerous ops (delete, import, policy changes)
+npm run mcp:serve:unsafe
 ```
+
+## Permission tiers
+
+| Script | Read | Write (add/train/checkpoint) | Dangerous (delete/import/policy) |
+|--------|------|------------------------------|----------------------------------|
+| `mcp:serve:readonly` | ✅ | ❌ | ❌ |
+| `mcp:serve` | ✅ | ✅ | ❌ |
+| `mcp:serve:unsafe` | ✅ | ✅ | ✅ |
+
+Writing atoms (`session_checkpoint`, `memory_atoms_add`, `memory_train`, `memory_commit`) is a normal memory operation and is enabled by default in `mcp:serve`. Destructive operations (tombstone, bulk import, policy mutation) require the explicit `mcp:serve:unsafe` mode.
 
 ## Claude Desktop config (macOS)
 
@@ -24,8 +41,8 @@ Claude Desktop reads MCP server definitions from:
 
 Use one of these templates from this repo:
 
-- Safe default (read-only tools): `tools/mcp/claude_desktop_config.example.json`
-- Unsafe (mutating tools enabled): `tools/mcp/claude_desktop_config.unsafe.example.json`
+- Default (read + write): `tools/mcp/claude_desktop_config.example.json`
+- Unsafe (+ dangerous ops): `tools/mcp/claude_desktop_config.unsafe.example.json`
 
 After copying, replace `REPLACE_WITH_YOUR_API_KEY` and keep the `cwd` path pointed at this repo.
 
@@ -33,14 +50,9 @@ After copying, replace `REPLACE_WITH_YOUR_API_KEY` and keep the `cwd` path point
 
 - `MMPM_MCP_BASE_URL` (default: `http://127.0.0.1:3000`)
 - `MMPM_MCP_API_KEY` (falls back to `MMPM_API_KEY`)
-- `MMPM_MCP_ENABLE_MUTATIONS=1` to expose mutating tools
+- `MMPM_MCP_ENABLE_MUTATIONS=1` to expose write tools (set automatically by `mcp:serve`)
+- `MMPM_MCP_ENABLE_DANGEROUS=1` to expose destructive/admin tools (set by `mcp:serve:unsafe` only)
 - `MMPM_MCP_ENABLE_SEMANTIC_TOOLS=1` to expose semantic tools (`memory_search`, `memory_context`)
-
-Unsafe helper:
-
-```bash
-npm run mcp:serve:unsafe
-```
 
 ## Current semantic-tool behavior
 

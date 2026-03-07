@@ -23,18 +23,39 @@ describe('MCP tool catalog wiring', () => {
         expect(names.has('memory_weekly_eval_run')).toBe(false);
     });
 
-    it('enabling mutations exposes mutating tools', () => {
+    it('enabling mutations exposes standard mutating tools but not dangerous tools', () => {
         const defs = createToolDefinitions({ fetchImpl: mockFetchReturning({ ok: true }) as unknown as typeof fetch });
         const visible = selectVisibleTools(defs, { enableMutations: true, enableSemanticTools: false });
         const names = new Set(visible.map(t => t.name));
 
+        // Standard mutation tools — exposed with enableMutations
         expect(names.has('memory_train')).toBe(true);
         expect(names.has('memory_atoms_add')).toBe(true);
+        expect(names.has('memory_commit')).toBe(true);
+        expect(names.has('memory_weekly_eval_run')).toBe(true);
+
+        // Dangerous-tier tools — NOT exposed with enableMutations alone
+        expect(names.has('memory_atoms_delete')).toBe(false);
+        expect(names.has('memory_policy_set')).toBe(false);
+        expect(names.has('memory_write_policy_set')).toBe(false);
+        expect(names.has('memory_atoms_import')).toBe(false);
+    });
+
+    it('enabling dangerous mode exposes dangerous-tier tools', () => {
+        const defs = createToolDefinitions({ fetchImpl: mockFetchReturning({ ok: true }) as unknown as typeof fetch });
+        const visible = selectVisibleTools(defs, { enableMutations: true, enableDangerous: true, enableSemanticTools: false });
+        const names = new Set(visible.map(t => t.name));
+
+        // All mutation tools still visible
+        expect(names.has('memory_train')).toBe(true);
+        expect(names.has('memory_atoms_add')).toBe(true);
+        expect(names.has('memory_commit')).toBe(true);
+
+        // Dangerous-tier tools now visible
         expect(names.has('memory_atoms_delete')).toBe(true);
         expect(names.has('memory_policy_set')).toBe(true);
         expect(names.has('memory_write_policy_set')).toBe(true);
-        expect(names.has('memory_commit')).toBe(true);
-        expect(names.has('memory_weekly_eval_run')).toBe(true);
+        expect(names.has('memory_atoms_import')).toBe(true);
     });
 
     it('memory_write_policy_get handler calls GET /write-policy', async () => {

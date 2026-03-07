@@ -38,6 +38,7 @@ vitest-results/
 .fuse_hidden*
 # ── Internal planning / scratch documents — not part of public source
 FEATURE_ROADMAP.md
+images/
 SPRINT_*.md
 CHECKLIST.md
 BUSINESS_PLAN.md

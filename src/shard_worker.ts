@@ -121,6 +121,13 @@ export class ShardWorker {
     /** Metric label — e.g. '0', '1', '2', '3'. Defaults to dbPath suffix. */
     private readonly _shardId: string;
 
+    /**
+     * Unified clock function for all timestamps (creation, transition, decay).
+     * Defaults to `hrnow()` (sub-millisecond precision via performance API).
+     * Inject a custom clock for deterministic testing.
+     */
+    private readonly clock: () => number;
+
     constructor(
         dataBlocks: DataAtom[],
         dbPath: string,
@@ -131,8 +138,11 @@ export class ShardWorker {
             shardId?: number;
             /** Half-life for confidence decay in milliseconds (<=0 disables decay). */
             confidenceHalfLifeMs?: number;
+            /** Custom clock function returning Unix ms. Defaults to sub-ms hrnow(). */
+            clock?: () => number;
         }
     ) {
+        this.clock = options?.clock ?? hrnow;
         this.dbPath = dbPath;
         this.data = dataBlocks.slice();
         this.atomTypes = dataBlocks.map(atom => this.getAtomTypeOrThrow(atom));
@@ -141,7 +151,7 @@ export class ShardWorker {
             this.atomHashes.set(atom, createHash('sha256').update(atom).digest().toString('hex'));
         }
         this.dataIndex = new Map(dataBlocks.map((d, i) => [d, i]));
-        this.atomCreatedAtMs = dataBlocks.map(() => Date.now());
+        this.atomCreatedAtMs = dataBlocks.map(() => this.clock());
 
         this.activeSnapshot = MerkleSnapshot.fromData(dataBlocks, 0);
         this.pending = new PendingWrites(0);
@@ -248,7 +258,7 @@ export class ShardWorker {
                     }
                     createdAtMs = parsed;
                 } catch {
-                    createdAtMs = hrnow();
+                    createdAtMs = this.clock();
                     await this.db.put(tsKey, String(createdAtMs))
                         .catch((err: unknown) => logger.error({ err }, 'Timestamp backfill persist error'));
                 }
@@ -311,7 +321,7 @@ export class ShardWorker {
                     this.atomTypes.push(parsed.type);
                     this.atomHashes.set(entry.data, this.hashAtom(entry.data));
                     this.dataIndex.set(entry.data, idx);
-                    const createdAtMs = Number.isFinite(entry.ts) && entry.ts > 0 ? entry.ts : Date.now();
+                    const createdAtMs = Number.isFinite(entry.ts) && entry.ts > 0 ? entry.ts : this.clock();
                     this.atomCreatedAtMs[idx] = createdAtMs;
                     await this.db
                         .put(`ai:${String(idx).padStart(10, '0')}`, entry.data)
@@ -406,7 +416,7 @@ export class ShardWorker {
                 if (Number.isFinite(parsed) && parsed > 0) wuMap.set(key, parsed);
             }
 
-            const nowMs = Date.now();
+            const nowMs = this.clock();
             for (const [fromIdx, toHash, weight] of rawWeights) {
                 if (!this.transitions.has(fromIdx)) this.transitions.set(fromIdx, new Map());
                 this.transitions.get(fromIdx)!.set(toHash, weight);
@@ -433,7 +443,7 @@ export class ShardWorker {
         if (this.commitIntervalMs > 0) {
             this.commitTimer = setInterval(async () => {
                 if (!this.pending.isEmpty() && !this.epoch.isCommitting) {
-                    const sinceLastMutation = Date.now() - this.lastPendingMutationAtMs;
+                    const sinceLastMutation = this.clock() - this.lastPendingMutationAtMs;
                     if (sinceLastMutation < this.commitIntervalMs) return;
                     await this.commit().catch((err: unknown) => logger.error({ err }, 'Auto-commit failed'));
                 }
@@ -538,7 +548,7 @@ export class ShardWorker {
             if (this.dataIndex.has(atom)) continue;
 
             const idx = this.data.length;
-            const createdAtMs = hrnow();
+            const createdAtMs = this.clock();
 
             // 1. WAL first — fsync ensures we can recover from here
             await this.wal.writeAdd(atom, idx);
@@ -552,7 +562,7 @@ export class ShardWorker {
 
             // 3. Queue for snapshot commit
             this.pending.addLeaf(atom);
-            this.lastPendingMutationAtMs = Date.now();
+            this.lastPendingMutationAtMs = this.clock();
 
             // 4. LevelDB persist
             await this.db
@@ -593,7 +603,7 @@ export class ShardWorker {
         // 3. Queue for snapshot commit
         this.pending.tombstone(idx);
         this.csrDirty = true;
-        this.lastPendingMutationAtMs = Date.now();
+        this.lastPendingMutationAtMs = this.clock();
 
         // 4. LevelDB persist
         await this.db
@@ -714,7 +724,7 @@ export class ShardWorker {
         const targets = this.transitions.get(fromIdx)!;
         const targetsUpdatedAt = this.transitionUpdatedAt.get(fromIdx)!;
         const newWeight = (targets.get(to) || 0) + 1;
-        const updatedAtMs = Date.now();
+        const updatedAtMs = this.clock();
         targets.set(to, newWeight);
         targetsUpdatedAt.set(to, updatedAtMs);
         this.csrDirty = true;
@@ -1010,7 +1020,7 @@ export class ShardWorker {
         const updatedAt = this.transitionUpdatedAt.get(fromIdx)?.get(toHash);
         if (updatedAt === undefined) return rawWeight;
 
-        const elapsedMs = Math.max(0, Date.now() - updatedAt);
+        const elapsedMs = Math.max(0, this.clock() - updatedAt);
         const decayFactor = Math.pow(0.5, elapsedMs / this.confidenceHalfLifeMs);
         return rawWeight * decayFactor;
     }
