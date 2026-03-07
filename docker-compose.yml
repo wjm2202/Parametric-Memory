@@ -5,19 +5,12 @@ services:
       - "3000:3000"
     environment:
       - MMPM_API_KEY=${MMPM_API_KEY:-}
-      - MMPM_INITIAL_DATA=${MMPM_INITIAL_DATA:-v1.other.NodeA,v1.other.NodeB,v1.other.NodeC,v1.other.NodeD,v1.other.NodeE,v1.other.NodeF}
-      # Optional: point to a mounted JSON seed file instead of MMPM_INITIAL_DATA.
-      # The file must contain a flat JSON array of atom strings:
-      #   ["atom1", "atom2", ...]
-      # Seed file takes precedence over MMPM_INITIAL_DATA when set.
-      - MMPM_ATOM_FILE=${MMPM_ATOM_FILE:-}
+      - MMPM_ATOM_FILE=/app/seeds.json
       - SHARD_COUNT=${SHARD_COUNT:-4}
       - DB_BASE_PATH=${DB_BASE_PATH:-/app/mmpm-db}
     volumes:
-      # This maps the internal DB folder to a persistent Docker volume
       - mmpm-data:/app/mmpm-db
-      # Uncomment and set MMPM_ATOM_FILE=/app/atoms.json to seed from a file:
-      # - ./atoms.json:/app/atoms.json:ro
+      - ./seeds.json:/app/seeds.json:ro
     networks:
       - mmpm-net
     restart: always
