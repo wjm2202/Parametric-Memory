@@ -9,7 +9,8 @@
  *   2.  All data routes return 401 for wrong tokens.
  *   3.  Wrong header shape (Basic auth, lowercase "bearer", empty string,
  *       trailing whitespace, extra space between "Bearer" and token) all fail.
- *   4.  /metrics is always unauthenticated (Prometheus scraping requirement).
+ *   4.  /metrics requires a valid Bearer token by default (S16-3).
+ *       Set MMPM_METRICS_PUBLIC=1 to restore unauthenticated Prometheus scraping.
  *   5.  When no API key is configured none of the routes require auth.
  *
  *   INTEGRITY CLAIMS
@@ -213,20 +214,26 @@ describe('Security — correct token accepted on all data routes', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Auth claim — /metrics always bypasses the guard
+// Auth claim — /metrics is auth-gated by default (S16-3)
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('Security — /metrics is always unauthenticated', () => {
-    it('GET /metrics → 200 with no token on guarded server', async () => {
+describe('Security — /metrics requires auth by default (S16-3)', () => {
+    it('GET /metrics → 401 with no token on guarded server', async () => {
         const res = await inject(guardedServer, 'GET', '/metrics');
-        expect(res.statusCode).toBe(200);
-        expect(res.headers['content-type']).toContain('text/plain');
+        expect(res.statusCode).toBe(401);
     });
 
-    it('GET /metrics → 200 even with wrong token', async () => {
+    it('GET /metrics → 401 with wrong token on guarded server', async () => {
         const res = await inject(guardedServer, 'GET', '/metrics',
             { token: 'Bearer garbage' });
+        expect(res.statusCode).toBe(401);
+    });
+
+    it('GET /metrics → 200 with correct token on guarded server', async () => {
+        const res = await inject(guardedServer, 'GET', '/metrics',
+            { token: AUTH_HEADER });
         expect(res.statusCode).toBe(200);
+        expect(res.headers['content-type']).toContain('text/plain');
     });
 });
 

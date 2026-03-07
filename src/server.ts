@@ -1552,7 +1552,9 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
         const lines: string[] = [];
         let estimatedTokens = 0;
         for (const item of gatedMemories) {
-            const line = `${item.atom} | category=${item.category} | relevance=${item.relevance}`;
+            // S16-4: prefix every bootstrap context line with [MEMORY] so AI
+            // parsers treat these lines as stored data, not live instructions.
+            const line = `[MEMORY] ${item.atom} | category=${item.category} | relevance=${item.relevance}`;
             const lineTokens = estimateTokens(line) + 1;
             if (estimatedTokens + lineTokens > budget) break;
             lines.push(line);
@@ -1653,10 +1655,22 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             // MMPM_BLOCK_SECRET_ATOMS=1 is set. Prevents accidental credential storage.
             const blockSecretAtoms = (process.env.MMPM_BLOCK_SECRET_ATOMS ?? '0') === '1';
             if (blockSecretAtoms) {
-                const SECRET_PATTERN = /\b(password|passwd|api_key|apikey|private_key|privatekey|secret|credential|access_token|auth_token|bearer_token)\b/i;
+                // Normalise both the atom value and the keyword list by stripping
+                // all separator characters (underscore, space, hyphen) and lower-
+                // casing before matching.  This handles all separator conventions:
+                //   api_key, api-key, api key, apikey → 'apikey'
+                //   access_token, accessToken, access token → 'accesstoken'
+                // We use substring inclusion rather than word-boundary regex so that
+                // compound snake_case values like 'github_api_key_prod' are caught
+                // even when the keyword is not surrounded by non-word characters.
+                const SECRET_KEYWORDS = [
+                    'password', 'passwd', 'apikey', 'privatekey',
+                    'secret', 'credential', 'accesstoken', 'authtoken', 'bearertoken',
+                ];
                 const secretAtoms = (normalized as string[]).filter(a => {
-                    const value = parseAtomV1(a)?.value ?? a;
-                    return SECRET_PATTERN.test(value.replace(/_/g, ' '));
+                    const raw = parseAtomV1(a)?.value ?? a;
+                    const flat = raw.toLowerCase().replace(/[\s_-]+/g, '');
+                    return SECRET_KEYWORDS.some(kw => flat.includes(kw));
                 });
                 if (secretAtoms.length > 0) {
                     return reply.status(422).send({
@@ -1669,17 +1683,39 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             // S16-4: flag atoms containing instruction-injection patterns for
             // mandatory review. These tokens commonly appear in prompt-injection
             // payloads that try to override AI behaviour via stored memory.
-            const INJECTION_PATTERN = /\b(ignore|override|bypass|disregard|instead|pre_approved|approved_all|forget_previous|system_prompt)\b/i;
+            //
+            // Single-word keywords use \b word boundaries after replacing underscores
+            // with spaces so that "ignore_context" → "ignore context" → matched.
+            // Compound keywords (system_prompt, pre_approved, etc.) use exact substring
+            // matching on the raw value because \b cannot delimit underscore-joined
+            // words (underscore is \w, so no word boundary fires between \w chars).
+            const INJECTION_SINGLE = /\b(ignore|override|bypass|disregard|instead)\b/i;
+            const INJECTION_COMPOUND = [
+                'system_prompt', 'pre_approved', 'approved_all', 'forget_previous',
+            ];
             const suspiciousAtoms = (normalized as string[]).filter(a => {
                 const value = parseAtomV1(a)?.value ?? a;
-                return INJECTION_PATTERN.test(value.replace(/_/g, ' '));
+                return INJECTION_SINGLE.test(value.replace(/_/g, ' '))
+                    || INJECTION_COMPOUND.some(phrase => value.toLowerCase().includes(phrase));
             });
-            if (suspiciousAtoms.length > 0 && reviewApproved !== true) {
-                return reply.status(202).send({
-                    status: 'ReviewRequired',
-                    reason: 'One or more atoms contain instruction-like tokens that require explicit review approval (reviewApproved:true).',
-                    suspiciousAtoms,
-                    queued: 0,
+            if (suspiciousAtoms.length > 0) {
+                if (reviewApproved !== true) {
+                    return reply.status(202).send({
+                        status: 'ReviewRequired',
+                        reason: 'One or more atoms contain instruction-like tokens that require explicit review approval (reviewApproved:true).',
+                        suspiciousAtoms,
+                        queued: 0,
+                    });
+                }
+                // S16-5: reviewApproved:true explicitly overrode the injection block — log it.
+                // We emit here (not after write-policy evaluation) so that only genuine
+                // injection bypasses are recorded, not every use of reviewApproved:true.
+                auditLog.record('review.bypass', {
+                    atoms: suspiciousAtoms,
+                    count: suspiciousAtoms.length,
+                    requestId: request.id as string,
+                    clientName: getClientName(request),
+                    meta: { clientIp: request.ip },
                 });
             }
 
@@ -1704,17 +1740,6 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
                     reason: 'Write policy requires explicit review approval before ingestion.',
                     writePolicyOutcome: writeEvaluation,
                     queued: 0,
-                });
-            }
-
-            // S16-5: log when reviewApproved:true bypassed the review-required tier; S16-8: clientName
-            if (reviewApproved === true && writeEvaluation.allowedAtoms.length > 0) {
-                auditLog.record('review.bypass', {
-                    atoms: writeEvaluation.allowedAtoms,
-                    count: writeEvaluation.allowedAtoms.length,
-                    requestId: request.id as string,
-                    clientName: getClientName(request),
-                    meta: { clientIp: request.ip },
                 });
             }
 
