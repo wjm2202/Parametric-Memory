@@ -54,7 +54,8 @@ integrations/
   vscode/             VSCode / Claude Code integration
 
 scripts/              Smoke tests and demo scripts
-docs/                 Architecture docs, benchmark protocol
+docs/                 Landing page (GitHub Pages, parametric-memory.dev)
+guides/               Architecture docs, benchmark protocol
 grafana/              Grafana dashboard panels
 ```
 
