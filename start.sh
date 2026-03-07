@@ -5,6 +5,14 @@
 #   ./start.sh --monitor    Start server + Grafana/Prometheus in Docker
 #   ./start.sh --stop       Stop the server (and monitoring stack if running)
 #
+# ── Memory safety ─────────────────────────────────────────────────────────────
+#   Memory DB lives at ~/.mmpm/data (outside this repo).
+#
+#   SAFE:    docker compose down          ← stops containers, keeps memory
+#   DANGER:  docker compose down -v       ← DELETES named volumes (grafana)
+#            Manually deleting ~/.mmpm/data also permanently removes all atoms.
+#
+#   Recovery: npm run restore -- --file memory/project-context.json
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 

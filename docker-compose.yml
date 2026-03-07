@@ -1,3 +1,20 @@
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │  ⚠️  MEMORY SAFETY WARNING                                              │
+# │                                                                         │
+# │  MMPM memory lives at  ~/.mmpm/data  on your host (bind-mounted).      │
+# │                                                                         │
+# │  SAFE   to stop:   docker compose down          (keeps memory)         │
+# │  DANGER to stop:   docker compose down -v       (DELETES all memory)   │
+# │                                                                         │
+# │  The -v flag removes named volumes.  grafana-data will be wiped.       │
+# │  ~/.mmpm/data is a bind-mount and survives, BUT if you also delete     │
+# │  that directory manually, all atoms are permanently gone.              │
+# │                                                                         │
+# │  Recovery after data loss:                                             │
+# │    npm run restore -- --file memory/project-context.json              │
+# │    npm run restore -- --file ~/.mmpm/backups/<latest>.json            │
+# └─────────────────────────────────────────────────────────────────────────┘
+
 services:
   mmpm-service:
     build: .

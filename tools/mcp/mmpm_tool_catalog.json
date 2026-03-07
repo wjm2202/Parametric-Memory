@@ -1,5 +1,5 @@
 {
-    "version": "2026-03-04",
+    "version": "2026-03-07",
     "purpose": "Recommended MCP tool catalog for Claude/AI hosts mapped to current MMPM HTTP API.",
     "compatibility": {
         "backwardCompatible": true,
@@ -7,192 +7,187 @@
     },
     "tools": [
         {
+            "name": "session_checkpoint",
+            "http": [
+                { "method": "POST",   "path": "/atoms" },
+                { "method": "DELETE", "path": "/atoms/:atom" },
+                { "method": "POST",   "path": "/train" },
+                { "method": "POST",   "path": "/admin/commit" }
+            ],
+            "status": "implemented",
+            "mutating": true,
+            "reason": "Primary automatic memory capture tool (S15-3). Stores new atoms, tombstones obsolete ones, trains the session Markov arc, and commits to disk in one call. Claude must call this at session end and at each meaningful mid-session learning."
+        },
+        {
+            "name": "memory_session_bootstrap",
+            "http": { "method": "POST", "path": "/memory/bootstrap" },
+            "status": "implemented",
+            "reason": "Single-call bootstrap payload with goals/constraints/preferences, relevant memories, and proof/version metadata. Primary session-start tool."
+        },
+        {
             "name": "memory_access",
-            "http": {
-                "method": "POST",
-                "path": "/access"
-            },
+            "http": { "method": "POST", "path": "/access" },
             "status": "implemented",
             "reason": "Deterministic Markov recall with proof metadata for sequence continuation."
         },
         {
             "name": "memory_batch_access",
-            "http": {
-                "method": "POST",
-                "path": "/batch-access"
-            },
+            "http": { "method": "POST", "path": "/batch-access" },
             "status": "implemented",
             "reason": "Efficient multi-item read for agent branching and planning."
         },
         {
-            "name": "memory_train",
-            "http": {
-                "method": "POST",
-                "path": "/train"
-            },
-            "status": "implemented",
-            "reason": "Write-back learning loop to reinforce trajectories."
-        },
-        {
-            "name": "memory_search",
-            "http": {
-                "method": "POST",
-                "path": "/search"
-            },
-            "status": "implemented",
-            "reason": "Semantic retrieval by meaning over active atoms with ranked similarity results."
-        },
-        {
-            "name": "memory_context",
-            "http": {
-                "method": "GET",
-                "path": "/memory/context"
-            },
-            "status": "implemented",
-            "reason": "One-call session bootstrap context block with configurable token budget."
-        },
-        {
-            "name": "memory_session_bootstrap",
-            "http": {
-                "method": "POST",
-                "path": "/memory/bootstrap"
-            },
-            "status": "implemented",
-            "reason": "Single-call bootstrap payload with goals/constraints/preferences, relevant memories, and proof/version metadata."
-        },
-        {
             "name": "memory_atoms_list",
-            "http": {
-                "method": "GET",
-                "path": "/atoms"
-            },
+            "http": { "method": "GET", "path": "/atoms" },
             "status": "implemented",
-            "reason": "Memory browsing supports type/prefix filtering and limit/offset paging for scalable listings."
+            "reason": "Memory browsing with type/prefix filtering and limit/offset paging."
         },
         {
             "name": "memory_atom_get",
-            "http": {
-                "method": "GET",
-                "path": "/atoms/:atom"
-            },
+            "http": { "method": "GET", "path": "/atoms/:atom" },
             "status": "implemented",
-            "reason": "Single-item lookup and metadata inspection."
+            "reason": "Single-item lookup with full Merkle proof metadata."
+        },
+        {
+            "name": "memory_atoms_stale",
+            "http": { "method": "GET", "path": "/atoms/stale" },
+            "status": "implemented",
+            "reason": "Memory hygiene — lists atoms not accessed within maxAgeDays. Use to identify obsolete states and facts before tombstoning."
+        },
+        {
+            "name": "memory_pending",
+            "http": { "method": "GET", "path": "/atoms/pending" },
+            "status": "implemented",
+            "reason": "Queue visibility for eventual-consistency-aware clients."
+        },
+        {
+            "name": "memory_weights_get",
+            "http": { "method": "GET", "path": "/weights/:atom" },
+            "status": "implemented",
+            "reason": "Inspect outgoing Markov transition weights. Use to verify reinforcement quality (target dominanceRatio >= 0.70)."
+        },
+        {
+            "name": "memory_verify",
+            "http": { "method": "POST", "path": "/verify" },
+            "status": "implemented",
+            "reason": "Standalone Merkle proof verification — no auth required. Confirms an atom was genuinely committed and has not been tampered with."
+        },
+        {
+            "name": "memory_audit_log",
+            "http": { "method": "GET", "path": "/admin/audit-log" },
+            "status": "implemented",
+            "reason": "Query in-memory audit log of mutation events (add, tombstone, commit, import, export)."
+        },
+        {
+            "name": "memory_atoms_export",
+            "http": { "method": "GET", "path": "/admin/export" },
+            "status": "implemented",
+            "reason": "Export all atoms as NDJSON for backup or migration."
+        },
+        {
+            "name": "memory_atoms_import",
+            "http": { "method": "POST", "path": "/admin/import" },
+            "status": "implemented",
+            "mutating": true,
+            "reason": "Import atoms from an NDJSON snapshot produced by memory_atoms_export."
         },
         {
             "name": "memory_atoms_add",
-            "http": {
-                "method": "POST",
-                "path": "/atoms"
-            },
+            "http": { "method": "POST", "path": "/atoms" },
             "status": "implemented",
-            "reason": "Atom registration for ingestion workflows."
+            "mutating": true,
+            "reason": "Low-level atom ingestion. Prefer session_checkpoint for normal session saves."
         },
         {
             "name": "memory_atoms_delete",
-            "http": {
-                "method": "DELETE",
-                "path": "/atoms/:atom"
-            },
+            "http": { "method": "DELETE", "path": "/atoms/:atom" },
             "status": "implemented",
-            "reason": "Tombstone lifecycle management."
+            "mutating": true,
+            "reason": "Tombstone a single atom. Prefer session_checkpoint for batch tombstoning at session end."
+        },
+        {
+            "name": "memory_train",
+            "http": { "method": "POST", "path": "/train" },
+            "status": "implemented",
+            "mutating": true,
+            "reason": "Low-level Markov sequence training. Prefer session_checkpoint which trains as part of end-of-session save."
+        },
+        {
+            "name": "memory_commit",
+            "http": { "method": "POST", "path": "/admin/commit" },
+            "status": "implemented",
+            "mutating": true,
+            "reason": "Explicit flush to disk. session_checkpoint always commits automatically."
+        },
+        {
+            "name": "memory_search",
+            "http": { "method": "POST", "path": "/search" },
+            "status": "implemented",
+            "flag": "MMPM_MCP_ENABLE_SEMANTIC_TOOLS=1",
+            "reason": "Semantic retrieval by meaning over active atoms. Requires semantic tools flag."
+        },
+        {
+            "name": "memory_context",
+            "http": { "method": "GET", "path": "/memory/context" },
+            "status": "implemented",
+            "flag": "MMPM_MCP_ENABLE_SEMANTIC_TOOLS=1",
+            "reason": "One-call context block with configurable token budget. Requires semantic tools flag."
         },
         {
             "name": "memory_policy_get",
-            "http": {
-                "method": "GET",
-                "path": "/policy"
-            },
+            "http": { "method": "GET", "path": "/policy" },
             "status": "implemented",
             "reason": "Read transition-policy constraints."
         },
         {
             "name": "memory_policy_set",
-            "http": {
-                "method": "POST",
-                "path": "/policy"
-            },
+            "http": { "method": "POST", "path": "/policy" },
             "status": "implemented",
+            "mutating": true,
             "reason": "Runtime policy updates for controlled prediction behavior."
         },
         {
             "name": "memory_write_policy_get",
-            "http": {
-                "method": "GET",
-                "path": "/write-policy"
-            },
+            "http": { "method": "GET", "path": "/write-policy" },
             "status": "implemented",
             "reason": "Read write-policy tiers that gate memory ingestion."
         },
         {
             "name": "memory_write_policy_set",
-            "http": {
-                "method": "POST",
-                "path": "/write-policy"
-            },
+            "http": { "method": "POST", "path": "/write-policy" },
             "status": "implemented",
+            "mutating": true,
             "reason": "Update write-policy tiers (auto-write, review-required, never-store)."
         },
         {
-            "name": "memory_pending",
-            "http": {
-                "method": "GET",
-                "path": "/atoms/pending"
-            },
-            "status": "implemented",
-            "reason": "Queue visibility for eventual-consistency-aware clients."
-        },
-        {
-            "name": "memory_commit",
-            "http": {
-                "method": "POST",
-                "path": "/admin/commit"
-            },
-            "status": "implemented",
-            "reason": "Explicit flush/commit control where needed."
-        },
-        {
             "name": "memory_health",
-            "http": {
-                "method": "GET",
-                "path": "/health"
-            },
+            "http": { "method": "GET", "path": "/health" },
             "status": "implemented",
             "reason": "Operational health for retries/fallbacks."
         },
         {
             "name": "memory_ready",
-            "http": {
-                "method": "GET",
-                "path": "/ready"
-            },
+            "http": { "method": "GET", "path": "/ready" },
             "status": "implemented",
             "reason": "Startup/readiness gating for tool orchestration."
         },
         {
             "name": "memory_metrics",
-            "http": {
-                "method": "GET",
-                "path": "/metrics"
-            },
+            "http": { "method": "GET", "path": "/metrics" },
             "status": "implemented",
-            "reason": "Telemetry for monitoring and adaptive control loops."
+            "reason": "Prometheus telemetry for monitoring and adaptive control loops."
         },
         {
             "name": "memory_weekly_eval_status",
-            "runtime": {
-                "kind": "local-file",
-                "path": "tools/harness/weekly_eval_state.json"
-            },
+            "runtime": { "kind": "local-file", "path": "tools/harness/weekly_eval_state.json" },
             "status": "implemented",
             "reason": "Exposes whether weekly scientific evaluation is due based on persisted run state."
         },
         {
             "name": "memory_weekly_eval_run",
-            "runtime": {
-                "kind": "local-script",
-                "command": "bash tools/harness/weekly-memory-eval.sh"
-            },
+            "runtime": { "kind": "local-script", "command": "bash tools/harness/weekly-memory-eval.sh" },
             "status": "implemented",
+            "mutating": true,
             "reason": "Executes weekly scientific evaluation and updates persisted run metadata/artifacts."
         }
     ]
