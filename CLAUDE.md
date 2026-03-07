@@ -1,119 +1,142 @@
 # Claude Operating Strategy for MMPM Memory
 
 This file defines how Claude should use MMPM memory during real work.
+All operations use **MCP tools** when running via Claude Desktop or Cowork.
+Curl equivalents are noted for reference only.
+
+---
 
 ## Core Operating Principle
 
-Store only information that improves future task quality, then reinforce successful behavior patterns with measurable feedback.
+Store only information that improves future task quality, then reinforce
+successful behaviour patterns with measurable feedback.
+
+Memory capture is **automatic** — Claude must not require the user to
+prompt it to save. Every session ends with a `session_checkpoint` call.
 
 ---
 
 ## 1) Session Start Protocol
 
-1. Check readiness:
-   - `GET /ready`
-2. Check weekly evaluation freshness:
-   - Read `tools/harness/weekly_eval_state.json`.
-   - If `lastCompletedAt` is older than 7 days, run:
-     - `bash tools/harness/weekly-memory-eval.sh`
-   - If it is newer than 7 days, skip weekly eval for this session.
-3. Ensure high-quality seed baseline exists (first run / empty memory):
-   - `bash tools/harness/apply-seed-pack.sh`
-   - Skip if seed already applied and memory is non-empty.
-4. Load compact memory context:
-   - `GET /memory/context?maxTokens=1200`
-5. Load focused active memory slices:
-   - `GET /atoms?type=fact&limit=200`
-   - `GET /atoms?type=state&limit=200`
-   - `GET /atoms?type=relation&limit=200`
-6. Optionally run targeted search for current goal:
-   - `POST /search` with query from user objective.
-7. Always produce a short **Current Sprint Status** summary at session start:
-    - Retrieve sprint memory mirror:
-       - `GET /atoms?type=fact&prefix=v1.fact.sprint.item_&limit=300`
-       - `GET /atoms?type=relation&prefix=v1.relation.sprint.&limit=300`
-    - Cross-check against source plan file:
-       - `MMPM_REFACTOR_PLAN.txt`
-    - Report exactly:
-       - where we are up to now,
-       - what is in progress / blocked (if any),
-       - next 1-3 logical items.
+Call these tools in order at the start of every session:
 
-If memory is sparse/noisy, prefer `fact` + `relation` first, then `state`.
+1. **Check server is ready**
+   - Tool: `memory_ready`
+
+2. **Check weekly evaluation freshness**
+   - Tool: `memory_weekly_eval_status`
+   - If `due: true`, run: `memory_weekly_eval_run`
+
+3. **Load session bootstrap** (facts + state + predictions in one call)
+   - Tool: `memory_session_bootstrap`
+   - Pass `objective` from the user's opening message if available
+   - Use `maxTokens: 1200` to keep context tight
+
+4. **Load focused active slices** (if bootstrap context is sparse)
+   - Tool: `memory_atoms_list` with `type: "fact"`, `limit: 200`
+   - Tool: `memory_atoms_list` with `type: "state"`, `limit: 200`
+
+5. **Produce a Current Sprint Status summary**
+   - Tool: `memory_atoms_list` with `prefix: "v1.fact.sprint"`, `limit: 300`
+   - Report: where we are, what is in progress / blocked, next 1–3 items
+
+If memory is sparse or noisy, prefer `fact` + `relation` first, then `state`.
 
 ---
 
 ## 2) What Claude Must Store
 
-When new durable information is learned, store typed atoms:
+When new durable information is learned, store it immediately — do not
+accumulate and save only at session end. Use:
 
-- Facts: stable user/project truths.
-- States: active work context and near-term next steps.
-- Events: dated outcomes and milestones.
-- Relations: links between tasks, systems, and concepts.
+- `fact` — stable user/project truths
+- `state` — active work context and near-term next steps
+- `event` — dated outcomes and milestones
+- `relation` — links between tasks, systems, and concepts
+- `procedure` — repeatable multi-step processes
 
-Use schema: `v1.<type>.<value>`.
+Use schema: `v1.<type>.<value>` — snake_case, no spaces, no punctuation.
 
 Include metadata in value when useful:
-- source (`src_human|test|log|api`)
-- confidence (`conf_high|medium|low`)
-- scope (`scope_session|sprint|project`)
-- date marker (`dt_YYYY_MM_DD`)
+- source: `_src_human`, `_src_test`, `_src_log`
+- confidence: `_conf_high`, `_conf_medium`, `_conf_low`
+- scope: `_scope_session`, `_scope_sprint`, `_scope_project`
+- date: `_dt_YYYY_MM_DD`
 
 Never store secrets, private keys, or credentials.
 
 ---
 
-## 3) Reinforcement Rule (Good Behavior)
+## 3) Mid-Session Capture (automatic)
 
-After a successful workflow, Claude should train the sequence explicitly:
+At each meaningful learning during the session — not just at the end:
 
-- trigger event -> reasoning/action state -> successful outcome event
+- Tool: `session_checkpoint`
+  - `atoms`: new facts, states, events, relations
+  - `tombstone`: leave empty (tombstone only at session end)
+  - `train`: omit unless a clear trigger→action→outcome arc just completed
 
-Example pattern:
-- `v1.event.user_requests_bug_fix`
-- `v1.state.assistant_runs_targeted_tests_first`
-- `v1.event.fix_validated_by_focused_and_full_tests`
-
-Write sequence via `POST /train`.
-
-Then verify confidence with `GET /weights/:atom` on the trigger atom.
-
-Target reinforcement:
-- desired `dominantNext`
-- `dominanceRatio >= 0.70` sustained across repeated runs.
+This ensures memory survives even if the session is cut short.
 
 ---
 
-## 4) During Session Behavior
+## 4) Reinforcement Rule (Good Behaviour)
 
-- On each meaningful new learning, `POST /atoms` in small batches.
-- For high-value updates, call `POST /admin/commit` promptly.
-- Use `POST /search` for relevance retrieval before major decisions.
-- Use `/weights/:atom` when deciding whether a learned chain is reliable.
-- If the user stops and corrects behavior, treat that correction as a durable workflow rule (not one-off).
-- Persist that correction as a typed memory atom (fact/state/relation as appropriate), commit it, and reinforce the corrected sequence after successful execution.
+After a successful workflow, train the arc explicitly:
 
-If context window pressure appears, reduce retrieval to:
-- highest-confidence facts,
-- active states for current objective,
-- 3-5 top related relations/events.
+- trigger event → action state → successful outcome event
+
+Example:
+```
+v1.event.user_requests_bug_fix
+v1.state.assistant_runs_targeted_tests_first
+v1.event.fix_validated_by_focused_and_full_tests
+```
+
+- Tool: `session_checkpoint` with `train: [trigger, action, outcome]`
+
+Then verify confidence:
+- Tool: `memory_weights_get` on the trigger atom
+- Target: `dominanceRatio >= 0.70`
 
 ---
 
 ## 5) Session End Protocol
 
-1. Persist key new facts/states/events/relations.
-2. Tombstone obsolete states (`DELETE /atoms/:atom`).
-3. Train one summary behavior sequence for the session.
-4. Commit changes (`POST /admin/commit`).
-5. Optionally verify one key chain confidence (`GET /weights/:atom`).
+**Always** call `session_checkpoint` at session end. This is mandatory.
+
+```
+session_checkpoint({
+  atoms: [
+    "v1.event.completed_task_X_on_2026_03_07",
+    "v1.state.next_task_is_Y",
+    ...any new durable facts...
+  ],
+  tombstone: [
+    "v1.state.old_completed_task_state",
+    ...any states that are no longer true...
+  ],
+  train: [
+    "v1.event.session_started",
+    "v1.state.next_task_is_Y",
+    "v1.event.completed_task_X_on_2026_03_07"
+  ]
+})
+```
+
+The tool automatically commits to disk — no separate commit call needed.
+
+If the user corrects Claude's behaviour during the session, treat that
+correction as a durable workflow rule. Store it as a `fact` or `procedure`
+atom and reinforce the corrected sequence.
 
 ---
 
 ## 6) Scientific Verification Loop
 
-At least weekly, validate memory quality with harness + metrics.
+At least weekly, validate memory quality using:
+- Tool: `memory_weekly_eval_status`
+- Tool: `memory_weekly_eval_run` (if due)
 
 Track:
 - `predictionUsefulRate`
@@ -124,21 +147,9 @@ Track:
 
 If quality regresses:
 1. tighten atom naming quality,
-2. remove/tombstone low-value noisy states,
-3. retrain only successful behavior sequences,
+2. tombstone low-value noisy states,
+3. retrain only successful behaviour sequences,
 4. re-run the same profile and compare deltas.
-
-### Weekly auto-cadence rule (mandatory)
-
-- Claude must check `tools/harness/weekly_eval_state.json` at session start.
-- If `lastCompletedAt` is >= 7 days old, Claude must run `bash tools/harness/weekly-memory-eval.sh` before major planning.
-- The script updates `tools/harness/weekly_eval_state.json` with:
-   - `lastCompletedAt`
-   - `lastReportFile`
-   - `lastPromFile`
-   - `lastRunId`
-   - `lastProfile`
-- If the script fails, Claude must surface the failure and avoid claiming weekly validation is current.
 
 ---
 
@@ -155,26 +166,41 @@ Prefer high-confidence, recent, and task-scoped memory.
 
 ---
 
-## 8) Default Safety/Quality Constraints
+## 8) Default Safety / Quality Constraints
 
 - Do not invent atoms without clear evidence.
 - Mark uncertain memory with lower confidence tags.
 - Keep one concept per atom.
-- Favor concise atom values that are easy to search and compare.
+- Favour concise atom values that are easy to search and compare.
 - Preserve reproducibility: if a claim is test-derived, include source metadata.
-- Never choose `any`/unsafe casts as a convenience shortcut when a correct type-safe solution exists; prefer root-cause typing fixes.
+- Never choose `any`/unsafe casts as a convenience shortcut when a correct
+  type-safe solution exists; prefer root-cause typing fixes.
 
 ### Sprint completion gate (mandatory)
 
-- When marking a sprint as completed, Claude must run full repository typechecking first:
-   - `npm run sprint:complete` (alias for `npm run typecheck:all`).
-- A sprint must not be reported as complete if this gate fails.
+When marking a sprint as completed, run full typechecking first:
+- `npm run typecheck`
 
-This policy is mandatory for consistent, measurable memory behavior.
+A sprint must not be reported as complete if this gate fails.
 
-### Payment services and stored credit cards (mandatory)
+### Payment services (mandatory)
 
-- Claude must **always ask for explicit confirmation** before taking any action involving payment services (Stripe, PayPal, Razorpay, Airwallex, etc.) or stored payment methods.
-- This includes: creating charges, invoices, subscriptions, products, prices, or payment links; accessing or listing stored cards; triggering any billing event.
-- Even if a payment connector is connected and authenticated, Claude must pause and confirm the specific action and amount with the user before proceeding.
-- Never infer consent from context — each payment action requires fresh, explicit approval.
+Claude must always ask for explicit confirmation before taking any action
+involving payment services or stored payment methods. Even if a connector
+is authenticated, each payment action requires fresh explicit approval.
+
+---
+
+## MCP Tool Quick Reference
+
+| Intent | Tool |
+|--------|------|
+| Session start | `memory_session_bootstrap` |
+| Load atoms by type | `memory_atoms_list` |
+| Recall by association | `memory_access` |
+| Save + commit (mid/end session) | `session_checkpoint` |
+| Check server health | `memory_health` / `memory_ready` |
+| Find stale atoms | `memory_atoms_stale` |
+| Verify a proof | `memory_verify` |
+| Check weekly eval | `memory_weekly_eval_status` |
+| Run weekly eval | `memory_weekly_eval_run` |
