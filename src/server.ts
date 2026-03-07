@@ -2127,8 +2127,57 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
     return { server, orchestrator, pipeline, auditLog };
 }
 
+// ── S15-4: Startup key validation ─────────────────────────────────────────────
+// Called once before buildApp(). Exits with a clear message rather than
+// silently running unauthenticated or with a known-weak placeholder key.
+function validateApiKeyAtStartup(): void {
+    const key   = process.env.MMPM_API_KEY ?? '';
+    const isProd = (process.env.NODE_ENV ?? 'development') === 'production';
+
+    // Known placeholder values that must never be used in real deployments.
+    const PLACEHOLDER_KEYS = new Set([
+        '',
+        'change-me-before-production',
+        'your-api-key-from-.env',
+        'your-api-key-here',
+    ]);
+
+    const isPlaceholder = PLACEHOLDER_KEYS.has(key.trim());
+    const isTooShort    = key.length > 0 && key.length < 16;
+
+    if (isProd && isPlaceholder) {
+        console.error(
+            '[MMPM] FATAL: MMPM_API_KEY is not set or is a placeholder value.\n' +
+            '       In production you must set a strong key in .env:\n' +
+            '         openssl rand -hex 32\n' +
+            '       Then set MMPM_API_KEY=<that value> in .env and restart.'
+        );
+        process.exit(1);
+    }
+
+    if (isProd && isTooShort) {
+        console.error(
+            `[MMPM] FATAL: MMPM_API_KEY is only ${key.length} characters.\n` +
+            '       Minimum 16 characters required in production.\n' +
+            '       Generate a strong key:  openssl rand -hex 32'
+        );
+        process.exit(1);
+    }
+
+    if (!isProd && isPlaceholder) {
+        // Development warning — non-fatal, but visible.
+        console.warn(
+            '[MMPM] WARNING: MMPM_API_KEY is not set. ' +
+            'All write endpoints are unprotected. ' +
+            'Set MMPM_API_KEY in .env before exposing this server.'
+        );
+    }
+}
+
 // Only run when invoked directly
 if (require.main === module) {
+    validateApiKeyAtStartup();
+
     const PORT = parseInt(process.env.PORT ?? '3000');
     const HOST = process.env.HOST ?? '0.0.0.0';
     const NUM_SHARDS = parseInt(process.env.SHARD_COUNT ?? '4');
