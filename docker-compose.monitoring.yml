@@ -41,10 +41,13 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD:-admin}
       - GF_AUTH_ANONYMOUS_ENABLED=false
       - GF_LOG_FILTERS=context:warn
+      # Always land on the main MMPM dashboard on open
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/dashboards/mmpm.json
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/etc/grafana/dashboards:ro
-      - grafana-monitoring-data:/var/lib/grafana
+      # Share the same Grafana DB as the full stack so starred dashboards persist
+      - grafana-data:/var/lib/grafana
     depends_on:
       - prometheus
     networks:
@@ -56,4 +59,8 @@ networks:
     driver: bridge
 
 volumes:
-  grafana-monitoring-data:
+  # Reference the same volume used by docker-compose.yml so Grafana state
+  # (starred dashboards, preferences) carries over between the two stacks.
+  grafana-data:
+    external: true
+    name: markov-merkle-memory_grafana-data
