@@ -21,7 +21,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import type { FastifyInstance } from 'fastify';
 import type { ShardedOrchestrator } from '../orchestrator';
-import type { IngestionPipeline } from '../pipeline';
+import type { IngestionPipeline } from '../ingestion';
 import type { AuditLog } from '../audit_log';
 import { buildApp } from '../server';
 
