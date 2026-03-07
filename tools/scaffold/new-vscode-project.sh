@@ -99,65 +99,84 @@ This project uses MMPM (Parametric Memory) for persistent cross-session context.
 
 ### At the start of every session
 
-Load memory context before doing anything else:
+**If MCP tools are available**, call \`memory_session_bootstrap\` — it returns goals,
+constraints, preferences, and relevant memories in one call.
 
-\`\`\`bash
-curl -s -H "Authorization: Bearer \$MMPM_API_KEY" \$MMPM_URL/memory/context
-\`\`\`
-
-Summarise what you know about this project, recent decisions, and where we left off.
-Then walk the Markov chain for associated context:
-
+**Curl fallback:**
 \`\`\`bash
 curl -s -X POST \\
   -H "Authorization: Bearer \$MMPM_API_KEY" \\
   -H "Content-Type: application/json" \\
-  \$MMPM_URL/access \\
-  -d '{"data":"v1.event.session_started"}'
+  \$MMPM_URL/memory/bootstrap \\
+  -d '{}'
 \`\`\`
+
+After loading, summarise what you know about this project, recent decisions, and
+where we left off.
 
 ### During a session
 
-Save anything worth remembering immediately — decisions, discoveries, state changes:
+Save anything worth remembering immediately — decisions, discoveries, state changes.
 
+**If MCP tools are available**, call \`session_checkpoint\` with atoms to store
+(and optionally atoms to tombstone and a Markov sequence to train). It commits
+automatically.
+
+**Curl fallback (three calls):**
 \`\`\`bash
+# 1. Store atoms
 curl -s -X POST \\
   -H "Authorization: Bearer \$MMPM_API_KEY" \\
   -H "Content-Type: application/json" \\
   \$MMPM_URL/atoms \\
-  -d '{"atoms":["v1.fact.example_atom"]}'
+  -d '{"atoms":["v1.fact.${PROJECT_NAME}_example_fact"]}'
 
+# 2. Train the arc (optional, at least 2 items)
+curl -s -X POST \\
+  -H "Authorization: Bearer \$MMPM_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  \$MMPM_URL/train \\
+  -d '{"sequence":["v1.event.session_started","v1.fact.${PROJECT_NAME}_example_fact"]}'
+
+# 3. Commit to disk
 curl -s -X POST -H "Authorization: Bearer \$MMPM_API_KEY" \$MMPM_URL/admin/commit
 \`\`\`
 
 ### At the end of every session
 
-1. Store a fact summarising what was accomplished
-2. Tombstone any states that are now complete
-3. Store the new active state
-4. Train the session arc so next cold-start predicts the right context:
+**MANDATORY**: always save before ending — decisions made, state reached, what to
+pick up next session.
 
-\`\`\`bash
-curl -s -X POST \\
-  -H "Authorization: Bearer \$MMPM_API_KEY" \\
-  -H "Content-Type: application/json" \\
-  \$MMPM_URL/train \\
-  -d '{"sequence":["v1.event.session_started","v1.state.current_task","v1.event.accomplishment"]}'
-\`\`\`
+**If MCP tools are available**, call \`session_checkpoint\`:
+- \`atoms\` — new facts/states to store
+- \`tombstone\` — completed states to remove
+- \`train\` — sequence from session start to final state
+
+**Curl fallback**: use the three-call pattern above (store → train → commit).
 
 ### Atom naming convention for this project
 
-Use the project name as a namespace prefix in state/fact atoms:
+Use the project name as a namespace prefix:
 - \`v1.fact.${PROJECT_NAME}_description_of_fact\`
 - \`v1.state.${PROJECT_NAME}_current_task\`
-- \`v1.event.${PROJECT_NAME}_milestone_date\`
+- \`v1.event.${PROJECT_NAME}_milestone_reached\`
 - \`v1.relation.${PROJECT_NAME}_A_relates_to_B\`
+
+### MCP tools quick reference
+
+| Tool | When to use |
+|---|---|
+| \`memory_session_bootstrap\` | Session start — loads all context in one call |
+| \`session_checkpoint\` | Session end + mid-session saves (atoms + tombstone + train + commit) |
+| \`memory_atoms_list\` | Browse stored atoms by type |
+| \`memory_access\` | Markov recall for one atom |
+| \`memory_atoms_stale\` | Find atoms to clean up |
 
 ### MMPM server
 
 - URL: \`$MMPM_URL\`
 - Health: \`$MMPM_URL/health\`
-- The server must be running before any memory operations. Start it with:
+- Must be running before any memory operations. Start with:
   \`cd /path/to/markov-merkle-memory && ./start.sh\`
 
 ### VSCode tasks
@@ -166,11 +185,14 @@ Memory operations are available via the Command Palette (**Ctrl/Cmd+Shift+P → 
 
 | Task | What it does |
 |---|---|
-| MMPM: Load Memory Context | Prints the current memory context to the terminal |
+| MMPM: Bootstrap Memory | Loads full session context (goals, constraints, recent memories) |
 | MMPM: Save Atom | Prompts for an atom string and saves it |
 | MMPM: Commit Memory | Flushes pending writes to disk |
 | MMPM: Health Check | Checks the MMPM server is reachable |
 | MMPM: Start Server | Starts the MMPM server (set MMPM_DIR in .env first) |
+| MMPM: Stop Server | Stops the running MMPM server |
+| MMPM: Backup Memory | Exports all atoms to \`~/.mmpm/backups/\` |
+| MMPM: Restore Project Context | Restores atoms from \`memory/project-context.json\` |
 EOF
 echo "  ✓ CLAUDE.md"
 
@@ -278,9 +300,9 @@ cat > .vscode/tasks.json << EOF
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "MMPM: Load Memory Context",
+      "label": "MMPM: Bootstrap Memory",
       "type": "shell",
-      "command": "source .env 2>/dev/null || true; curl -s -H \"Authorization: Bearer \\\${MMPM_API_KEY}\" \\\${MMPM_URL}/memory/context | jq .",
+      "command": "source .env 2>/dev/null || true; curl -s -X POST -H \"Authorization: Bearer \\\${MMPM_API_KEY}\" -H \"Content-Type: application/json\" \\\${MMPM_URL}/memory/bootstrap -d '{}' | jq .",
       "group": "none",
       "presentation": {
         "reveal": "always",
@@ -344,6 +366,42 @@ cat > .vscode/tasks.json << EOF
           "endsPattern": "listening"
         }
       }
+    },
+    {
+      "label": "MMPM: Stop Server",
+      "type": "shell",
+      "command": "source .env 2>/dev/null || true; if [[ -z \"\\\${MMPM_DIR:-}\" ]]; then echo 'Set MMPM_DIR in .env to the markov-merkle-memory repo path'; exit 1; fi; bash \"\\\${MMPM_DIR}/start.sh\" --stop",
+      "group": "none",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "MMPM: Backup Memory",
+      "type": "shell",
+      "command": "source .env 2>/dev/null || true; if [[ -z \"\\\${MMPM_DIR:-}\" ]]; then echo 'Set MMPM_DIR in .env to the markov-merkle-memory repo path'; exit 1; fi; cd \"\\\${MMPM_DIR}\" && npm run backup",
+      "group": "none",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "MMPM: Restore Project Context",
+      "type": "shell",
+      "command": "source .env 2>/dev/null || true; if [[ -z \"\\\${MMPM_DIR:-}\" ]]; then echo 'Set MMPM_DIR in .env to the markov-merkle-memory repo path'; exit 1; fi; cd \"\\\${MMPM_DIR}\" && npm run restore -- --file memory/project-context.json",
+      "group": "none",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": false
+      },
+      "problemMatcher": []
     },
     {
       "label": "dev",
