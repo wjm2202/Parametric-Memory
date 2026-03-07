@@ -3,7 +3,7 @@
 **A cryptographically verifiable, Markov-predictive memory substrate for AI agents.**
 
 [![CI](https://img.shields.io/badge/CI-passing-00d4ff)](#)
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL_3.0-white.svg)](#)
+[![License: Personal Free / Commercial Paid](https://img.shields.io/badge/License-Personal%20Free%20%7C%20Commercial%20Paid-white.svg)](#)
 [![MCP Compatible](https://img.shields.io/badge/MCP-compatible-00d4ff)](#)
 
 ---
@@ -287,7 +287,7 @@ For AI-assisted codebase navigation, [jCodeMunch-mcp](https://github.com/jcodemu
 
 ## License
 
-AGPL-3.0 — see [LICENSE](LICENSE).
+Source available — free for personal use, commercial license required for organisations. See [LICENSE](LICENSE).
 
 Free for open-source and self-hosted use. If you run MMPM as a hosted service, AGPL-3.0 requires you to release your modifications. Enterprise licensing (on-prem, compliance tooling, SLA) available at [parametric-memory.dev](https://parametric-memory.dev).
 

@@ -5,55 +5,153 @@
 
 ## Memory substrate
 
-This project uses [Parametric-Memory (MMPM)](https://parametric-memory.dev) for persistent, cryptographically verifiable memory.
+This project uses [Parametric-Memory (MMPM)](https://parametric-memory.dev) for persistent,
+cryptographically verifiable memory across sessions.
 
 MMPM server: `http://localhost:3000`
+DB location: `~/.mmpm/data` (outside the repo — safe from git operations)
 
-**At the start of every session:**
+---
 
-1. Check if the MMPM server is running:
-   ```bash
-   curl -s http://localhost:3000/health
-   ```
-   If not running, start it:
-   ```bash
-   cd /EDIT_THIS_PATH/parametric-memory && ./start.sh &
-   sleep 3
-   ```
+## Session start (automatic)
 
-2. Load memory context:
-   ```bash
-   curl -s -H "Authorization: Bearer ${MMPM_API_KEY}" \
-     http://localhost:3000/memory/context
-   ```
+**If MMPM is connected via MCP** (preferred — use these tool calls):
 
-3. Walk the Markov chain for session-start prediction:
-   ```bash
-   curl -s -X POST \
-     -H "Authorization: Bearer ${MMPM_API_KEY}" \
-     -H "Content-Type: application/json" \
-     http://localhost:3000/access \
-     -d '{"data":"v1.event.session_started"}'
-   ```
+1. `memory_ready` — confirm server is up
+2. `memory_weekly_eval_status` — run `memory_weekly_eval_run` if `due: true`
+3. `memory_session_bootstrap` — load context + predictions in one call
+4. `memory_atoms_list` with `type: "state"` and `type: "fact"` if context is sparse
+5. Summarise current sprint/task status from `v1.fact.sprint.*` atoms
 
-**At the end of every session**, save what was learned:
+**If MCP is not connected** (curl fallback):
+
+```bash
+# 1. Check server
+curl -s http://localhost:3000/health
+# If not running: cd /EDIT_THIS_PATH/parametric-memory && ./start.sh &
+
+# 2. Bootstrap (context + Markov predictions in one call)
+curl -s -X POST \
+  -H "Authorization: Bearer ${MMPM_API_KEY}" \
+  -H "Content-Type: application/json" \
+  http://localhost:3000/memory/bootstrap \
+  -d '{}'
+```
+
+---
+
+## During session (automatic)
+
+At each meaningful learning — do not wait until session end:
+
+**MCP:** call `session_checkpoint` with new atoms (tombstone and train optional mid-session)
+
+**curl fallback:**
 ```bash
 curl -s -X POST \
   -H "Authorization: Bearer ${MMPM_API_KEY}" \
   -H "Content-Type: application/json" \
   http://localhost:3000/atoms \
-  -d '{"atoms":["v1.event.session_ended_DATE","v1.state.next_task_HERE"]}'
+  -d '{"atoms":["v1.fact.new_fact_here","v1.state.current_task_here"]}'
 
 curl -s -X POST -H "Authorization: Bearer ${MMPM_API_KEY}" \
   http://localhost:3000/admin/commit
 ```
 
+---
+
+## Session end (mandatory)
+
+**MCP — single call, always commits:**
+
+```
+session_checkpoint({
+  atoms: [
+    "v1.event.completed_X_YYYY_MM_DD",
+    "v1.state.next_task_is_Y"
+  ],
+  tombstone: [
+    "v1.state.old_completed_state"
+  ],
+  train: [
+    "v1.event.session_started",
+    "v1.state.next_task_is_Y",
+    "v1.event.completed_X_YYYY_MM_DD"
+  ]
+})
+```
+
+**curl fallback:**
+```bash
+# Store new atoms
+curl -s -X POST \
+  -H "Authorization: Bearer ${MMPM_API_KEY}" \
+  -H "Content-Type: application/json" \
+  http://localhost:3000/atoms \
+  -d '{"atoms":["v1.event.completed_X_DATE","v1.state.next_task_is_Y"]}'
+
+# Remove obsolete state
+curl -s -X DELETE -H "Authorization: Bearer ${MMPM_API_KEY}" \
+  http://localhost:3000/atoms/v1.state.old_state
+
+# Train session arc
+curl -s -X POST \
+  -H "Authorization: Bearer ${MMPM_API_KEY}" \
+  -H "Content-Type: application/json" \
+  http://localhost:3000/train \
+  -d '{"sequence":["v1.event.session_started","v1.state.next_task_is_Y","v1.event.completed_X_DATE"]}'
+
+# Commit to disk
+curl -s -X POST -H "Authorization: Bearer ${MMPM_API_KEY}" \
+  http://localhost:3000/admin/commit
+```
+
+---
+
+## Atom format
+
+`v1.<type>.<value>` — snake_case, no spaces, no punctuation in value.
+
+| Type | Use for |
+|------|---------|
+| `fact` | Stable truths, preferences, project info |
+| `state` | Current working context, next steps |
+| `event` | Completed milestones, dated outcomes |
+| `relation` | Links between concepts or systems |
+| `procedure` | Repeatable multi-step processes |
+
+---
+
+## MCP config for Claude Code
+
+Add to `~/.claude/settings.json` to wire MCP:
+
+```json
+{
+  "mcpServers": {
+    "parametric-memory": {
+      "command": "node",
+      "args": ["/EDIT_THIS_PATH/parametric-memory/dist/server.js"],
+      "env": {
+        "MMPM_API_KEY": "your-api-key-from-.env",
+        "DB_BASE_PATH": "~/.mmpm/data",
+        "LOG_LEVEL": "warn",
+        "MMPM_MCP_ENABLE_MUTATIONS": "1"
+      }
+    }
+  }
+}
+```
+
+---
+
 ## Environment
 
-Set `MMPM_API_KEY` in your shell or `.env`:
 ```bash
 export MMPM_API_KEY=your-api-key-from-parametric-memory-.env
 ```
+
+---
 
 ## Project context
 

@@ -494,6 +494,73 @@ export function createToolDefinitions(options: MmpmMcpOptions = {}): ToolDef[] {
             handler: async args => callApi('POST', '/train', { sequence: parseStringArray(args.sequence) }),
             mutating: true,
         },
+        // ── S15-3: session_checkpoint ─────────────────────────────────────────
+        // Single-call composite: store atoms + tombstone old ones + train arc +
+        // commit to disk.  This is the primary tool for automatic memory capture.
+        // Claude should call this at session end, at milestones, and whenever
+        // durable facts are learned — no manual curl steps required.
+        {
+            name: 'session_checkpoint',
+            description:
+                'Save everything learned in this session to MMPM in one call. ' +
+                'Stores new atoms, tombstones obsolete ones, trains the session Markov arc, and commits to disk. ' +
+                'Use this at session end, at major milestones, or whenever new durable facts are discovered. ' +
+                'All three parameters are optional — pass only what applies. ' +
+                'This is the primary tool for automatic memory capture.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    atoms: {
+                        type: 'array',
+                        items: { type: 'string' },
+                        description: 'New atoms to store in v1.<type>.<value> format. Fact, event, state, relation, procedure, or other.',
+                    },
+                    tombstone: {
+                        type: 'array',
+                        items: { type: 'string' },
+                        description: 'Atoms to delete — e.g. completed task states, outdated facts.',
+                    },
+                    train: {
+                        type: 'array',
+                        items: { type: 'string' },
+                        description: 'Markov sequence to reinforce, ordered from trigger → action → outcome. Minimum 2 atoms.',
+                    },
+                },
+                additionalProperties: false,
+            },
+            handler: async args => {
+                const results: Record<string, unknown> = {};
+
+                // 1. Store new atoms
+                if (Array.isArray(args.atoms) && (args.atoms as string[]).length > 0) {
+                    results.stored = await callApi('POST', '/atoms', { atoms: parseStringArray(args.atoms) });
+                }
+
+                // 2. Tombstone obsolete atoms
+                if (Array.isArray(args.tombstone) && (args.tombstone as string[]).length > 0) {
+                    const tombResults: unknown[] = [];
+                    for (const atom of args.tombstone as string[]) {
+                        if (typeof atom === 'string') {
+                            tombResults.push(
+                                await callApi('DELETE', `/atoms/${encodeURIComponent(atom)}`, {})
+                            );
+                        }
+                    }
+                    results.tombstoned = tombResults;
+                }
+
+                // 3. Train Markov arc
+                if (Array.isArray(args.train) && (args.train as string[]).length >= 2) {
+                    results.trained = await callApi('POST', '/train', { sequence: parseStringArray(args.train) });
+                }
+
+                // 4. Always commit — ensures nothing is lost on restart
+                results.committed = await callApi('POST', '/admin/commit', {});
+
+                return results;
+            },
+            mutating: true,
+        },
         {
             name: 'memory_atoms_add',
             description: 'Queue new atoms for ingestion. Wraps POST /atoms.',

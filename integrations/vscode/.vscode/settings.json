@@ -1,5 +1,21 @@
 {
-  "// MMPM — Parametric-Memory VSCode integration": "",
-  "// These settings configure the MMPM MCP server for use with GitHub Copilot": "",
-  "// and any MCP-compatible AI extension in VSCode.": ""
+  "// MMPM — copy this file to your project's .vscode/settings.json": "",
+  "// Then replace /EDIT_THIS_PATH with the absolute path to your parametric-memory repo.": "",
+  "// MMPM_API_KEY must match the value in your .env file.": "",
+
+  "mcp": {
+    "servers": {
+      "parametric-memory": {
+        "type": "stdio",
+        "command": "node",
+        "args": ["/EDIT_THIS_PATH/parametric-memory/dist/server.js"],
+        "env": {
+          "MMPM_API_KEY": "your-api-key-from-.env",
+          "DB_BASE_PATH": "~/.mmpm/data",
+          "LOG_LEVEL": "warn",
+          "MMPM_MCP_ENABLE_MUTATIONS": "1"
+        }
+      }
+    }
+  }
 }

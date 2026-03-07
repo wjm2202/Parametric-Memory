@@ -5,6 +5,7 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit && tsc --project tsconfig.test.json --noEmit",
+    "typecheck:all": "npm run typecheck",
     "start": "node dist/server.js",
     "dev": "ts-node src/server.ts",
     "clean": "rm -rf dist",
@@ -24,6 +25,8 @@
     "load:live": "ts-node tools/harness/continuous_client.ts --profile balanced --duration-ms 3600000 --target-ops 120 --concurrency 8 --metrics-port 9470 --metrics-host 0.0.0.0",
     "mcp:serve": "ts-node tools/mcp/mmpm_mcp_server.ts",
     "mcp:serve:unsafe": "MMPM_MCP_ENABLE_MUTATIONS=1 ts-node tools/mcp/mmpm_mcp_server.ts",
+    "backup": "ts-node tools/backup.ts",
+    "restore": "ts-node tools/restore.ts",
     "setup": "npm install && npm run build && (test -f .env || cp .env.example .env) && echo 'Ready. Edit .env then: ./start.sh'",
     "skill:pack": "cd integrations && zip -r parametric-memory.skill claude-skill/ && echo 'Packaged integrations/parametric-memory.skill'"
   },
@@ -40,7 +43,7 @@
     "typescript"
   ],
   "author": "Glen Osborne",
-  "license": "AGPL-3.0",
+  "license": "SEE LICENSE IN LICENSE",
   "description": "Cryptographically verifiable, Markov-predictive memory substrate for AI agents. Every atom has a Merkle proof. Every access trains a prediction.",
   "devDependencies": {
     "@types/node": "^25.3.3",

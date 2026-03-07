@@ -2,11 +2,16 @@
 
 Connect MMPM to VSCode so your AI assistant has persistent, verifiable memory across every coding session.
 
+Memory lives at `~/.mmpm/data` — outside your repo, shared by Docker, `./start.sh`, and every MCP client.
+
+> ⚠️ **Never run `docker compose down -v`** — the `-v` flag destroys volumes.
+> Use `docker compose down` to stop safely. Recovery: `npm run restore -- --file memory/project-context.json`
+
 ---
 
-## Option 1 — MCP server (recommended for Copilot / Cline / Continue)
+## Option 1 — MCP server (recommended)
 
-MMPM ships a full [Model Context Protocol](https://modelcontextprotocol.io/) server. Any MCP-compatible VSCode extension can connect to it.
+MMPM ships a full [Model Context Protocol](https://modelcontextprotocol.io/) server. Any MCP-compatible extension can connect to it and get full memory access including automatic session capture via `session_checkpoint`.
 
 ### Step 1: Start MMPM
 
@@ -16,42 +21,37 @@ cd your-parametric-memory-repo
 # Server up at http://localhost:3000
 ```
 
-### Step 2: Start the MCP server
+### Step 2: Configure your extension
 
-```bash
-# Read-only (safe for shared machines)
-npm run mcp:serve
+All configs below include `MMPM_MCP_ENABLE_MUTATIONS=1` (required for `session_checkpoint` and all write tools) and `DB_BASE_PATH=~/.mmpm/data` (shared with Docker and `./start.sh`).
 
-# Read + write (full memory access)
-npm run mcp:serve:unsafe
-```
-
-The MCP server listens on stdio and exposes all MMPM operations as typed tools.
-
-### Step 3: Configure your extension
+---
 
 **For [Cline](https://marketplace.visualstudio.com/items?itemName=saoudrizwan.claude-dev) or [Continue](https://marketplace.visualstudio.com/items?itemName=Continue.continue):**
 
-Add to your extension's MCP config (usually `~/.cline/config.json` or `~/.continue/config.json`):
+Add to your extension's MCP config (`~/.cline/config.json` or `~/.continue/config.json`):
 
 ```json
 {
   "mcpServers": {
     "parametric-memory": {
       "command": "node",
-      "args": ["/absolute/path/to/parametric-memory/dist/server.js"],
+      "args": ["/EDIT_THIS_PATH/parametric-memory/dist/server.js"],
       "env": {
         "MMPM_API_KEY": "your-api-key-from-.env",
-        "PORT": "3000"
+        "PORT": "3000",
+        "DB_BASE_PATH": "~/.mmpm/data",
+        "LOG_LEVEL": "warn",
+        "MMPM_MCP_ENABLE_MUTATIONS": "1"
       }
     }
   }
 }
 ```
 
-**For [GitHub Copilot](https://marketplace.visualstudio.com/items?itemName=GitHub.copilot) (VSCode MCP support):**
+---
 
-Add to `.vscode/mcp.json` in your project:
+**For [GitHub Copilot](https://marketplace.visualstudio.com/items?itemName=GitHub.copilot) — `.vscode/mcp.json`:**
 
 ```json
 {
@@ -61,14 +61,19 @@ Add to `.vscode/mcp.json` in your project:
       "command": "node",
       "args": ["${env:HOME}/parametric-memory/dist/server.js"],
       "env": {
-        "MMPM_API_KEY": "${env:MMPM_API_KEY}"
+        "MMPM_API_KEY": "${env:MMPM_API_KEY}",
+        "DB_BASE_PATH": "~/.mmpm/data",
+        "LOG_LEVEL": "warn",
+        "MMPM_MCP_ENABLE_MUTATIONS": "1"
       }
     }
   }
 }
 ```
 
-Or add to your VSCode `settings.json`:
+---
+
+**VSCode `settings.json` (user or workspace):**
 
 ```json
 {
@@ -77,10 +82,64 @@ Or add to your VSCode `settings.json`:
       "parametric-memory": {
         "type": "stdio",
         "command": "node",
-        "args": ["/absolute/path/to/parametric-memory/dist/server.js"],
+        "args": ["/EDIT_THIS_PATH/parametric-memory/dist/server.js"],
         "env": {
-          "MMPM_API_KEY": "your-api-key"
+          "MMPM_API_KEY": "your-api-key-from-.env",
+          "DB_BASE_PATH": "~/.mmpm/data",
+          "LOG_LEVEL": "warn",
+          "MMPM_MCP_ENABLE_MUTATIONS": "1"
         }
+      }
+    }
+  }
+}
+```
+
+### Step 3: Verify
+
+Open the VSCode command palette → your AI extension → confirm `parametric-memory` appears in the available tools list. You should see tools including `session_checkpoint`, `memory_session_bootstrap`, and `memory_atoms_list`.
+
+### Key MCP tools
+
+| Tool | When to use |
+|------|-------------|
+| `memory_session_bootstrap` | Session start — loads context + Markov predictions in one call |
+| `session_checkpoint` | Session end + mid-session — saves atoms, tombstones old ones, trains arc, commits |
+| `memory_atoms_list` | Browse memory by type (`fact`, `state`, `event`, etc.) |
+| `memory_search` | Search across all stored atoms — requires `MMPM_MCP_ENABLE_SEMANTIC_TOOLS=1` |
+| `memory_access` | Markov recall for one atom |
+| `memory_atoms_stale` | Find atoms to clean up |
+| `memory_ready` | Confirm server is up and mutations are enabled (use at session start) |
+| `memory_verify` | Verify a Merkle proof |
+
+Full tool reference: `integrations/claude-skill/SKILL.md`
+
+---
+
+## Option 2 — CLAUDE.md (for Claude Code in terminal)
+
+If you use [Claude Code](https://docs.anthropic.com/claude-code) in your terminal, drop a `CLAUDE.md` file in your project root. Claude Code reads it automatically at session start.
+
+```bash
+cp integrations/vscode/CLAUDE.md.template ./CLAUDE.md
+# Edit MMPM_PATH and MMPM_API_KEY in CLAUDE.md
+```
+
+The template instructs Claude to use **MCP tools when available** (via Claude Code's MCP config) and fall back to curl when not. See `CLAUDE.md.template` for details.
+
+To wire Claude Code's MCP config, add to `~/.claude/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "parametric-memory": {
+      "command": "node",
+      "args": ["/EDIT_THIS_PATH/parametric-memory/dist/server.js"],
+      "env": {
+        "MMPM_API_KEY": "your-api-key-from-.env",
+        "DB_BASE_PATH": "~/.mmpm/data",
+        "LOG_LEVEL": "warn",
+        "MMPM_MCP_ENABLE_MUTATIONS": "1"
       }
     }
   }
@@ -89,24 +148,9 @@ Or add to your VSCode `settings.json`:
 
 ---
 
-## Option 2 — CLAUDE.md (for Claude Code in terminal)
+## Option 3 — VSCode tasks
 
-If you use [Claude Code](https://docs.anthropic.com/claude-code) in your terminal, drop a `CLAUDE.md` file in your project root so Claude automatically connects to MMPM at session start.
-
-Copy `integrations/vscode/CLAUDE.md.template` to your project root as `CLAUDE.md` and edit the paths:
-
-```bash
-cp integrations/vscode/CLAUDE.md.template ./CLAUDE.md
-# Edit MMPM_PATH and MMPM_API_KEY in CLAUDE.md
-```
-
-Claude Code reads `CLAUDE.md` automatically and will load your memory context on every session start.
-
----
-
-## Option 3 — Tasks / snippets
-
-Add to `.vscode/tasks.json` in your project to start/stop MMPM as a VSCode task:
+Add to `.vscode/tasks.json` for quick access from the Command Palette:
 
 ```json
 {
@@ -124,7 +168,19 @@ Add to `.vscode/tasks.json` in your project to start/stop MMPM as a VSCode task:
     {
       "label": "MMPM: Stop server",
       "type": "shell",
-      "command": "curl -s -X POST http://localhost:3000/admin/shutdown || pkill -f 'dist/server.js'",
+      "command": "${env:HOME}/parametric-memory/start.sh --stop",
+      "group": "build"
+    },
+    {
+      "label": "MMPM: Backup memory",
+      "type": "shell",
+      "command": "cd ${env:HOME}/parametric-memory && npm run backup",
+      "group": "build"
+    },
+    {
+      "label": "MMPM: Restore project context",
+      "type": "shell",
+      "command": "cd ${env:HOME}/parametric-memory && npm run restore -- --file memory/project-context.json",
       "group": "build"
     }
   ]
@@ -133,19 +189,9 @@ Add to `.vscode/tasks.json` in your project to start/stop MMPM as a VSCode task:
 
 ---
 
-## Verify it's working
-
-```bash
-curl http://localhost:3000/health
-# → {"status":"ok","ready":true,...}
-```
-
-Open the VSCode command palette → your AI extension → look for `parametric-memory` in the available tools list.
-
----
-
 ## More information
 
 - GitHub: https://github.com/wjm2202/Parametric-Memory
 - Website: https://parametric-memory.dev
-- Claude Cowork skill: `integrations/claude-skill/SKILL.md`
+- Full MCP tool reference: `integrations/claude-skill/SKILL.md`
+- Claude operating guide: `CLAUDE.md`

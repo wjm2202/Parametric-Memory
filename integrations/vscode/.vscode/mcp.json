@@ -1,0 +1,20 @@
+{
+  "// MMPM — copy this file to your project's .vscode/mcp.json": "",
+  "// Used by GitHub Copilot (VS Code 1.99+) and other MCP-aware extensions.": "",
+  "// Replace /EDIT_THIS_PATH with the absolute path to your parametric-memory repo.": "",
+  "// MMPM_API_KEY must match the value in your .env file.": "",
+
+  "servers": {
+    "parametric-memory": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/EDIT_THIS_PATH/parametric-memory/dist/server.js"],
+      "env": {
+        "MMPM_API_KEY": "${env:MMPM_API_KEY}",
+        "DB_BASE_PATH": "~/.mmpm/data",
+        "LOG_LEVEL": "warn",
+        "MMPM_MCP_ENABLE_MUTATIONS": "1"
+      }
+    }
+  }
+}
