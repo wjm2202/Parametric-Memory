@@ -51,6 +51,10 @@ session_checkpoint({
 | `relation` | Links between systems or concepts |
 | `procedure` | Repeatable multi-step processes |
 
+> ⚠️ **Never store secrets as atoms.** Passwords, API keys, tokens, and
+> credentials must not be stored in MMPM atoms.  Use a dedicated secret
+> manager for sensitive values.
+
 ## MCP tools
 
 | Tool | Purpose |

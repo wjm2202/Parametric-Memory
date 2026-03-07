@@ -94,12 +94,12 @@ describe('Harness ingestion driver (Story 9.2)', () => {
             seed: 909,
         });
 
-        const port = 3411;
         const dbPath = tempDb('api-stream');
         const app = buildApp({ data: [atom('Boot_A'), atom('Boot_B')], dbBasePath: dbPath, numShards: 4, apiKey: API_KEY });
         await app.orchestrator.init();
         app.pipeline.start();
-        await app.server.listen({ port, host: '127.0.0.1' });
+        await app.server.listen({ port: 0, host: '127.0.0.1' });
+        const { port } = app.server.server.address() as { port: number };
 
         try {
             const stats = await runIngestionDriver(dataset, {
@@ -136,10 +136,10 @@ describe('Harness ingestion driver (Story 9.2)', () => {
             seed: 1001,
         });
 
-        const port = 3413;
         const dbPath = tempDb('api-delayed-ready');
         const app = buildApp({ data: [atom('Boot_X'), atom('Boot_Y')], dbBasePath: dbPath, numShards: 4, apiKey: API_KEY });
-        await app.server.listen({ port, host: '127.0.0.1' });
+        await app.server.listen({ port: 0, host: '127.0.0.1' });
+        const { port } = app.server.server.address() as { port: number };
 
         const delayedInit = setTimeout(async () => {
             await app.orchestrator.init();

@@ -1,0 +1,127 @@
+# ── MMPM nginx TLS reverse-proxy example ──────────────────────────────────────
+#
+# SECURITY MODEL
+# ─────────────
+# MMPM binds to 127.0.0.1:3000 by default (S16-1).  This file shows how to
+# expose it to remote clients — an IDE plugin, a CI pipeline, a second machine
+# — safely, by terminating TLS at nginx and proxying to the loopback socket.
+#
+# The API key check is still enforced by MMPM itself; nginx only provides the
+# TLS layer and optional IP allowlist.  Do NOT set HOST=0.0.0.0 when using
+# this config; leave MMPM bound to 127.0.0.1.
+#
+# QUICK START (Certbot / Let's Encrypt)
+# ─────────────────────────────────────
+# 1. Install nginx and certbot:
+#      sudo apt install nginx certbot python3-certbot-nginx
+#
+# 2. Obtain a certificate (replace memory.example.com with your domain):
+#      sudo certbot --nginx -d memory.example.com
+#
+# 3. Copy this file to /etc/nginx/sites-available/mmpm and symlink:
+#      sudo cp nginx.conf.example /etc/nginx/sites-available/mmpm
+#      sudo ln -s /etc/nginx/sites-available/mmpm /etc/nginx/sites-enabled/mmpm
+#      sudo nginx -t && sudo systemctl reload nginx
+#
+# 4. In MMPM's .env, leave:
+#      HOST=127.0.0.1
+#      PORT=3000
+#      MMPM_API_KEY=<strong-key>
+#
+# SELF-SIGNED CERTIFICATE (development / internal use)
+# ─────────────────────────────────────────────────────
+#   openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+#     -keyout /etc/ssl/private/mmpm-selfsigned.key \
+#     -out /etc/ssl/certs/mmpm-selfsigned.crt \
+#     -subj "/CN=mmpm.internal"
+#
+# Then replace the ssl_certificate / ssl_certificate_key lines below.
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Redirect all HTTP → HTTPS
+server {
+    listen 80;
+    listen [::]:80;
+    server_name memory.example.com;        # ← replace with your domain / IP
+
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name memory.example.com;        # ← replace with your domain / IP
+
+    # ── TLS certificates ──────────────────────────────────────────────────────
+    # Certbot populates these automatically; for self-signed certs substitute
+    # the paths from the openssl command above.
+    ssl_certificate     /etc/letsencrypt/live/memory.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/memory.example.com/privkey.pem;
+
+    # Modern TLS settings (Mozilla Intermediate compatibility, 2024)
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    # HSTS — 6 months; add preload only after you are confident the domain
+    # will remain HTTPS-only.
+    add_header Strict-Transport-Security "max-age=15768000" always;
+
+    # ── Optional: IP allowlist ─────────────────────────────────────────────────
+    # Uncomment and adjust to restrict access to known clients only.
+    # allow 203.0.113.10;     # office egress
+    # allow 198.51.100.0/24;  # VPN subnet
+    # deny all;
+
+    # ── Proxy to MMPM ─────────────────────────────────────────────────────────
+    location / {
+        proxy_pass         http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+
+        # Required for Server-Sent Events / streaming responses
+        proxy_set_header Connection        "";
+        proxy_buffering                    off;
+        proxy_read_timeout                 300s;
+
+        # Forward real client IP so MMPM audit logs show it correctly
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Host              $host;
+
+        # Cap request body size — atoms are small; reject huge imports at
+        # the proxy layer before they hit the Node.js process.
+        client_max_body_size 16m;
+    }
+
+    # ── Health / readiness probes (no auth) ───────────────────────────────────
+    # Allow load-balancer health checks without an API key.  These endpoints
+    # are already public in MMPM (probePaths); nginx just passes them through.
+    location ~ ^/(health|ready)$ {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        access_log off;          # reduce noise in nginx logs
+    }
+
+    # ── Block access to /admin/export from external IPs ───────────────────────
+    # The export endpoint streams the full atom database.  Even with a valid
+    # API key it is an exfiltration risk from external networks.  Keep it
+    # LAN / localhost-only and comment out this block only if you need remote
+    # export access.
+    location /admin/export {
+        allow 127.0.0.1;
+        allow ::1;
+        # allow 10.0.0.0/8;     # uncomment for LAN access
+        deny all;
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+    }
+
+    # ── Logging ───────────────────────────────────────────────────────────────
+    access_log /var/log/nginx/mmpm.access.log;
+    error_log  /var/log/nginx/mmpm.error.log warn;
+}

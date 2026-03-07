@@ -61,15 +61,20 @@ npm run build
 node dist/server.js
 ```
 
-Environment variables:
+Environment variables (see `.env.example` for the full list):
 
 | Variable | Default | Description |
 |---|---|---|
 | `PORT` | `3000` | HTTP server port |
-| `DB_BASE_PATH` | `./data` | LevelDB storage directory |
-| `SHARD_COUNT` | `4` | Number of shards |
-| `MMPM_API_KEY` | *(none)* | Optional bearer token for auth. Generate: `openssl rand -hex 32` |
-| `WRITE_POLICY` | `auto` | `auto` \| `review` \| `publish-all` |
+| `HOST` | `127.0.0.1` | Bind address. Keep loopback unless behind a TLS reverse proxy. |
+| `DB_BASE_PATH` | `~/.mmpm/data` | LevelDB storage directory (outside the repo) |
+| `SHARD_COUNT` | `4` | Number of LevelDB shards |
+| `MMPM_API_KEY` | *(none)* | Bearer token for auth. Generate: `openssl rand -hex 32` |
+| `MMPM_API_KEYS` | *(none)* | Per-client named keys: `name:key,name:key,...` (appear in audit log) |
+| `WRITE_POLICY` | `auto-write` | `auto-write` \| `review-required` \| `never-store` |
+| `MMPM_METRICS_PUBLIC` | `0` | Set to `1` to expose `/metrics` without auth (Prometheus scraping) |
+| `MMPM_BLOCK_SECRET_ATOMS` | `0` | Set to `1` to reject atoms matching credential patterns (recommended in prod) |
+| `LOG_LEVEL` | `info` | Pino log level: `trace` \| `debug` \| `info` \| `warn` \| `error` |
 
 ---
 
