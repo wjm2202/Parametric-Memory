@@ -1,16 +1,23 @@
 /**
- * AUDIT LOG (Sprint 14-A-3)
+ * AUDIT LOG (Sprint 14-A-3, extended Sprint 16)
  *
- * A bounded, in-memory ring buffer that records mutation events for operator
- * visibility.  Entries are kept in insertion order; when the buffer is full
- * the oldest entry is evicted.
+ * A bounded, in-memory ring buffer that records mutation and read events for
+ * operator visibility.  Entries are kept in insertion order; when the buffer
+ * is full the oldest entry is evicted.
  *
- * Supported event types:
- *   atom.add       — one or more atoms queued for ingestion
- *   atom.tombstone — an atom soft-deleted
- *   admin.commit   — the ingestion pipeline flushed
- *   admin.import   — atoms loaded via POST /admin/import
- *   admin.export   — atoms exported via GET /admin/export (read-only, logged for audit trail)
+ * Mutation events:
+ *   atom.add         — one or more atoms queued for ingestion
+ *   atom.tombstone   — an atom soft-deleted
+ *   admin.commit     — the ingestion pipeline flushed
+ *   admin.import     — atoms loaded via POST /admin/import
+ *   review.bypass    — write-policy review tier bypassed via reviewApproved:true
+ *
+ * Read / access events (S16-2):
+ *   admin.export     — full atom snapshot exported (silent exfil risk)
+ *   memory.bootstrap — session bootstrap called (loads full context)
+ *   memory.context   — context block generated
+ *   atoms.list       — atom list endpoint called
+ *   memory.time_travel — any request that used asOfMs or asOfVersion (S16-6)
  *
  * Thread safety: Node.js is single-threaded — no locking needed.
  */
@@ -20,7 +27,12 @@ export type AuditEventType =
     | 'atom.tombstone'
     | 'admin.commit'
     | 'admin.import'
-    | 'admin.export';
+    | 'admin.export'
+    | 'review.bypass'
+    | 'memory.bootstrap'
+    | 'memory.context'
+    | 'atoms.list'
+    | 'memory.time_travel';
 
 export interface AuditEntry {
     /** Monotonically increasing id within this process lifetime. */
@@ -35,6 +47,10 @@ export interface AuditEntry {
     requestId?: string;
     /** Master tree version after the operation (if available). */
     treeVersion?: number;
+    /** Named API key client (S16-8). Populated when per-client keys are configured. */
+    clientName?: string;
+    /** Extra context — e.g. time-travel params, bypass reason. */
+    meta?: Record<string, unknown>;
 }
 
 export class AuditLog {
@@ -54,6 +70,8 @@ export class AuditLog {
             count?: number;
             requestId?: string;
             treeVersion?: number;
+            clientName?: string;
+            meta?: Record<string, unknown>;
         } = {}
     ): AuditEntry {
         const entry: AuditEntry = {

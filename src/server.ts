@@ -785,6 +785,30 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
     assertAtomsV1(initialData, 'initialData');
 
     const apiKey = opts.apiKey ?? (process.env.MMPM_API_KEY || undefined);
+
+    // S16-8: Multi-client named API keys — MMPM_API_KEYS=name:key,name:key,...
+    // The legacy single MMPM_API_KEY is registered under the client name 'default'.
+    // Named keys in MMPM_API_KEYS override the 'default' entry if the same key appears.
+    const apiKeyMap = new Map<string, string>(); // bearer-token → clientName
+    if (apiKey) apiKeyMap.set(apiKey, 'default');
+    const multiKeyStr = process.env.MMPM_API_KEYS ?? '';
+    if (multiKeyStr) {
+        for (const pair of multiKeyStr.split(',')) {
+            const idx = pair.indexOf(':');
+            if (idx > 0) {
+                const name = pair.slice(0, idx).trim();
+                const key  = pair.slice(idx + 1).trim();
+                if (name && key) apiKeyMap.set(key, name);
+            }
+        }
+    }
+    // Helper: extract clientName from an HTTP Authorization header within this closure.
+    const getClientName = (req: { headers: { authorization?: string } }): string | undefined => {
+        const auth = req.headers.authorization;
+        if (!auth?.startsWith('Bearer ')) return undefined;
+        return apiKeyMap.get(auth.slice(7));
+    };
+
     const orchestrator = new ShardedOrchestrator(numShards, initialData, dbBasePath);
     // Ingestion pipeline: batches incoming atoms, flushes without blocking reads.
     // batchSize and flushIntervalMs can be tuned via env vars.
@@ -797,7 +821,12 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
     // Paths that bypass auth and readiness checks.
     // POST /verify is public by design — third-party auditors must be able to
     // verify proofs without API credentials.
-    const probePaths = new Set(['/metrics', '/health', '/ready', '/verify']);
+    // /metrics is protected by default (it leaks server internals).
+    // Set MMPM_METRICS_PUBLIC=1 to expose it without auth (e.g. for Prometheus
+    // scrapers that cannot send Authorization headers).
+    const metricsPublic = (process.env.MMPM_METRICS_PUBLIC ?? '0') === '1';
+    const probePaths = new Set<string>(['/health', '/ready', '/verify']);
+    if (metricsPublic) probePaths.add('/metrics');
 
     const resolveTemporalScope = (asOfMsInput: unknown, asOfVersionInput: unknown):
         | { ok: true; scope: TemporalScope }
@@ -868,12 +897,14 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
         };
     };
 
-    // Optional Bearer token auth — /metrics always bypasses
-    if (apiKey) {
+    // S16-8: Multi-key Bearer auth.  Accepts any key present in apiKeyMap.
+    // If no keys are configured (apiKeyMap is empty), auth is disabled — same
+    // behaviour as the old single-key path when MMPM_API_KEY was unset.
+    if (apiKeyMap.size > 0) {
         server.addHook('onRequest', async (request, reply) => {
             if (probePaths.has(request.url)) return;
             const auth = request.headers.authorization;
-            if (!auth || auth !== `Bearer ${apiKey}`) {
+            if (!auth || !auth.startsWith('Bearer ') || !apiKeyMap.has(auth.slice(7))) {
                 return reply.status(401).send({ error: 'Unauthorized' });
             }
         });
@@ -1338,9 +1369,12 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
         for (const item of activeAtoms) {
             const dominantNext = item.outgoingTransitions[0]?.to ?? null;
             const contradiction = getFactConflictForAtom(item.atom, conflictIndex);
-            const line = contextFormat === 'compact'
+            // S16-4: prefix every context line with [MEMORY] so AI parsers treat
+            // these lines as stored data, not live instructions.
+            const rawLine = contextFormat === 'compact'
                 ? `${summarizeAtomForCompactContext(item.atom)} | t=${item.outgoingTransitions.length}${dominantNext ? ` | next=${summarizeAtomForCompactContext(dominantNext)}` : ''}${contradiction.hasConflict ? ' | conflict=1' : ''}`
                 : `${item.atom} | createdAtMs=${item.createdAtMs} | transitions=${item.outgoingTransitions.length}${dominantNext ? ` | dominantNext=${dominantNext}` : ''}${contradiction.hasConflict ? ` | conflictKey=${contradiction.conflictKey}` : ''}`;
+            const line = `[MEMORY] ${rawLine}`;
             const lineTokens = estimateTokens(line) + 1;
             if (estimatedTokens + lineTokens > budget) break;
 
@@ -1355,6 +1389,20 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             estimatedTokens += lineTokens;
         }
 
+        // S16-2: audit read; S16-6: flag time-travel; S16-8: clientName
+        auditLog.record('memory.context', {
+            count: entries.length,
+            requestId: request.id as string,
+            clientName: getClientName(request),
+            ...(temporal.scope.mode !== 'current' ? { meta: { timeTravelMode: temporal.scope.mode, asOfMs: temporal.scope.asOfMs, asOfVersion: temporal.scope.asOfVersion } } : {}),
+        });
+        if (temporal.scope.mode !== 'current') {
+            auditLog.record('memory.time_travel', {
+                requestId: request.id as string,
+                clientName: getClientName(request),
+                meta: { endpoint: '/memory/context', mode: temporal.scope.mode, asOfMs: temporal.scope.asOfMs, asOfVersion: temporal.scope.asOfVersion },
+            });
+        }
         return {
             mode: 'context',
             contextFormat,
@@ -1511,7 +1559,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             estimatedTokens += lineTokens;
         }
 
-        return {
+        const response = {
             mode: 'session_bootstrap',
             objective: objectiveText || null,
             namespace: namespaceScope,
@@ -1537,6 +1585,21 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             treeVersion: masterVersion,
             generatedAtMs: Date.now(),
         };
+        // S16-2: audit read; S16-6: flag time-travel; S16-8: clientName
+        auditLog.record('memory.bootstrap', {
+            count: gatedMemories.length,
+            requestId: request.id as string,
+            clientName: getClientName(request),
+            ...(temporal.scope.mode !== 'current' ? { meta: { timeTravelMode: temporal.scope.mode, asOfMs: temporal.scope.asOfMs, asOfVersion: temporal.scope.asOfVersion } } : {}),
+        });
+        if (temporal.scope.mode !== 'current') {
+            auditLog.record('memory.time_travel', {
+                requestId: request.id as string,
+                clientName: getClientName(request),
+                meta: { endpoint: '/memory/bootstrap', mode: temporal.scope.mode, asOfMs: temporal.scope.asOfMs, asOfVersion: temporal.scope.asOfVersion },
+            });
+        }
+        return response;
     });
 
     /**
@@ -1586,6 +1649,40 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
                 return reply.status(400).send({ error: `'atoms' invalid — ${SCHEMA_ERROR}` });
             }
 
+            // S16-7: block atoms whose values match common secret patterns when
+            // MMPM_BLOCK_SECRET_ATOMS=1 is set. Prevents accidental credential storage.
+            const blockSecretAtoms = (process.env.MMPM_BLOCK_SECRET_ATOMS ?? '0') === '1';
+            if (blockSecretAtoms) {
+                const SECRET_PATTERN = /\b(password|passwd|api_key|apikey|private_key|privatekey|secret|credential|access_token|auth_token|bearer_token)\b/i;
+                const secretAtoms = (normalized as string[]).filter(a => {
+                    const value = parseAtomV1(a)?.value ?? a;
+                    return SECRET_PATTERN.test(value.replace(/_/g, ' '));
+                });
+                if (secretAtoms.length > 0) {
+                    return reply.status(422).send({
+                        error: 'One or more atoms match secret/credential patterns and cannot be stored (MMPM_BLOCK_SECRET_ATOMS=1). Never store passwords, API keys, or tokens in memory atoms.',
+                        secretAtoms,
+                    });
+                }
+            }
+
+            // S16-4: flag atoms containing instruction-injection patterns for
+            // mandatory review. These tokens commonly appear in prompt-injection
+            // payloads that try to override AI behaviour via stored memory.
+            const INJECTION_PATTERN = /\b(ignore|override|bypass|disregard|instead|pre_approved|approved_all|forget_previous|system_prompt)\b/i;
+            const suspiciousAtoms = (normalized as string[]).filter(a => {
+                const value = parseAtomV1(a)?.value ?? a;
+                return INJECTION_PATTERN.test(value.replace(/_/g, ' '));
+            });
+            if (suspiciousAtoms.length > 0 && reviewApproved !== true) {
+                return reply.status(202).send({
+                    status: 'ReviewRequired',
+                    reason: 'One or more atoms contain instruction-like tokens that require explicit review approval (reviewApproved:true).',
+                    suspiciousAtoms,
+                    queued: 0,
+                });
+            }
+
             const writeEvaluation = evaluateWritePolicy(
                 normalized as string[],
                 writePolicy,
@@ -1607,6 +1704,17 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
                     reason: 'Write policy requires explicit review approval before ingestion.',
                     writePolicyOutcome: writeEvaluation,
                     queued: 0,
+                });
+            }
+
+            // S16-5: log when reviewApproved:true bypassed the review-required tier; S16-8: clientName
+            if (reviewApproved === true && writeEvaluation.allowedAtoms.length > 0) {
+                auditLog.record('review.bypass', {
+                    atoms: writeEvaluation.allowedAtoms,
+                    count: writeEvaluation.allowedAtoms.length,
+                    requestId: request.id as string,
+                    clientName: getClientName(request),
+                    meta: { clientIp: request.ip },
                 });
             }
 
@@ -1638,6 +1746,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
                 atoms: writeEvaluation.allowedAtoms,
                 count: writeEvaluation.allowedAtoms.length,
                 requestId: request.id as string,
+                clientName: getClientName(request),
             });
             return {
                 status: 'Queued',
@@ -1733,6 +1842,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             auditLog.record('admin.commit', {
                 count: flushedCount,
                 requestId: request.id as string,
+                clientName: getClientName(request),
                 treeVersion: orchestrator.getMasterVersion(),
             });
             return { status: 'Committed', flushedCount };
@@ -1758,7 +1868,10 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
     server.get('/admin/audit-log', async (request, reply) => {
         const query = (request.query ?? {}) as Record<string, unknown>;
 
-        const VALID_EVENTS = new Set(['atom.add', 'atom.tombstone', 'admin.commit', 'admin.import', 'admin.export']);
+        const VALID_EVENTS = new Set([
+            'atom.add', 'atom.tombstone', 'admin.commit', 'admin.import', 'admin.export',
+            'review.bypass', 'memory.bootstrap', 'memory.context', 'atoms.list', 'memory.time_travel',
+        ]);
 
         const limitRaw = typeof query.limit === 'string' ? parseInt(query.limit, 10) : 100;
         if (!Number.isFinite(limitRaw) || limitRaw < 1) {
@@ -1840,7 +1953,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
         }
 
         const dateStr = new Date().toISOString().slice(0, 10);
-        auditLog.record('admin.export', { count: lines.length, requestId: request.id as string });
+        auditLog.record('admin.export', { count: lines.length, requestId: request.id as string, clientName: getClientName(request) });
         reply.header('Content-Type', 'application/x-ndjson');
         reply.header('Content-Disposition', `attachment; filename="mmpm-export-${dateStr}.ndjson"`);
         return reply.send(lines.join('\n') + (lines.length > 0 ? '\n' : ''));
@@ -1910,6 +2023,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             atoms: toIngest,
             count: toIngest.length,
             requestId: request.id as string,
+            clientName: getClientName(request),
         });
 
         return { imported: toIngest.length, skipped, errors };
@@ -1988,6 +2102,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
                 atoms: [atom],
                 count: 1,
                 requestId: request.id as string,
+                clientName: getClientName(request),
                 treeVersion,
             });
             return { status: 'Success', tombstonedAtom: atom, treeVersion };
@@ -2037,6 +2152,14 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
 
         if (offset > 0) atoms = atoms.slice(offset);
         if (limit !== null) atoms = atoms.slice(0, limit);
+
+        // S16-2: audit bulk atom reads; S16-8: clientName
+        auditLog.record('atoms.list', {
+            count: atoms.length,
+            requestId: request.id as string,
+            clientName: getClientName(request),
+            meta: { type: query.type ?? null, prefix: query.prefix ?? null },
+        });
 
         return {
             atoms,
@@ -2179,7 +2302,7 @@ if (require.main === module) {
     validateApiKeyAtStartup();
 
     const PORT = parseInt(process.env.PORT ?? '3000');
-    const HOST = process.env.HOST ?? '0.0.0.0';
+    const HOST = process.env.HOST ?? '127.0.0.1';
     const NUM_SHARDS = parseInt(process.env.SHARD_COUNT ?? '4');
 
     const { server, orchestrator, pipeline } = buildApp({
