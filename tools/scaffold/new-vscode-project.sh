@@ -17,6 +17,7 @@
 #     tsconfig.json                  Sensible TypeScript defaults
 #     src/index.ts                   Entry point with memory client example
 #     .vscode/settings.json          Editor defaults + ts/eslint integration
+#     .vscode/mcp.json               MCP server config (GitHub Copilot / VS Code 1.99+)
 #     .vscode/extensions.json        Recommended extensions list
 #     .vscode/tasks.json             Memory tasks in Command Palette
 #     .vscode/launch.json            Debug config for ts-node
@@ -279,7 +280,30 @@ cat > .vscode/settings.json << 'EOF'
 EOF
 echo "  ✓ .vscode/settings.json"
 
-# ── 8. .vscode/extensions.json ────────────────────────────────────────────────
+# ── 8. .vscode/mcp.json ───────────────────────────────────────────────────────
+# Used by GitHub Copilot (VS Code 1.99+) and other MCP-aware extensions.
+# Edit MMPM_DIR in .env to point at your parametric-memory repo, then update
+# the args path below to match.
+cat > .vscode/mcp.json << EOF
+{
+  "servers": {
+    "parametric-memory": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["\${env:MMPM_DIR}/dist/server.js"],
+      "env": {
+        "MMPM_API_KEY": "\${env:MMPM_API_KEY}",
+        "DB_BASE_PATH": "~/.mmpm/data",
+        "LOG_LEVEL": "warn",
+        "MMPM_MCP_ENABLE_MUTATIONS": "1"
+      }
+    }
+  }
+}
+EOF
+echo "  ✓ .vscode/mcp.json"
+
+# ── 10. .vscode/extensions.json ───────────────────────────────────────────────
 cat > .vscode/extensions.json << 'EOF'
 {
   "recommendations": [
@@ -295,7 +319,7 @@ cat > .vscode/extensions.json << 'EOF'
 EOF
 echo "  ✓ .vscode/extensions.json"
 
-# ── 9. .vscode/tasks.json ─────────────────────────────────────────────────────
+# ── 11. .vscode/tasks.json ────────────────────────────────────────────────────
 cat > .vscode/tasks.json << EOF
 {
   "version": "2.0.0",
@@ -433,7 +457,7 @@ cat > .vscode/tasks.json << EOF
 EOF
 echo "  ✓ .vscode/tasks.json"
 
-# ── 10. .vscode/launch.json ───────────────────────────────────────────────────
+# ── 12. .vscode/launch.json ───────────────────────────────────────────────────
 cat > .vscode/launch.json << 'EOF'
 {
   "version": "0.2.0",
@@ -470,7 +494,7 @@ cat > .vscode/launch.json << 'EOF'
 EOF
 echo "  ✓ .vscode/launch.json"
 
-# ── 11. Install TypeScript deps ───────────────────────────────────────────────
+# ── 13. Install TypeScript deps ───────────────────────────────────────────────
 echo "  Installing TypeScript dependencies..."
 if npm install --save-dev typescript ts-node @types/node --quiet 2>/dev/null; then
   echo "  ✓ dependencies installed"
