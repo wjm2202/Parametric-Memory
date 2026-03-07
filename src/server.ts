@@ -749,7 +749,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
         }
     });
     const numShards = opts.numShards ?? parseInt(process.env.SHARD_COUNT ?? '4');
-    const dbBasePath = opts.dbBasePath ?? (process.env.DB_BASE_PATH ?? './mmpm-db');
+    const dbBasePath = opts.dbBasePath ?? (process.env.DB_BASE_PATH ?? './data');
 
     // Atom resolution order (first non-null wins):
     //   1. opts.data  — programmatic / test usage
@@ -2157,7 +2157,7 @@ if (require.main === module) {
                 port: PORT,
                 host: HOST,
                 shards: NUM_SHARDS,
-                dbBasePath: process.env.DB_BASE_PATH ?? './mmpm-db',
+                dbBasePath: process.env.DB_BASE_PATH ?? './data',
                 logLevel: process.env.LOG_LEVEL ?? 'info',
                 writePolicy: process.env.WRITE_POLICY ?? 'auto-write',
                 apiKeySet: Boolean(process.env.MMPM_API_KEY),
