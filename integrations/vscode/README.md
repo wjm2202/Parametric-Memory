@@ -106,7 +106,7 @@ Open the VSCode command palette → your AI extension → confirm `parametric-me
 | `memory_session_bootstrap` | Session start — loads context + Markov predictions in one call |
 | `session_checkpoint` | Session end + mid-session — saves atoms, tombstones old ones, trains arc, commits |
 | `memory_atoms_list` | Browse memory by type (`fact`, `state`, `event`, etc.) |
-| `memory_search` | Full-text search across all stored atoms |
+| `memory_search` | Search across all stored atoms — requires `MMPM_MCP_ENABLE_SEMANTIC_TOOLS=1` |
 | `memory_access` | Markov recall for one atom |
 | `memory_atoms_stale` | Find atoms to clean up |
 | `memory_ready` | Confirm server is up and mutations are enabled (use at session start) |

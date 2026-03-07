@@ -166,7 +166,8 @@ Use the project name as a namespace prefix:
 
 | Tool | When to use |
 |---|---|
-| \`memory_session_bootstrap\` | Session start — loads all context in one call |
+| \`memory_ready\` | Session start preflight — confirm server is up |
+| \`memory_session_bootstrap\` | Session start — loads context + Markov predictions in one call |
 | \`session_checkpoint\` | Session end + mid-session saves (atoms + tombstone + train + commit) |
 | \`memory_atoms_list\` | Browse stored atoms by type |
 | \`memory_access\` | Markov recall for one atom |
