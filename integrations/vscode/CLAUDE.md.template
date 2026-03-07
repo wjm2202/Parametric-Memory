@@ -1,0 +1,64 @@
+# CLAUDE.md — Parametric-Memory context for Claude Code
+
+<!-- Copy this file to your project root as CLAUDE.md and edit the paths below. -->
+<!-- Claude Code reads this file automatically at session start.               -->
+
+## Memory substrate
+
+This project uses [Parametric-Memory (MMPM)](https://parametric-memory.dev) for persistent, cryptographically verifiable memory.
+
+MMPM server: `http://localhost:3000`
+
+**At the start of every session:**
+
+1. Check if the MMPM server is running:
+   ```bash
+   curl -s http://localhost:3000/health
+   ```
+   If not running, start it:
+   ```bash
+   cd /EDIT_THIS_PATH/parametric-memory && ./start.sh &
+   sleep 3
+   ```
+
+2. Load memory context:
+   ```bash
+   curl -s -H "Authorization: Bearer ${MMPM_API_KEY}" \
+     http://localhost:3000/memory/context
+   ```
+
+3. Walk the Markov chain for session-start prediction:
+   ```bash
+   curl -s -X POST \
+     -H "Authorization: Bearer ${MMPM_API_KEY}" \
+     -H "Content-Type: application/json" \
+     http://localhost:3000/access \
+     -d '{"data":"v1.event.session_started"}'
+   ```
+
+**At the end of every session**, save what was learned:
+```bash
+curl -s -X POST \
+  -H "Authorization: Bearer ${MMPM_API_KEY}" \
+  -H "Content-Type: application/json" \
+  http://localhost:3000/atoms \
+  -d '{"atoms":["v1.event.session_ended_DATE","v1.state.next_task_HERE"]}'
+
+curl -s -X POST -H "Authorization: Bearer ${MMPM_API_KEY}" \
+  http://localhost:3000/admin/commit
+```
+
+## Environment
+
+Set `MMPM_API_KEY` in your shell or `.env`:
+```bash
+export MMPM_API_KEY=your-api-key-from-parametric-memory-.env
+```
+
+## Project context
+
+<!-- Add your project-specific context below so Claude always has it -->
+
+- Project: [YOUR PROJECT NAME]
+- Stack: [YOUR STACK]
+- Key facts: [ANYTHING CLAUDE SHOULD ALWAYS KNOW]

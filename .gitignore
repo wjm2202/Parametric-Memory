@@ -37,9 +37,24 @@ vitest-results/
 test-debug-g3/
 # Linux FUSE hidden files (CoWork / FUSE mounts)
 .fuse_hidden*
-# Planning / scratch documents not part of the committed source
+# ── Internal planning / scratch documents — not part of public source
 FEATURE_ROADMAP.md
-SPRINT_12_PLAN.md
+SPRINT_*.md
+CHECKLIST.md
+BUSINESS_PLAN.md
+LAUNCH_ORCHESTRATION.md
+OPTIMIZATION_REVIEW.md
+TECHNOLOGY_BUSINESS_SCIENTIFIC_REVIEW.md
+ACCOUNT_SETUP_GUIDE.md
+UPDATED_DESIGN_DOC.md
+SCIENTIFIC_PAPER_DRAFT.md
+TOKEN_OPTIMIZATION.md
+design_doc.txt
+memory.md
+.github/AGENT_SPRINT_BOARD.md
+docs/GITHUB_PROFILE_README.md
+docs/README_AGENT.md
+docs/README_PUBLIC_ARCHIVE.md
 
 # ── Benchmark artifacts ─────────────────────────────────────────────────────
 tools/harness/results/**/
