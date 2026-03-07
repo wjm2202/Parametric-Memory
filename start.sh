@@ -36,7 +36,7 @@ fi
 
 # ── start server ──────────────────────────────────────────────────────────────
 PORT="${PORT:-3000}"
-echo "→ Starting Parametric-Memory on port $PORT…"
+echo "→ Starting Parametric-Memory on port ${PORT}..."
 
 if [[ "$MODE" == "--monitor" ]]; then
   # Background the server so we can also bring up the monitoring stack
