@@ -12,6 +12,7 @@
     "test": "vitest run",
     "posttest": "npm run cleanup",
     "test:watch": "vitest",
+    "bench:ci:api": "bash tools/harness/ci-bench-api.sh",
     "bench:run": "ts-node tools/harness/cli.ts --preset smoke --out tools/harness/results/latest.json --prom-out tools/harness/results/latest.prom --print",
     "postbench:run": "npm run cleanup",
     "bench:inspect:db": "ts-node tools/harness/inspect_db.ts --db ./mmpm-db --shard 0",
