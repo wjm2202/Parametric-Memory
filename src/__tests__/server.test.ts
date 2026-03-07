@@ -883,9 +883,16 @@ describe('API Auth', () => {
         expect(res.statusCode).toBe(401);
     });
 
-    it('allows /metrics without auth', async () => {
-        const res = await authServer.inject({ method: 'GET', url: '/metrics' });
-        expect(res.statusCode).toBe(200);
+    it('requires auth for /metrics when API key is configured (S16-3)', async () => {
+        const unauth = await authServer.inject({ method: 'GET', url: '/metrics' });
+        expect(unauth.statusCode).toBe(401);
+
+        const auth = await authServer.inject({
+            method: 'GET', url: '/metrics',
+            headers: { authorization: 'Bearer test-secret' },
+        });
+        expect(auth.statusCode).toBe(200);
+        expect(auth.headers['content-type']).toContain('text/plain');
     });
 
     it('allows /health without auth', async () => {
