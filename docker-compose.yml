@@ -28,6 +28,11 @@ services:
       # This is the same path used by start.sh and the MCP config — all three
       # modes share one DB so memory is never split across locations.
       - DB_BASE_PATH=/app/mmpm-db
+      # Bind all interfaces so Docker port-forwarding can reach the server.
+      # The server defaults to 127.0.0.1 (S16 hardening) which is correct for
+      # bare-metal deployments, but inside a container network isolation comes
+      # from Docker itself — the app must listen on 0.0.0.0.
+      - HOST=0.0.0.0
     volumes:
       # Bind-mount host ~/.mmpm/data so Docker, start.sh, and MCP all share
       # the same LevelDB files.  ${HOME} is expanded by Docker Compose from
