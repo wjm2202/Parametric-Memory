@@ -88,7 +88,8 @@
                 "value": 500
               }
             ]
-          }
+          },
+          "noValue": "--"
         },
         "overrides": []
       },
@@ -122,7 +123,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "100 * sum(rate(mmpm_access_total{result=\"hit\"}[5m])) / sum(rate(mmpm_access_total[5m]))",
+          "expr": "(100 * sum(rate(mmpm_access_total{result=\"hit\"}[5m])) / sum(rate(mmpm_access_total[5m]))) or vector(100)",
           "legendFormat": "hit %"
         }
       ],
@@ -150,7 +151,8 @@
                 "value": 70
               }
             ]
-          }
+          },
+          "noValue": "N/A"
         },
         "overrides": []
       },
@@ -184,7 +186,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum(rate(mmpm_request_duration_ms_bucket[5m])) by (le))",
+          "expr": "(histogram_quantile(0.95, sum(rate(mmpm_request_duration_ms_bucket[5m])) by (le))) or vector(0)",
           "legendFormat": "P95 ms"
         }
       ],
@@ -210,7 +212,8 @@
                 "value": 200
               }
             ]
-          }
+          },
+          "noValue": "N/A"
         },
         "overrides": []
       },
@@ -713,7 +716,8 @@
                 "value": null
               }
             ]
-          }
+          },
+          "noValue": "--"
         },
         "overrides": []
       },
@@ -765,7 +769,8 @@
                 "value": null
               }
             ]
-          }
+          },
+          "noValue": "--"
         },
         "overrides": []
       },
@@ -1042,7 +1047,7 @@
     {
       "id": 19,
       "title": "Client Offered vs Service Access (req/s)",
-      "description": "Overlay continuous-client offered /access load against service /access handling rate.",
+      "description": "Overlay continuous-client offered /access load against service /access handling rate.\n\n\u26a0\ufe0f Test harness only \u2014 populated when the continuous client load generator is running (port 9470).",
       "type": "timeseries",
       "gridPos": {
         "h": 8,
@@ -1087,7 +1092,7 @@
     {
       "id": 20,
       "title": "Client Inflight and Error Rate",
-      "description": "Continuous client pressure and operation failure rate.",
+      "description": "Continuous client pressure and operation failure rate.\n\n\u26a0\ufe0f Test harness only \u2014 populated when the continuous client load generator is running (port 9470).",
       "type": "timeseries",
       "gridPos": {
         "h": 8,
@@ -1132,7 +1137,7 @@
     {
       "id": 21,
       "title": "Client Retrieval Quality (ratio)",
-      "description": "Prediction accuracy/usefulness observed by the continuous client and its scientific probe.",
+      "description": "Prediction accuracy/usefulness observed by the continuous client and its scientific probe.\n\n\u26a0\ufe0f Test harness only \u2014 populated when the continuous client load generator is running (port 9470).",
       "type": "timeseries",
       "gridPos": {
         "h": 8,
@@ -1234,7 +1239,8 @@
                 "value": null
               }
             ]
-          }
+          },
+          "noValue": "--"
         },
         "overrides": []
       },
@@ -1286,7 +1292,8 @@
                 "value": null
               }
             ]
-          }
+          },
+          "noValue": "--"
         },
         "overrides": []
       },
@@ -1338,7 +1345,8 @@
                 "value": null
               }
             ]
-          }
+          },
+          "noValue": "--"
         },
         "overrides": []
       },
