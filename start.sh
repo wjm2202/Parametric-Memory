@@ -15,11 +15,33 @@ MODE="${1:-}"
 
 # ── stop ──────────────────────────────────────────────────────────────────────
 if [[ "$MODE" == "--stop" ]]; then
-  PID=$(lsof -ti:${PORT:-3000} 2>/dev/null || true)
+  # Find the PID listening on the port.  lsof is not available on Alpine Linux
+  # or in minimal Docker images, so we fall back to a Node one-liner that works
+  # on macOS, Linux, and Alpine (Node is always present in this project).
+  _STOP_PORT="${PORT:-3000}"
+  if command -v lsof &>/dev/null; then
+    PID=$(lsof -ti:"$_STOP_PORT" 2>/dev/null || true)
+  else
+    PID=$(node -e "
+      const net = require('net');
+      const s = net.createServer();
+      s.once('error', () => process.exit(0));
+      s.once('listening', () => { s.close(); process.exit(1); });
+      s.listen($_STOP_PORT, '127.0.0.1');
+    " 2>/dev/null; echo "")
+    # Fallback: grep /proc/net/tcp (Linux only, silent on macOS)
+    if [[ -z "$PID" ]] && [[ -f /proc/net/tcp ]]; then
+      _HEX=$(printf '%04X' "$_STOP_PORT")
+      _INODE=$(awk -v h="$_HEX" '$2 ~ ":"h"$" {print $10}' /proc/net/tcp 2>/dev/null | head -1)
+      if [[ -n "$_INODE" ]]; then
+        PID=$(grep -r "socket:\[$_INODE\]" /proc/*/fd 2>/dev/null | head -1 | cut -d/ -f3 || true)
+      fi
+    fi
+  fi
   if [[ -n "$PID" ]]; then
     kill "$PID" && echo "✓ Server stopped (pid $PID)"
   else
-    echo "Server not running on port ${PORT:-3000}"
+    echo "Server not running on port $_STOP_PORT"
   fi
   if docker compose -f docker-compose.monitoring.yml ps -q 2>/dev/null | grep -q .; then
     docker compose -f docker-compose.monitoring.yml down

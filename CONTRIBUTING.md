@@ -21,9 +21,9 @@ npm run setup
 `npm run setup` installs dependencies, compiles TypeScript, and creates `.env` from `.env.example` if it doesn't exist. After that:
 
 ```bash
-node dist/server.js        # start the server
-npm test                   # run all tests
-npm run typecheck:all      # type-check src + tests
+node dist/server.js    # start the server
+npm test               # run all tests
+npm run typecheck      # type-check src + tests
 ```
 
 ---
@@ -42,7 +42,7 @@ src/                  TypeScript source
   audit_log.ts        In-memory audit ring buffer
   ttl_registry.ts     Per-atom TTL tracking
 
-src/__tests__/        Vitest test suite (37 files, 658 tests)
+src/__tests__/        Vitest test suite (38 files, 671 tests)
 
 tools/
   harness/            Benchmark harness + SLO gate
@@ -79,14 +79,14 @@ npm test -- ingestion.test     # ingestion pipeline tests
 npm test                       # full suite
 ```
 
-All 658 tests must pass before submitting a PR. Run `npm run typecheck:all` as well — TypeScript errors will fail CI.
+All 671 tests must pass before submitting a PR. Run `npm run typecheck` as well — TypeScript errors will fail CI.
 
 ---
 
 ## Pull request checklist
 
-- [ ] `npm run typecheck:all` passes
-- [ ] `npm test` passes (all 658 tests)
+- [ ] `npm run typecheck` passes
+- [ ] `npm test` passes (all 671 tests)
 - [ ] New behaviour is covered by tests
 - [ ] `CHANGELOG.md` updated under `[Unreleased]`
 - [ ] PR description explains *what* changed and *why*
@@ -106,4 +106,4 @@ Adding a new atom type requires changes in four places:
 
 ## License
 
-By contributing you agree that your contributions will be licensed under [AGPL-3.0](LICENSE).
+By contributing you agree that your contributions will be licensed under the project [LICENSE](LICENSE) (personal use free; commercial use requires a paid agreement).

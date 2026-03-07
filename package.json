@@ -5,6 +5,7 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit && tsc --project tsconfig.test.json --noEmit",
+    "typecheck:all": "npm run typecheck",
     "start": "node dist/server.js",
     "dev": "ts-node src/server.ts",
     "clean": "rm -rf dist",
