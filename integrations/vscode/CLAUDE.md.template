@@ -30,16 +30,12 @@ DB location: `~/.mmpm/data` (outside the repo — safe from git operations)
 curl -s http://localhost:3000/health
 # If not running: cd /EDIT_THIS_PATH/parametric-memory && ./start.sh &
 
-# 2. Load context
-curl -s -H "Authorization: Bearer ${MMPM_API_KEY}" \
-  "http://localhost:3000/memory/context"
-
-# 3. Walk Markov chain
+# 2. Bootstrap (context + Markov predictions in one call)
 curl -s -X POST \
   -H "Authorization: Bearer ${MMPM_API_KEY}" \
   -H "Content-Type: application/json" \
-  http://localhost:3000/access \
-  -d '{"data":"v1.event.session_started"}'
+  http://localhost:3000/memory/bootstrap \
+  -d '{}'
 ```
 
 ---

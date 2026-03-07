@@ -103,11 +103,13 @@ Open the VSCode command palette → your AI extension → confirm `parametric-me
 
 | Tool | When to use |
 |------|-------------|
-| `memory_session_bootstrap` | Session start — loads context automatically |
+| `memory_session_bootstrap` | Session start — loads context + Markov predictions in one call |
 | `session_checkpoint` | Session end + mid-session — saves atoms, tombstones old ones, trains arc, commits |
 | `memory_atoms_list` | Browse memory by type (`fact`, `state`, `event`, etc.) |
+| `memory_search` | Full-text search across all stored atoms |
 | `memory_access` | Markov recall for one atom |
 | `memory_atoms_stale` | Find atoms to clean up |
+| `memory_ready` | Confirm server is up and mutations are enabled (use at session start) |
 | `memory_verify` | Verify a Merkle proof |
 
 Full tool reference: `integrations/claude-skill/SKILL.md`
