@@ -19,7 +19,7 @@ Use strict schema atoms in canonical format:
 - `v1.fact.<value>`
   - stable truths that should persist.
   - examples:
-    - `v1.fact.user_name_glen_osborne`
+    - `v1.fact.user_name_example_user`
     - `v1.fact.prefers_direct_concise_responses`
     - `v1.fact.primary_repo_markov_merkle_memory`
 

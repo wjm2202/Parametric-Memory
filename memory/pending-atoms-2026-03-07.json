@@ -6,8 +6,8 @@
     "v1.event.x_post_teaser_published_2026_03_07",
     "v1.state.launch_phase_active_post_minus1_live",
     "v1.fact.teaser_image_approved_wax_seal_lock_neural_network",
-    "v1.fact.x_handle_is_entity_one",
-    "v1.fact.linkedin_account_is_glen_osborne",
+    "v1.fact.social_handle_is_REPLACE_YOUR_HANDLE",
+    "v1.fact.linkedin_account_is_REPLACE_YOUR_NAME",
     "v1.fact.teaser_post_uses_verifiable_ai_category_hashtags",
     "v1.event.mcp_permission_tier_refactor_completed_2026_03_07",
     "v1.fact.mcp_serve_default_enables_mutations_not_dangerous",
@@ -18,7 +18,7 @@
     "v1.event.claude_desktop_mcp_config_installed_2026_03_07",
     "v1.fact.mcp_config_sources_api_key_from_dot_env_not_hardcoded",
     "v1.fact.api_key_stored_only_in_dot_env_gitignored",
-    "v1.fact.mcp_cwd_is_users_glenosborne_documents_code_mm_memory_markov_merkle_memory",
+    "v1.fact.mcp_cwd_is_project_root_directory",
     "v1.state.mcp_tools_pending_first_connected_session_after_restart"
   ],
   "train": [

@@ -191,11 +191,13 @@ Add to your Claude Desktop config (`claude_desktop_config.json`):
 ```json
 {
   "mcpServers": {
-    "mmpm": {
-      "command": "node",
-      "args": ["path/to/mmpm/dist/mcp-server.js"],
+    "parametric-memory": {
+      "command": "npm",
+      "args": ["run", "mcp:serve"],
+      "cwd": "/path/to/parametric-memory",
       "env": {
-        "MMPM_BASE_URL": "http://localhost:3000"
+        "MMPM_MCP_BASE_URL": "http://127.0.0.1:3000",
+        "MMPM_MCP_API_KEY": "REPLACE_WITH_YOUR_API_KEY"
       }
     }
   }
@@ -204,11 +206,15 @@ Add to your Claude Desktop config (`claude_desktop_config.json`):
 
 Available MCP tools:
 
-- `mmpm_store` — write atoms
-- `mmpm_retrieve` — read atoms with proof verification
-- `mmpm_access` — access + get Markov prediction
-- `mmpm_bootstrap` — load agent context from memory
-- `mmpm_search` — search atoms by content or namespace
+- `session_checkpoint` — save atoms, tombstone stale state, train Markov arcs, and commit — all in one call
+- `memory_session_bootstrap` — load agent context from Markov state on session start
+- `memory_access` — access an atom + update Markov weights + get prediction
+- `memory_atoms_list` — list atoms by type, prefix, or namespace
+- `memory_search` — full-text search across all atoms
+- `memory_verify` — verify a Merkle proof for any atom
+- `memory_health` / `memory_ready` — server liveness and readiness checks
+
+Three permission tiers: `mcp:serve:readonly` (read only), `mcp:serve` (read + write, default), `mcp:serve:unsafe` (all ops including delete/import/policy).
 
 ---
 
@@ -292,9 +298,9 @@ For AI-assisted codebase navigation, [jCodeMunch-mcp](https://github.com/jcodemu
 
 ## License
 
-Source available — free for personal use, commercial license required for organisations. See [LICENSE](LICENSE).
+Source available — free for personal use, commercial license required for organisations. See [LICENSE](LICENSE) for full terms.
 
-Free for open-source and self-hosted use. If you run MMPM as a hosted service, AGPL-3.0 requires you to release your modifications. Enterprise licensing (on-prem, compliance tooling, SLA) available at [parametric-memory.dev](https://parametric-memory.dev).
+Personal, non-commercial, and academic use is free. Any commercial use — including use by companies, in paid products, or as a hosted service — requires a separate license. Contact [parametric-memory.dev](https://parametric-memory.dev) for commercial licensing.
 
 ---
 

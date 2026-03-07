@@ -8,8 +8,12 @@ Curl equivalents are noted for reference only.
 
 ## Core Operating Principle
 
-Store only information that improves future task quality, then reinforce
-successful behaviour patterns with measurable feedback.
+Memory is the foundation of effective assistance. Claude must:
+
+1. **Remember** everything that improves future task quality
+2. **Learn** from corrections — never repeat a mistake the user already fixed
+3. **Predict** what context is relevant before the user asks
+4. **Prove** what it knows — every atom has a cryptographic audit trail
 
 Memory capture is **automatic** — Claude must not require the user to
 prompt it to save. Every session ends with a `session_checkpoint` call.
@@ -42,7 +46,12 @@ Call these tools in order at the start of every session:
    - Tool: `memory_atoms_list` with `type: "fact"`, `limit: 200`
    - Tool: `memory_atoms_list` with `type: "state"`, `limit: 200`
 
-5. **Produce a Current Sprint Status summary**
+5. **Load procedures and corrections** (always)
+   - Tool: `memory_atoms_list` with `type: "procedure"`, `limit: 200`
+   - These contain learned workflows and human corrections — apply them
+     before starting any work
+
+6. **Produce a Current Sprint Status summary**
    - Tool: `memory_atoms_list` with `prefix: "v1.fact.sprint"`, `limit: 300`
    - Report: where we are, what is in progress / blocked, next 1–3 items
 
@@ -52,41 +61,188 @@ If memory is sparse or noisy, prefer `fact` + `relation` first, then `state`.
 
 ## 2) What Claude Must Store
 
-When new durable information is learned, store it immediately — do not
-accumulate and save only at session end. Use:
+### Store immediately — not at session end
 
-- `fact` — stable user/project truths
-- `state` — active work context and near-term next steps
-- `event` — dated outcomes and milestones
-- `relation` — links between tasks, systems, and concepts
-- `procedure` — repeatable multi-step processes
+When new durable information is learned, store it right away via
+`session_checkpoint`. Do not accumulate and save only at session end.
+If the session is cut short, unsaved knowledge is lost forever.
 
-Use schema: `v1.<type>.<value>` — snake_case, no spaces, no punctuation.
+### Atom types and when to use them
 
-Include metadata in value when useful:
+| Type | Use for | Example |
+|------|---------|---------|
+| `fact` | Stable project/user truths | `v1.fact.stack_is_TypeScript_Fastify_LevelDB` |
+| `state` | Active work context, next steps | `v1.state.working_on_launch_prep` |
+| `event` | Dated outcomes and milestones | `v1.event.all_725_tests_passing_dt_2026_03_08` |
+| `relation` | Links between concepts | `v1.relation.shard_worker_uses_injectable_clock` |
+| `procedure` | **Proven processes that work** | `v1.procedure.always_run_typecheck_before_marking_sprint_done` |
+
+### What MUST be stored (non-negotiable)
+
+1. **Architecture decisions** — why we chose X over Y, constraints that drove the choice
+2. **Working processes** — step-by-step procedures that succeeded (build, test, deploy sequences)
+3. **Bug root causes** — what went wrong and the actual fix, not just the symptom
+4. **Human corrections** — any time the user says "don't do X" or "always do Y" (see §3)
+5. **Configuration facts** — paths, ports, env vars, tool versions that took effort to discover
+6. **Sprint/task state** — what's done, what's next, what's blocked
+7. **Test counts and quality gates** — current pass count, known flaky tests, coverage gaps
+8. **Integration details** — how systems connect, which APIs are used, auth patterns
+9. **Naming conventions** — atom naming patterns that work well for search and recall
+
+### Atom naming schema
+
+Use: `v1.<type>.<value>` — snake_case, no spaces, no punctuation.
+
+Include metadata suffixes when useful:
 - source: `_src_human`, `_src_test`, `_src_log`
 - confidence: `_conf_high`, `_conf_medium`, `_conf_low`
 - scope: `_scope_session`, `_scope_sprint`, `_scope_project`
 - date: `_dt_YYYY_MM_DD`
 
-Never store secrets, private keys, or credentials.
+**Never store secrets, private keys, or credentials.**
 
 ---
 
-## 3) Mid-Session Capture (automatic)
+## 3) Human Correction Learning (Reinforcement)
+
+When the user corrects Claude's behaviour, this is the **highest-value
+learning event** in the session. Handle it with three steps:
+
+### Step 1: Store the correction as a durable rule
+
+```
+v1.procedure.never_guess_root_cause_always_diagnose_with_evidence
+v1.procedure.always_run_full_tests_before_claiming_done
+v1.procedure.do_not_dismiss_test_failures_as_pre_existing
+```
+
+Use `procedure` type with a clear, searchable name that describes
+the rule. Include `_src_human` suffix if helpful.
+
+### Step 2: Reinforce the corrected sequence
+
+Train the wrong→correction→right arc so the Markov chain learns:
+
+```
+session_checkpoint({
+  atoms: ["v1.procedure.never_guess_root_cause_always_diagnose_with_evidence"],
+  train: [
+    "v1.event.user_corrected_guessing_behaviour",
+    "v1.procedure.never_guess_root_cause_always_diagnose_with_evidence",
+    "v1.event.fix_found_by_systematic_diagnosis"
+  ]
+})
+```
+
+### Step 3: Apply in future sessions
+
+At session start, procedures are loaded (Step 5 of §1). Before taking
+any action, check if a stored procedure constrains that action.
+
+**Examples of corrections that MUST be stored:**
+- "Don't guess, diagnose the root cause" → `v1.procedure.diagnose_root_cause_not_guess`
+- "Run the full tests, not just the ones you think are relevant" → `v1.procedure.always_run_full_test_suite`
+- "You can't say these failures are pre-existing" → `v1.procedure.all_tests_must_pass_for_pr`
+- "Stop apologising and fix it" → `v1.procedure.fix_errors_directly_minimize_apology`
+- "Read the error message properly" → `v1.procedure.read_full_error_before_proposing_fix`
+
+---
+
+## 4) Process Memory (What Works)
+
+When a multi-step workflow succeeds, store the process so it can be
+repeated exactly in future sessions.
+
+### What to capture as procedures
+
+- Build and deploy sequences that work
+- Debugging approaches that found the root cause
+- Test strategies that caught real bugs
+- Configuration sequences (e.g., "to set up MCP: do X, then Y, then Z")
+- Workarounds for known tool/environment quirks
+
+### Format
+
+```
+v1.procedure.debug_shard_worker_check_fake_timers_and_db_path_collisions
+v1.procedure.fix_mcp_connection_verify_cwd_in_server_config_first
+v1.procedure.restore_atoms_use_npm_run_restore_not_manual_curl
+```
+
+### Reinforce successful processes
+
+```
+session_checkpoint({
+  atoms: ["v1.procedure.debug_shard_worker_check_fake_timers_and_db_path_collisions"],
+  train: [
+    "v1.event.shard_worker_tests_failing",
+    "v1.procedure.debug_shard_worker_check_fake_timers_and_db_path_collisions",
+    "v1.event.all_shard_worker_tests_passing"
+  ]
+})
+```
+
+---
+
+## 5) Mid-Session Capture (automatic)
 
 At each meaningful learning during the session — not just at the end:
 
 - Tool: `session_checkpoint`
-  - `atoms`: new facts, states, events, relations
+  - `atoms`: new facts, states, events, relations, procedures
   - `tombstone`: leave empty (tombstone only at session end)
-  - `train`: omit unless a clear trigger→action→outcome arc just completed
+  - `train`: include when a clear trigger→action→outcome arc just completed
+
+**Triggers for mid-session save:**
+- A bug root cause is identified
+- A test suite passes after fixes
+- A new architecture decision is made
+- The user provides a correction or preference
+- A configuration is discovered or changed
+- A sprint item is completed
 
 This ensures memory survives even if the session is cut short.
 
 ---
 
-## 4) Reinforcement Rule (Good Behaviour)
+## 6) Session End Protocol
+
+**Always** call `session_checkpoint` at session end. This is mandatory.
+
+```
+session_checkpoint({
+  atoms: [
+    "v1.event.completed_task_X_on_2026_03_07",
+    "v1.state.next_task_is_Y",
+    ...any new durable facts...
+    ...any new procedures learned...
+  ],
+  tombstone: [
+    "v1.state.old_completed_task_state",
+    ...any states that are no longer true...
+  ],
+  train: [
+    "v1.event.session_started",
+    "v1.state.next_task_is_Y",
+    "v1.event.completed_task_X_on_2026_03_07"
+  ]
+})
+```
+
+The tool automatically commits to disk — no separate commit call needed.
+
+### End-of-session checklist
+
+Before the final checkpoint, review:
+1. Were any human corrections given? Store each as a `procedure`.
+2. Were any new working processes discovered? Store each as a `procedure`.
+3. Did any architecture decisions get made? Store each as a `fact`.
+4. What is the current state of work? Update `state` atoms.
+5. What states are no longer true? Add them to `tombstone`.
+
+---
+
+## 7) Reinforcement Rule (Behaviour Training)
 
 After a successful workflow, train the arc explicitly:
 
@@ -105,40 +261,37 @@ Then verify confidence:
 - Tool: `memory_weights_get` on the trigger atom
 - Target: `dominanceRatio >= 0.70`
 
----
+### What to reinforce
 
-## 5) Session End Protocol
+- Debugging approaches that found real root causes
+- Test strategies that caught real bugs
+- Human corrections (always reinforce the corrected sequence)
+- Deployment processes that succeeded
+- Communication patterns the user responded well to
 
-**Always** call `session_checkpoint` at session end. This is mandatory.
+### What NOT to reinforce
 
-```
-session_checkpoint({
-  atoms: [
-    "v1.event.completed_task_X_on_2026_03_07",
-    "v1.state.next_task_is_Y",
-    ...any new durable facts...
-  ],
-  tombstone: [
-    "v1.state.old_completed_task_state",
-    ...any states that are no longer true...
-  ],
-  train: [
-    "v1.event.session_started",
-    "v1.state.next_task_is_Y",
-    "v1.event.completed_task_X_on_2026_03_07"
-  ]
-})
-```
-
-The tool automatically commits to disk — no separate commit call needed.
-
-If the user corrects Claude's behaviour during the session, treat that
-correction as a durable workflow rule. Store it as a `fact` or `procedure`
-atom and reinforce the corrected sequence.
+- Lucky guesses
+- Workarounds that masked the real problem
+- Approaches the user later corrected
 
 ---
 
-## 6) Scientific Verification Loop
+## 8) Retrieval Priority Heuristic
+
+When answering users:
+1. **Procedures first** — check if a stored procedure constrains the current action
+2. **Facts and constraints** — retrieve explicit truths about the project
+3. **Current state** — what's in progress, blocked, or next
+4. **Relations** — links between the current task and architecture/history
+5. **Events** — recent outcomes for chronology and recency
+6. **Markov predictions** — use as hints, not absolute truth
+
+Prefer high-confidence, recent, and task-scoped memory.
+
+---
+
+## 9) Scientific Verification Loop
 
 At least weekly, validate memory quality using:
 - Tool: `memory_weekly_eval_status`
@@ -159,20 +312,7 @@ If quality regresses:
 
 ---
 
-## 7) Retrieval Priority Heuristic
-
-When answering users:
-1. Retrieve explicit facts and constraints first.
-2. Retrieve current state atoms for active work.
-3. Retrieve relations linking current task to architecture/history.
-4. Use events for recency and chronology.
-5. Use Markov predictions as hints, not absolute truth.
-
-Prefer high-confidence, recent, and task-scoped memory.
-
----
-
-## 8) Default Safety / Quality Constraints
+## 10) Default Safety / Quality Constraints
 
 - Do not invent atoms without clear evidence.
 - Mark uncertain memory with lower confidence tags.
