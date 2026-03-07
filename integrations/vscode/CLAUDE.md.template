@@ -17,18 +17,20 @@ DB location: `~/.mmpm/data` (outside the repo — safe from git operations)
 
 **If MMPM is connected via MCP** (preferred — use these tool calls):
 
-1. `memory_ready` — confirm server is up
+1. `memory_ready` — confirm server is up. If not, run `./start.sh` in background and retry.
 2. `memory_weekly_eval_status` — run `memory_weekly_eval_run` if `due: true`
 3. `memory_session_bootstrap` — load context + predictions in one call
 4. `memory_atoms_list` with `type: "state"` and `type: "fact"` if context is sparse
-5. Summarise current sprint/task status from `v1.fact.sprint.*` atoms
+5. `memory_atoms_list` with `type: "procedure"` — **always load these**; they contain
+   proven processes and human corrections that must be applied before starting work
+6. Summarise current sprint/task status from loaded atoms
 
 **If MCP is not connected** (curl fallback):
 
 ```bash
 # 1. Check server
 curl -s http://localhost:3000/health
-# If not running: cd /EDIT_THIS_PATH/parametric-memory && ./start.sh &
+# If not running: cd /path/to/parametric-memory && ./start.sh &
 
 # 2. Bootstrap (context + Markov predictions in one call)
 curl -s -X POST \
@@ -40,11 +42,61 @@ curl -s -X POST \
 
 ---
 
+## What to store in memory
+
+### Always store (non-negotiable)
+
+- **Architecture decisions** — why X over Y, constraints that drove the choice
+- **Working processes** — step-by-step procedures that succeeded (as `procedure` atoms)
+- **Bug root causes** — what went wrong and the actual fix
+- **Human corrections** — any time the user says "don't do X" or "always do Y"
+- **Configuration facts** — paths, ports, env vars, versions that took effort to discover
+- **Sprint/task state** — what's done, what's next, what's blocked
+- **Test quality** — current pass count, known issues
+
+### Atom types
+
+| Type | Use for |
+|------|---------|
+| `fact` | Stable truths, preferences, project info |
+| `state` | Current working context, next steps |
+| `event` | Completed milestones, dated outcomes |
+| `relation` | Links between concepts or systems |
+| `procedure` | **Proven processes and human corrections** |
+
+Format: `v1.<type>.<value>` — snake_case, no spaces, no punctuation.
+
+---
+
+## Human correction learning
+
+When the user corrects the assistant's approach, this is the highest-value
+learning event. Handle it immediately:
+
+1. **Store** as a `procedure` atom:
+   `v1.procedure.always_diagnose_root_cause_not_guess_src_human`
+
+2. **Reinforce** via `session_checkpoint` with `train`:
+   `[wrong_approach_event, correction_procedure, correct_outcome_event]`
+
+3. **Apply in future:** Load procedures at session start and check them
+   before taking actions they constrain.
+
+---
+
 ## During session (automatic)
 
 At each meaningful learning — do not wait until session end:
 
 **MCP:** call `session_checkpoint` with new atoms (tombstone and train optional mid-session)
+
+**Save triggers:**
+- Bug root cause identified
+- Test suite passes after fixes
+- Architecture decision made
+- User provides a correction
+- Configuration discovered or changed
+- Sprint item completed
 
 **curl fallback:**
 ```bash
@@ -52,7 +104,7 @@ curl -s -X POST \
   -H "Authorization: Bearer ${MMPM_API_KEY}" \
   -H "Content-Type: application/json" \
   http://localhost:3000/atoms \
-  -d '{"atoms":["v1.fact.new_fact_here","v1.state.current_task_here"]}'
+  -d '{"atoms":["v1.fact.new_fact_here","v1.procedure.working_process_here"]}'
 
 curl -s -X POST -H "Authorization: Bearer ${MMPM_API_KEY}" \
   http://localhost:3000/admin/commit
@@ -62,13 +114,20 @@ curl -s -X POST -H "Authorization: Bearer ${MMPM_API_KEY}" \
 
 ## Session end (mandatory)
 
+Before the final checkpoint, review:
+1. Were any human corrections given? Store each as a `procedure`.
+2. Were any new working processes discovered? Store each as a `procedure`.
+3. What is the current state of work? Update `state` atoms.
+4. What states are no longer true? Add them to `tombstone`.
+
 **MCP — single call, always commits:**
 
 ```
 session_checkpoint({
   atoms: [
     "v1.event.completed_X_YYYY_MM_DD",
-    "v1.state.next_task_is_Y"
+    "v1.state.next_task_is_Y",
+    "v1.procedure.proven_process_learned_this_session"
   ],
   tombstone: [
     "v1.state.old_completed_state"
@@ -108,17 +167,15 @@ curl -s -X POST -H "Authorization: Bearer ${MMPM_API_KEY}" \
 
 ---
 
-## Atom format
+## Retrieval priority
 
-`v1.<type>.<value>` — snake_case, no spaces, no punctuation in value.
-
-| Type | Use for |
-|------|---------|
-| `fact` | Stable truths, preferences, project info |
-| `state` | Current working context, next steps |
-| `event` | Completed milestones, dated outcomes |
-| `relation` | Links between concepts or systems |
-| `procedure` | Repeatable multi-step processes |
+When answering users, retrieve in this order:
+1. **Procedures** — check if a stored rule constrains the current action
+2. **Facts and constraints** — explicit truths about the project
+3. **Current state** — what's in progress, blocked, or next
+4. **Relations** — links between current task and architecture
+5. **Events** — recent outcomes for chronology
+6. **Markov predictions** — hints, not absolute truth
 
 ---
 
@@ -130,13 +187,10 @@ Add to `~/.claude/settings.json` to wire MCP:
 {
   "mcpServers": {
     "parametric-memory": {
-      "command": "node",
-      "args": ["/EDIT_THIS_PATH/parametric-memory/dist/server.js"],
+      "command": "sh",
+      "args": ["-c", "cd /path/to/parametric-memory && set -a && . .env && set +a && npm run mcp:serve"],
       "env": {
-        "MMPM_API_KEY": "your-api-key-from-.env",
-        "DB_BASE_PATH": "~/.mmpm/data",
-        "LOG_LEVEL": "warn",
-        "MMPM_MCP_ENABLE_MUTATIONS": "1"
+        "MMPM_MCP_BASE_URL": "http://127.0.0.1:3000"
       }
     }
   }

@@ -1,14 +1,12 @@
 {
   "mcpServers": {
     "parametric-memory": {
-      "command": "node",
-      "args": ["/EDIT_THIS_PATH/parametric-memory/dist/server.js"],
+      "command": "npm",
+      "args": ["run", "mcp:serve"],
+      "cwd": "/path/to/parametric-memory",
       "env": {
-        "MMPM_API_KEY": "your-api-key-from-.env",
-        "PORT": "3000",
-        "DB_BASE_PATH": "~/.mmpm/data",
-        "LOG_LEVEL": "warn",
-        "MMPM_MCP_ENABLE_MUTATIONS": "1"
+        "MMPM_MCP_BASE_URL": "http://127.0.0.1:3000",
+        "MMPM_MCP_API_KEY": "REPLACE_WITH_YOUR_API_KEY"
       }
     }
   }

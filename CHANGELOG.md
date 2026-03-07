@@ -9,75 +9,73 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Added
-- `procedure` atom type — first-class type for storing discovered working tools and techniques; cleanly queryable via `GET /atoms?type=procedure`; distinct from `fact` (preferences) and `other` (catch-all)
-- `GET /admin/audit-log` — bounded in-memory ring buffer (1000 entries) of mutation events with `?limit`, `?since`, `?event` filters; event types: `atom.add`, `atom.tombstone`, `admin.commit`, `admin.import`, `admin.export`
-- Merkle proof on `GET /atoms/:atom` — response now includes `proof: { leaf, root, auditPath, index }` field
-- `POST /verify` — standalone proof verification; accepts `{ atom, proof }`, returns `{ valid: boolean }`
+*Nothing yet.*
+
+---
+
+## [0.1.0] — 2026-04-06
+
+First public release.
+
+### Core Engine
+- HTTP API server on Fastify with Bearer token auth and per-client named keys
+- Sharded LevelDB orchestrator — consistent hash routing across N shards
+- Incremental Merkle tree engine — every atom has a cryptographic proof path
+- Markov transition engine — CSR sparse matrix updated on every access; prediction returned on every read
+- Write-ahead log with epoch-managed snapshot commits and WAL compaction
+- Ingestion pipeline with backpressure and auto-commit scheduling
+- Unified injectable clock for sub-millisecond timestamp precision across all transitions and decay calculations
+- Atom schema validation — enforced `v1.<type>.<value>` format with six types: `fact`, `event`, `state`, `relation`, `procedure`, `other`
+- Per-atom TTL with access-aware reset and background reaper
+- Confidence decay — exponential half-life on transition weights so stale edges lose influence over time
+
+### Query and Retrieval
+- `POST /access` — access atom + update Markov weights + get prediction with proof
+- `POST /memory/bootstrap` — prime agent context from Markov state with namespace scoping
+- `GET /atoms/:atom` — retrieve atom with full Merkle proof (`leaf`, `root`, `auditPath`, `index`)
+- `POST /verify` — standalone proof verification (no auth required)
+- `GET /atoms` — paginated browsing with `type`, `prefix`, `limit`, `offset` filters
+- `GET /atoms/stale` — find atoms not accessed in N days
+- Temporal versioning — every read endpoint accepts `asOfVersion` or `asOfMs` for historical replay
+- Write policy tiers: `auto-write` | `review-required` | `never-store` per atom type
+- Conflict detection on fact atoms with cosine similarity threshold
+- Transition policy — configurable allowed-type rules for Markov predictions
+
+### Security (Sprint 16)
+- Startup API key validation — rejects known placeholder keys, refuses to bind `0.0.0.0` with default key
+- `MMPM_BLOCK_SECRET_ATOMS=1` — rejects atoms matching credential patterns (API keys, tokens, passwords)
+- Per-client named keys via `MMPM_API_KEYS` env var with audit-log attribution
+- Request ID threading — monotonic counter propagated via `x-request-id` header
+
+### Observability
+- Prometheus metrics — throughput, latency histograms, Markov hit rate, shard GC, proof verification rate
+- 36-panel Grafana dashboard — ships with Docker Compose stack
+- `GET /admin/audit-log` — bounded ring buffer (1000 entries) of mutation events
+- Structured startup log with resolved configuration
+
+### MCP Integration
+- Full Model Context Protocol server with three permission tiers: `mcp:serve:readonly` (read), `mcp:serve` (read + mutations), `mcp:serve:unsafe` (read + mutations + dangerous)
+- 25+ MCP tools covering atoms, access, bootstrap, search, train, checkpoint, verify, audit, export, import, policy, and weekly evaluation
+- `session_checkpoint` — single-call save: atoms + tombstones + train + commit
+- Claude Cowork skill with one-step `.skill` package install
+- Claude Desktop drop-in config templates
+- VSCode / Claude Code integration with CLAUDE.md template and scaffold scripts
+
+### Data Safety
+- Default DB path at `~/.mmpm/data` — outside the git repo to survive `git clean` and IDE resets
+- `npm run backup` — exports all active atoms and weights to `~/.mmpm/backups/`
+- `npm run restore` — imports from backup JSON (idempotent, skips existing atoms)
 - `GET /admin/export` — NDJSON stream export with `?status` and `?type` filters
-- `POST /admin/import` — accepts NDJSON or bare atom strings; deduplicates against active atoms
-- Per-atom TTL via optional `ttlMs` field on `POST /atoms`; access-aware (TTL resets on touch); background reaper at `MMPM_TTL_REAPER_INTERVAL_MS` interval
-- Request ID threading — monotonic counter per server instance; propagated via `x-request-id` header; readable as `request.id`
-- Structured startup log: `{ event: 'server_ready', port, host, shards, dbBasePath, logLevel, writePolicy, apiKeySet }`
-- New MCP tools: `memory_verify`, `memory_audit_log`, `memory_atoms_export`, `memory_atoms_import`
+- `POST /admin/import` — accepts NDJSON or bare atom strings with deduplication
 
-### Fixed
-- `getAtomProof` now uses `shard.getAtomRecord()` instead of `shard.getHash()` — tombstoned atoms now correctly yield their historical Merkle proof for audit; previously returned `null`
-- `POST /admin/import` correctly sets `Content-Type: text/plain` when calling the import endpoint from MCP
-
----
-
-## [1.1.0] — 2026-03-06
-
-### Added
-- Full MCP adapter server at `tools/mcp/mmpm_mcp_server.ts` — read-only tools exposed by default; write tools enabled via `MMPM_MCP_ENABLE_MUTATIONS=1`
-- MCP tool catalog: `tools/mcp/mmpm_tool_catalog.json`
-- Claude Desktop config templates: `tools/mcp/claude_desktop_config.example.json` and `tools/mcp/claude_desktop_config.unsafe.example.json`
-- MCP test suite: unit wiring tests (`mcp_tools.test.ts`) and stdio end-to-end integration tests (`mcp_stdio_integration.test.ts`)
-- CI workflow for MCP + semantic coverage gate: `.github/workflows/mcp-semantic-gate.yml`
-- `GET /atoms` query parameters: `type`, `prefix`, `limit`, `offset` for paginated browsing
-- `createdAtMs` field visible on all atom inspection surfaces
-- Stale atom surface: `GET /atoms/stale?type=&maxAgeDays=`
-- Namespace scope on `/memory/context` and `/memory/bootstrap`: `user`, `project`, `task`, `includeGlobal`
-- Write policy tiers: `auto-write` | `review-required` | `never-store` per atom type (configurable via `WRITE_POLICY`)
-- Conflict detection on fact atoms with cosine similarity above threshold
-- Grafana dashboard (36 panels) — ships in `grafana/`, starts with `docker-compose up`
-- Claude Cowork skill: `integrations/claude-skill/SKILL.md`
-- VSCode / Claude Code integration: `integrations/vscode/README.md`
-- Claude Desktop integration: `integrations/claude-desktop/`
-- One-step Claude Cowork install: `integrations/parametric-memory.skill`
-
-### Changed
-- Snapshot reference-count lifecycle — safe retirement without evicting live readers
-- MCP server refactored for testability: exported builders + explicit startup entrypoint
-- `npm run setup` bootstraps the full environment in one command
-
-### Validation
-- 36 test files, 533 tests passing (`npm test`)
-
----
-
-## [1.0.0] — 2026-03-01
-
-Initial public release.
-
-### Added
-- HTTP API server (`src/server.ts`) on Fastify with Bearer token auth
-- Sharded LevelDB orchestrator (`src/orchestrator.ts`) — consistent hash routing across N shards
-- Incremental Merkle tree engine (`src/incremental_merkle.ts`) — every atom has a cryptographic proof path
-- Markov transition engine (`src/csr_matrix.ts`, `src/transition_policy.ts`) — sparse transition matrix updated on every access; prediction returned on every read
-- Write-ahead log (`src/wal.ts`) with epoch-managed snapshot commits and WAL compaction
-- Ingestion pipeline (`src/ingestion.ts`) — WAL + backpressure + auto-commit scheduling
-- Atom schema validation (`src/atom_schema.ts`) — enforced `v1.<type>.<value>` format
-- Prometheus metrics (`src/metrics.ts`) — throughput, latency histograms, Markov hit rate, shard GC
-- Structured logging via Pino (`src/logger.ts`)
+### DevEx
+- `npm run setup` — one-command bootstrap (install, build, create .env)
+- `start.sh` — build-if-needed, environment load, launch with resolved DB path printed
 - Docker Compose stack with Prometheus and Grafana
-- Benchmark harness (`tools/harness/`) — scientific runner, SLO gate, domain pilots, regression tracker
-- CI workflows: readiness fast-tests, benchmark gate
-- `start.sh` — build-if-needed + environment load + launch
-- `.env.example` with full configuration reference
+- Benchmark harness with scientific runner, SLO gate, and regression tracker
+- CONTRIBUTING.md, SECURITY.md, and full API documentation in README
 
-### Benchmark (v1.0 baseline, 10 independent trials, HTTP API mode)
+### Benchmark (10 independent trials, HTTP API mode)
 - Throughput: 3,888 ops/sec
 - p50 access latency: 1.22 ms
 - p95 proof verify: 0.032 ms
@@ -85,8 +83,10 @@ Initial public release.
 - Proof failures: 0
 - Stale reads: 0
 
+### Validation
+- 39 test files, 725 tests passing
+
 ---
 
-[Unreleased]: https://github.com/wjm2202/Parametric-Memory/compare/v1.1.0...HEAD
-[1.1.0]: https://github.com/wjm2202/Parametric-Memory/compare/v1.0.0...v1.1.0
-[1.0.0]: https://github.com/wjm2202/Parametric-Memory/releases/tag/v1.0.0
+[Unreleased]: https://github.com/wjm2202/Parametric-Memory/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/wjm2202/Parametric-Memory/releases/tag/v0.1.0
