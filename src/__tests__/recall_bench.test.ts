@@ -91,11 +91,11 @@ describe('Harness recall benchmark engine (Story 9.3)', () => {
             seed: 404,
         });
 
-        const port = 3412;
         const app = buildApp({ data: [atom('Seed_API_A'), atom('Seed_API_B')], dbBasePath: tempDb('api-recall'), numShards: 4, apiKey: API_KEY });
         await app.orchestrator.init();
         app.pipeline.start();
-        await app.server.listen({ port, host: '127.0.0.1' });
+        await app.server.listen({ port: 0, host: '127.0.0.1' });
+        const { port } = app.server.server.address() as { port: number };
 
         try {
             await runIngestionDriver(dataset, {
