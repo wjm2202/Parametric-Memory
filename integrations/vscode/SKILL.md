@@ -54,6 +54,9 @@ Copy this file to your project root as `SKILL.md` (or to your Claude skills dire
 | `relation` | Links between concepts or systems | `v1.relation.api_depends_on_db` |
 | `procedure` | Repeatable multi-step processes | `v1.procedure.run_tests_before_merge` |
 
+> ⚠️ **Never store secrets as atoms.** Passwords, API keys, tokens, and
+> credentials must not be stored in MMPM atoms.
+
 ---
 
 ## Server

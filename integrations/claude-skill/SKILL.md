@@ -68,6 +68,11 @@ MMPM stores typed atoms as `v1.<type>.<value>` — snake_case, no spaces:
 
 Optional metadata suffixes: `_src_human`, `_conf_high`, `_scope_project`, `_dt_2026_03_07`
 
+> ⚠️ **Never store secrets as atoms.** Passwords, API keys, tokens, and
+> credentials must never be stored in MMPM.  Atoms are semantic identifiers,
+> not a secret manager.  If `MMPM_BLOCK_SECRET_ATOMS=1` is set the server
+> will reject them with HTTP 422.
+
 ---
 
 ## Session protocol (automatic)
