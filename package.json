@@ -40,7 +40,7 @@
     "typescript"
   ],
   "author": "Glen Osborne",
-  "license": "AGPL-3.0",
+  "license": "SEE LICENSE IN LICENSE",
   "description": "Cryptographically verifiable, Markov-predictive memory substrate for AI agents. Every atom has a Merkle proof. Every access trains a prediction.",
   "devDependencies": {
     "@types/node": "^25.3.3",
