@@ -2128,8 +2128,16 @@ if (require.main === module) {
     });
 
     const shutdown = async () => {
-        await pipeline.stop();
+        // Shutdown order matters:
+        //   1. Stop accepting new requests and drain in-flight HTTP handlers.
+        //      No new atoms can be enqueued after this point.
         await server.close();
+        //   2. Drain the ingestion pipeline: clear the background flush timer
+        //      and await any in-flight flush (including one started by the
+        //      timer that fired concurrently with SIGTERM). All db.put() calls
+        //      from addAtoms() are guaranteed to complete before we return.
+        await pipeline.stop();
+        //   3. Safe to close LevelDB — no write is in flight.
         await orchestrator.close();
         process.exit(0);
     };

@@ -60,6 +60,13 @@ export class IngestionPipeline {
     private batchCounter: number = 0;
     private isRunning: boolean = false;
     private isFlushing: boolean = false;
+    /**
+     * Tracks the currently in-flight flush Promise so stop() can await it.
+     * Without this, a flush that was triggered by the background timer could
+     * still be executing db.put() calls when orchestrator.close() runs, which
+     * causes LEVEL_DATABASE_NOT_OPEN errors (observed in harness server_06.log).
+     */
+    private activeFlushPromise: Promise<void> | null = null;
 
     // Stats
     private totalEnqueued: number = 0;
@@ -98,6 +105,11 @@ export class IngestionPipeline {
     /**
      * Stop the background flush timer.
      * Performs a final flush of any remaining queued atoms before stopping.
+     *
+     * Safe to call concurrently with an in-flight background flush: waits for
+     * the active flush to complete before draining remainder and returning.
+     * This guarantees all db.put() calls finish before orchestrator.close()
+     * can be called, preventing LEVEL_DATABASE_NOT_OPEN errors on shutdown.
      */
     async stop(): Promise<void> {
         if (!this.isRunning) return;
@@ -105,7 +117,13 @@ export class IngestionPipeline {
             clearInterval(this.flushTimer);
             this.flushTimer = null;
         }
-        // Final drain
+        // If a background flush is currently in-flight, wait for it to
+        // complete before we check the queue or allow db.close() to proceed.
+        if (this.activeFlushPromise) {
+            await this.activeFlushPromise.catch(() => { /* already logged by caller */ });
+        }
+        // Final drain: pick up anything that was enqueued while the last
+        // flush was running (its db.put calls have now completed above).
         if (this.queue.length > 0) {
             await this.flush();
         }
@@ -152,6 +170,9 @@ export class IngestionPipeline {
      * Force an immediate flush of all queued atoms.
      * Drains the queue, calls orchestrator.addAtoms(), and commits.
      * No-op if the queue is empty or a flush is already in progress.
+     *
+     * The returned Promise is also stored in activeFlushPromise so stop()
+     * can await it even when the flush was triggered by the background timer.
      */
     async flush(): Promise<void> {
         if (this.isFlushing || this.queue.length === 0) return;
@@ -161,19 +182,25 @@ export class IngestionPipeline {
         // Clear dedup set for flushed atoms
         for (const atom of batch) this.queuedAtoms.delete(atom);
 
-        try {
-            await this.orchestrator.addAtoms(batch);
-            this.totalFlushed += batch.length;
-            this.totalCommitted += batch.length;
-            this.lastFlushMs = Date.now();
-        } catch (err) {
-            // Re-queue on failure so atoms aren't silently dropped
-            this.queue.unshift(...batch);
-            for (const atom of batch) this.queuedAtoms.add(atom);
-            throw err;
-        } finally {
-            this.isFlushing = false;
-        }
+        const work = (async () => {
+            try {
+                await this.orchestrator.addAtoms(batch);
+                this.totalFlushed += batch.length;
+                this.totalCommitted += batch.length;
+                this.lastFlushMs = Date.now();
+            } catch (err) {
+                // Re-queue on failure so atoms aren't silently dropped
+                this.queue.unshift(...batch);
+                for (const atom of batch) this.queuedAtoms.add(atom);
+                throw err;
+            } finally {
+                this.isFlushing = false;
+                this.activeFlushPromise = null;
+            }
+        })();
+
+        this.activeFlushPromise = work;
+        await work;
     }
 
     /**

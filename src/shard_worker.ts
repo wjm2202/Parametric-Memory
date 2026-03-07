@@ -262,10 +262,35 @@ export class ShardWorker {
             }
 
             // ── 4. Collect weight entries (resolved after hashToIndex) ───
-            const rawWeights: Array<[string, string, number]> = [];
+            //
+            // Key formats (two generations):
+            //   Legacy  w:<fromHash64>:<toHash64>   131-char random-ordered key
+            //   Current w:<fromIdx10>:<toHash64>     77-char idx-ordered key
+            //
+            // Storing the from-atom's zero-padded shard index instead of its
+            // 64-char SHA-256 hash provides:
+            //   • 40 % smaller keys (77 vs 131 bytes per w: + wu: pair)
+            //   • Lexicographic locality — all outgoing edges for a given atom
+            //     are contiguous in the keyspace, enabling O(out-degree) range
+            //     scans vs O(total weights) full scans
+            //   • Better LevelDB compaction — sequential idx writes cluster
+            //     into fewer SST blocks vs random-looking hash prefixes
+            //
+            // Legacy keys are migrated transparently on first startup.
+            const rawWeights: Array<[number, string, number]> = [];   // [fromIdx, toHash, weight]
+            const legacyKeys: Array<[string, string, string, number]> = []; // [wKey, fromHash, toHash, weight]
+
             for await (const [key, value] of this.db.iterator({ gte: 'w:', lte: 'w:~' })) {
                 const parts = key.split(':');
-                if (parts.length === 3) rawWeights.push([parts[1], parts[2], parseInt(value)]);
+                if (parts.length !== 3) continue;
+                const weight = parseInt(value, 10);
+                if (parts[1].length === 64) {
+                    // Legacy format: w:<fromHash64>:<toHash64>
+                    legacyKeys.push([key, parts[1], parts[2], weight]);
+                } else {
+                    // Current format: w:<fromIdx10>:<toHash64>
+                    rawWeights.push([parseInt(parts[1], 10), parts[2], weight]);
+                }
             }
 
             // ── 5. WAL replay ────────────────────────────────────────────
@@ -330,16 +355,56 @@ export class ShardWorker {
             }
             this.pending = new PendingWrites(this.activeSnapshot.version);
 
-            // ── 8. Resolve Markov weights ────────────────────────────────
-            for (const [fromHash, toHash, weight] of rawWeights) {
-                const fromIdx = this.hashToIndex.get(fromHash);
-                if (fromIdx === undefined) continue;
+            // ── 8a. Migrate legacy weight keys ───────────────────────────
+            // Runs once when upgrading from hash-keyed to idx-keyed format.
+            if (legacyKeys.length > 0) {
+                logger.info(
+                    { count: legacyKeys.length, shard: this._shardId },
+                    'Migrating legacy w:<hash>:<hash> weight keys to w:<idx>:<hash> format'
+                );
+                for (const [oldWKey, fromHash, toHash, weight] of legacyKeys) {
+                    const fromIdx = this.hashToIndex.get(fromHash);
+                    if (fromIdx === undefined) {
+                        // Atom not present in this shard — stale key, drop it
+                        await this.db.del(oldWKey)
+                            .catch((err: unknown) => logger.error({ err }, 'Migration: del stale legacy w: key'));
+                        continue;
+                    }
+
+                    const newWKey  = `w:${String(fromIdx).padStart(10, '0')}:${toHash}`;
+                    const oldTsKey = `wu:${fromHash}:${toHash}`;
+                    const newTsKey = `wu:${String(fromIdx).padStart(10, '0')}:${toHash}`;
+
+                    // Write new key then delete old — idempotent if interrupted
+                    await this.db.put(newWKey, String(weight))
+                        .catch((err: unknown) => logger.error({ err }, 'Migration: write new w: key'));
+                    await this.db.del(oldWKey)
+                        .catch((err: unknown) => logger.error({ err }, 'Migration: del old w: key'));
+
+                    // Migrate timestamp key if it exists
+                    let tsVal: string | undefined;
+                    try { tsVal = await this.db.get(oldTsKey); } catch { /* missing is fine */ }
+                    if (tsVal !== undefined) {
+                        await this.db.put(newTsKey, tsVal)
+                            .catch((err: unknown) => logger.error({ err }, 'Migration: write new wu: key'));
+                        await this.db.del(oldTsKey)
+                            .catch((err: unknown) => logger.error({ err }, 'Migration: del old wu: key'));
+                    }
+
+                    rawWeights.push([fromIdx, toHash, weight]);
+                }
+                logger.info({ shard: this._shardId }, 'Weight key migration complete');
+            }
+
+            // ── 8b. Resolve Markov weights ───────────────────────────────
+            for (const [fromIdx, toHash, weight] of rawWeights) {
                 if (!this.transitions.has(fromIdx)) this.transitions.set(fromIdx, new Map());
                 this.transitions.get(fromIdx)!.set(toHash, weight);
 
                 let updatedAtMs = Date.now();
+                const tsKey = `wu:${String(fromIdx).padStart(10, '0')}:${toHash}`;
                 try {
-                    const rawTs = await this.db.get(`wu:${fromHash}:${toHash}`);
+                    const rawTs = await this.db.get(tsKey);
                     if (rawTs !== undefined) {
                         const parsedTs = parseInt(rawTs, 10);
                         if (Number.isFinite(parsedTs) && parsedTs > 0) {
@@ -347,7 +412,7 @@ export class ShardWorker {
                         }
                     }
                 } catch {
-                    // Legacy weight entries may not have timestamp metadata yet.
+                    // Weight entries may not have timestamp metadata yet.
                 }
 
                 if (!this.transitionUpdatedAt.has(fromIdx)) this.transitionUpdatedAt.set(fromIdx, new Map());
@@ -654,11 +719,15 @@ export class ShardWorker {
         targets.set(to, newWeight);
         targetsUpdatedAt.set(to, updatedAtMs);
         this.csrDirty = true;
+        // Use fromIdx (10-digit zero-padded) rather than the 64-char hash so
+        // all outgoing edges from a given atom are lexicographically adjacent,
+        // improving compaction locality and cutting key size by ~40%.
+        const idxStr = String(fromIdx).padStart(10, '0');
         await this.db
-            .put(`w:${from}:${to}`, newWeight.toString())
+            .put(`w:${idxStr}:${to}`, newWeight.toString())
             .catch((err: unknown) => logger.error({ err }, 'Shard persistence error'));
         await this.db
-            .put(`wu:${from}:${to}`, updatedAtMs.toString())
+            .put(`wu:${idxStr}:${to}`, updatedAtMs.toString())
             .catch((err: unknown) => logger.error({ err }, 'Shard confidence timestamp persistence error'));
     }
 
