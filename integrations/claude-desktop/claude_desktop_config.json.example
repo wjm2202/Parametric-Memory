@@ -6,7 +6,7 @@
       "env": {
         "MMPM_API_KEY": "your-api-key-from-.env",
         "PORT": "3000",
-        "DB_BASE_PATH": "./mmpm-data",
+        "DB_BASE_PATH": "~/.mmpm/data",
         "LOG_LEVEL": "warn"
       }
     }

@@ -28,6 +28,18 @@ if [[ "$MODE" == "--stop" ]]; then
   exit 0
 fi
 
+# ── ensure DB directory exists outside the repo ───────────────────────────────
+# Reads DB_BASE_PATH from .env if present, falls back to ~/.mmpm/data.
+# This ensures the directory exists before the server tries to open LevelDB.
+_RAW_DB_PATH="$(grep -E '^DB_BASE_PATH=' .env 2>/dev/null | cut -d= -f2- || true)"
+_RAW_DB_PATH="${_RAW_DB_PATH:-~/.mmpm/data}"
+# Expand leading ~
+DB_DIR="${_RAW_DB_PATH/#\~/$HOME}"
+if [[ ! -d "$DB_DIR" ]]; then
+  mkdir -p "$DB_DIR"
+  echo "→ Created DB directory: $DB_DIR"
+fi
+
 # ── build if needed ───────────────────────────────────────────────────────────
 if [[ ! -f dist/server.js ]] || [[ src/server.ts -nt dist/server.js ]]; then
   echo "→ Building…"

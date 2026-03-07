@@ -1,5 +1,7 @@
 import 'dotenv/config';
 import { readFileSync } from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import Fastify, { FastifyInstance } from 'fastify';
 import { ShardedOrchestrator } from './orchestrator';
 import { IngestionPipeline } from './ingestion';
@@ -749,7 +751,16 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
         }
     });
     const numShards = opts.numShards ?? parseInt(process.env.SHARD_COUNT ?? '4');
-    const dbBasePath = opts.dbBasePath ?? (process.env.DB_BASE_PATH ?? './data');
+    // Resolve DB path: expand leading ~ so .env values like ~/.mmpm/data work
+    // correctly across all run modes (Docker, start.sh, MCP).
+    // Default to ~/.mmpm/data so the DB lives outside the git repo by default.
+    const expandHome = (p: string) =>
+        p.startsWith('~/') || p === '~'
+            ? path.join(os.homedir(), p.slice(1))
+            : p;
+    const dbBasePath = expandHome(
+        opts.dbBasePath ?? (process.env.DB_BASE_PATH ?? path.join(os.homedir(), '.mmpm', 'data'))
+    );
 
     // Atom resolution order (first non-null wins):
     //   1. opts.data  — programmatic / test usage
@@ -2165,7 +2176,7 @@ if (require.main === module) {
                 port: PORT,
                 host: HOST,
                 shards: NUM_SHARDS,
-                dbBasePath: process.env.DB_BASE_PATH ?? './data',
+                dbBasePath: process.env.DB_BASE_PATH ?? path.join(os.homedir(), '.mmpm', 'data'),
                 logLevel: process.env.LOG_LEVEL ?? 'info',
                 writePolicy: process.env.WRITE_POLICY ?? 'auto-write',
                 apiKeySet: Boolean(process.env.MMPM_API_KEY),

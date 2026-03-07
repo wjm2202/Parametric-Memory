@@ -7,10 +7,17 @@ services:
       - MMPM_API_KEY=${MMPM_API_KEY:-}
       - MMPM_ATOM_FILE=/app/seeds.json
       - SHARD_COUNT=${SHARD_COUNT:-4}
-      - DB_BASE_PATH=${DB_BASE_PATH:-/app/mmpm-db}
+      # DB lives at ~/.mmpm/data on the host, bind-mounted into the container.
+      # This is the same path used by start.sh and the MCP config — all three
+      # modes share one DB so memory is never split across locations.
+      - DB_BASE_PATH=/app/mmpm-db
     volumes:
-      - mmpm-data:/app/mmpm-db
+      # Bind-mount host ~/.mmpm/data so Docker, start.sh, and MCP all share
+      # the same LevelDB files.  ${HOME} is expanded by Docker Compose from
+      # the shell environment.  The directory is created automatically below.
+      - ${HOME}/.mmpm/data:/app/mmpm-db
       - ./seeds.json:/app/seeds.json:ro
+      - ./memory:/app/memory:ro
     networks:
       - mmpm-net
     restart: always
@@ -81,7 +88,7 @@ networks:
     driver: bridge
 
 volumes:
-  # LevelDB persistence for the MMPM service
-  mmpm-data:
   # Grafana dashboard and settings persistence
   grafana-data:
+  # Note: mmpm-data named volume removed — DB now lives at ${HOME}/.mmpm/data
+  # on the host so all run modes (Docker, start.sh, MCP) share one database.

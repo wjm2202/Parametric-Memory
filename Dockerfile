@@ -23,8 +23,9 @@ FROM node:20-alpine
 ENV NODE_OPTIONS=--max-old-space-size=512
 RUN apk add --no-cache libstdc++
 WORKDIR /app
-# Pre-create shard directory for LevelDB
-RUN mkdir -p mmpm-db
+# Pre-create the mount point so Docker bind-mounts it with correct ownership.
+# The actual DB files come from the host at ${HOME}/.mmpm/data (see compose).
+RUN mkdir -p /app/mmpm-db
 COPY package*.json ./
 RUN npm install --only=production
 COPY --from=builder /app/dist ./dist
