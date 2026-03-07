@@ -7,12 +7,13 @@ dist/
 *.d.ts.map
 
 # ── LevelDB / runtime data ────────────────────────────────────────────
-wal/
+# All runtime DB and WAL files live under DB_BASE_PATH (default: ./data)
+data/
+# Legacy path (pre-v1.1 default)
 mmpm-db/
+# Harness and smoke-test databases (still written to cwd by some tools)
 mmpm-test-smoke-db*/
 mmpm-demo-db/
-test-shard-db*/
-test-*-db*/
 mmpm-harness-cli-db*/
 
 # ── Environment files ─────────────────────────────────────────────────
@@ -31,10 +32,8 @@ npm-debug.log*
 coverage/
 .nyc_output/
 vitest-results/
-# Root-level WAL files left by test runs
+# WAL files (some harness modes write these to cwd)
 *.wal
-# Temp test DB directories and debug dirs
-test-debug-g3/
 # Linux FUSE hidden files (CoWork / FUSE mounts)
 .fuse_hidden*
 # ── Internal planning / scratch documents — not part of public source

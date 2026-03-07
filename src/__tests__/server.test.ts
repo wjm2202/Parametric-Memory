@@ -1,12 +1,18 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { buildApp } from '../server';
-import { rmSync } from 'fs';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import type { FastifyInstance } from 'fastify';
 import type { InjectOptions } from 'light-my-request';
 import type { ShardedOrchestrator } from '../orchestrator';
 
 function cleanup(path: string) {
     try { rmSync(path, { recursive: true, force: true }); } catch { }
+}
+
+function tmpDb(name: string): string {
+    return mkdtempSync(join(tmpdir(), `mmpm-${name}-`));
 }
 
 const atom = (value: string) => `v1.other.${value}`;
@@ -45,7 +51,7 @@ function withEnvAuth(server: FastifyInstance): FastifyInstance {
 // --- Integration Suite ---
 
 describe('API Integration', () => {
-    const DB_PATH = './test-api-db';
+    const DB_PATH = tmpDb('api');
     let server: FastifyInstance;
     let orchestrator: ShardedOrchestrator;
 
@@ -768,7 +774,7 @@ describe('API Integration', () => {
 // --- Auth Suite ---
 
 describe('API Auth', () => {
-    const AUTH_DB = './test-auth-db';
+    const AUTH_DB = tmpDb('auth');
     let authServer: FastifyInstance;
     let authOrch: ShardedOrchestrator;
 
@@ -897,7 +903,7 @@ describe('API Auth', () => {
 // ─── Dynamic atom API (/atoms) ───────────────────────────────────────────────
 
 describe('API — /atoms (dynamic atom management)', () => {
-    const ATOMS_DB = './test-atoms-api-db';
+    const ATOMS_DB = tmpDb('atoms-api');
     let server: ReturnType<typeof buildApp>['server'];
     let orchestrator: ReturnType<typeof buildApp>['orchestrator'];
     let pipeline: ReturnType<typeof buildApp>['pipeline'];
@@ -1339,7 +1345,7 @@ describe('API — /atoms (dynamic atom management)', () => {
 });
 
 describe('API — /atoms backpressure (Story 3.4)', () => {
-    const BP_DB = './test-atoms-backpressure-db';
+    const BP_DB = tmpDb('backpressure');
     let server: ReturnType<typeof buildApp>['server'];
     let orchestrator: ReturnType<typeof buildApp>['orchestrator'];
     let pipeline: ReturnType<typeof buildApp>['pipeline'];
@@ -1399,7 +1405,7 @@ describe('API — /atoms backpressure (Story 3.4)', () => {
 });
 
 describe('API readiness guard', () => {
-    const READY_DB = './test-readiness-db';
+    const READY_DB = tmpDb('readiness');
     let server: ReturnType<typeof buildApp>['server'];
     let orchestrator: ReturnType<typeof buildApp>['orchestrator'];
     let pipeline: ReturnType<typeof buildApp>['pipeline'];
@@ -1443,7 +1449,7 @@ describe('API readiness guard', () => {
 // =============================================================================
 
 describe('Sprint 12 — G1: Bootstrap contract tests', () => {
-    const DB_PATH = './test-sprint12-bootstrap-db';
+    const DB_PATH = tmpDb('s12-bootstrap');
     let server: FastifyInstance;
     let orchestrator: ShardedOrchestrator;
 
@@ -1611,7 +1617,7 @@ describe('Sprint 12 — G1: Bootstrap contract tests', () => {
 });
 
 describe('Sprint 12 — G2: Namespace isolation correctness', () => {
-    const DB_PATH = './test-sprint12-namespace-db';
+    const DB_PATH = tmpDb('s12-namespace');
     let server: FastifyInstance;
     let orchestrator: ShardedOrchestrator;
 
@@ -1749,7 +1755,7 @@ describe('Sprint 12 — G2: Namespace isolation correctness', () => {
 });
 
 describe('Sprint 12 — G3: Temporal retrieval correctness', () => {
-    const DB_PATH = './test-sprint12-temporal-db';
+    const DB_PATH = tmpDb('s12-temporal');
     let server: FastifyInstance;
     let orchestrator: ShardedOrchestrator;
     let versionBefore: number;
@@ -1864,7 +1870,7 @@ describe('Sprint 12 — G3: Temporal retrieval correctness', () => {
 });
 
 describe('Sprint 12 — G4: Contradiction surface-and-rank validation', () => {
-    const DB_PATH = './test-sprint12-contradiction-db';
+    const DB_PATH = tmpDb('s12-contradiction');
     let server: FastifyInstance;
     let orchestrator: ShardedOrchestrator;
 
@@ -1977,7 +1983,7 @@ describe('Sprint 12 — G4: Contradiction surface-and-rank validation', () => {
 });
 
 describe('Sprint 12 — G5: Write-policy tier end-to-end', () => {
-    const DB_PATH = './test-sprint12-writepolicy-db';
+    const DB_PATH = tmpDb('s12-writepolicy');
     let server: FastifyInstance;
     let orchestrator: ShardedOrchestrator;
 
@@ -2096,7 +2102,7 @@ describe('Sprint 12 — G5: Write-policy tier end-to-end', () => {
 // ── Sprint 14-A-1: GET /atoms/:atom includes proof ───────────────────────────
 
 describe('14-A-1: GET /atoms/:atom proof field', () => {
-    const DB_PATH = './test-14-a1-db';
+    const DB_PATH = tmpDb('14-a1');
     let server: FastifyInstance;
     let orchestrator: ShardedOrchestrator;
 
@@ -2202,7 +2208,7 @@ describe('14-A-1: GET /atoms/:atom proof field', () => {
 // ── Sprint 14-A-2: POST /verify ───────────────────────────────────────────────
 
 describe('14-A-2: POST /verify', () => {
-    const DB_PATH = './test-14-a2-db';
+    const DB_PATH = tmpDb('14-a2');
     let server: FastifyInstance;
     let orchestrator: ShardedOrchestrator;
 
@@ -2305,7 +2311,7 @@ describe('14-A-2: POST /verify', () => {
 // ── Sprint 14-B-1: GET /admin/export ──────────────────────────────────────────
 
 describe('14-B-1: GET /admin/export', () => {
-    const DB_PATH = './test-14-b1-db';
+    const DB_PATH = tmpDb('14-b1');
     let server: FastifyInstance;
     let orchestrator: ShardedOrchestrator;
 
@@ -2413,7 +2419,7 @@ describe('14-B-1: GET /admin/export', () => {
 // ── Sprint 14-B-2: POST /admin/import ─────────────────────────────────────────
 
 describe('14-B-2: POST /admin/import', () => {
-    const DB_PATH = './test-14-b2-db';
+    const DB_PATH = tmpDb('14-b2');
     let server: FastifyInstance;
     let orchestrator: ShardedOrchestrator;
 
@@ -2433,7 +2439,7 @@ describe('14-B-2: POST /admin/import', () => {
 
     it('imports NDJSON records exported by GET /admin/export', async () => {
         // Seed and export from a separate server instance
-        const exportDb = './test-14-b2-export-db';
+        const exportDb = tmpDb('14-b2-export');
         cleanup(exportDb);
         const exportApp = buildApp({ dbBasePath: exportDb });
         const exportServer = withEnvAuth(exportApp.server);
@@ -2532,7 +2538,7 @@ describe('14-B-2: POST /admin/import', () => {
 // ── Sprint 14-A-3: GET /admin/audit-log ───────────────────────────────────────
 
 describe('14-A-3: GET /admin/audit-log', () => {
-    const DB_PATH = './test-14-a3-db';
+    const DB_PATH = tmpDb('14-a3');
     let server: FastifyInstance;
     let orchestrator: ShardedOrchestrator;
 
@@ -2649,7 +2655,7 @@ describe('14-A-3: GET /admin/audit-log', () => {
 // ── Sprint 14-C-1: Per-atom TTL ───────────────────────────────────────────────
 
 describe('14-C-1: Per-atom TTL', () => {
-    const DB_PATH = './test-14-c1-db';
+    const DB_PATH = tmpDb('14-c1');
     let server: FastifyInstance;
     let orchestrator: ShardedOrchestrator;
 

@@ -66,7 +66,7 @@ Environment variables:
 | Variable | Default | Description |
 |---|---|---|
 | `PORT` | `3000` | HTTP server port |
-| `DB_BASE_PATH` | `./mmpm-data` | LevelDB storage directory |
+| `DB_BASE_PATH` | `./data` | LevelDB storage directory |
 | `SHARD_COUNT` | `4` | Number of shards |
 | `MMPM_API_KEY` | *(none)* | Optional bearer token for auth. Generate: `openssl rand -hex 32` |
 | `WRITE_POLICY` | `auto` | `auto` \| `review` \| `publish-all` |

@@ -749,7 +749,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
         }
     });
     const numShards = opts.numShards ?? parseInt(process.env.SHARD_COUNT ?? '4');
-    const dbBasePath = opts.dbBasePath ?? (process.env.DB_BASE_PATH ?? './mmpm-db');
+    const dbBasePath = opts.dbBasePath ?? (process.env.DB_BASE_PATH ?? './data');
 
     // Atom resolution order (first non-null wins):
     //   1. opts.data  — programmatic / test usage
@@ -2128,8 +2128,16 @@ if (require.main === module) {
     });
 
     const shutdown = async () => {
-        await pipeline.stop();
+        // Shutdown order matters:
+        //   1. Stop accepting new requests and drain in-flight HTTP handlers.
+        //      No new atoms can be enqueued after this point.
         await server.close();
+        //   2. Drain the ingestion pipeline: clear the background flush timer
+        //      and await any in-flight flush (including one started by the
+        //      timer that fired concurrently with SIGTERM). All db.put() calls
+        //      from addAtoms() are guaranteed to complete before we return.
+        await pipeline.stop();
+        //   3. Safe to close LevelDB — no write is in flight.
         await orchestrator.close();
         process.exit(0);
     };
@@ -2157,7 +2165,7 @@ if (require.main === module) {
                 port: PORT,
                 host: HOST,
                 shards: NUM_SHARDS,
-                dbBasePath: process.env.DB_BASE_PATH ?? './mmpm-db',
+                dbBasePath: process.env.DB_BASE_PATH ?? './data',
                 logLevel: process.env.LOG_LEVEL ?? 'info',
                 writePolicy: process.env.WRITE_POLICY ?? 'auto-write',
                 apiKeySet: Boolean(process.env.MMPM_API_KEY),
