@@ -8,26 +8,35 @@
 #   2. Add A record: mmpm.co.nz → <droplet-ip>
 #   3. Wait for DNS propagation (~5 min)
 #   4. SSH in: ssh root@<droplet-ip>
-#   5. Run: curl -sL <this-script-url> | bash
-#      or: scp this script, then bash setup-droplet.sh
+#   5. Clone the repo, cd into it, then run: bash integrations/deploy/setup-droplet.sh
 #
 # What this script does:
 #   1. Installs Docker + Docker Compose
-#   2. Configures UFW firewall
-#   3. Clones the MMPM repo
-#   4. Generates strong API keys
-#   5. Obtains Let's Encrypt certificate
-#   6. Starts the production stack
+#   2. Configures UFW firewall (SSH + HTTP + HTTPS only)
+#   3. Generates strong API keys (.env.production)
+#   4. Obtains Let's Encrypt certificate
+#   5. Starts the production stack (API + MCP + nginx + certbot)
+#
+# The MCP server includes OAuth2 (auto-approve, single-tenant).
+# To connect Cowork: Settings → Connectors → Add custom → https://<domain>/mcp
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
 DOMAIN="${MMPM_DOMAIN:-mmpm.co.nz}"
-REPO="https://github.com/wjm2202/Parametric-Memory.git"
-INSTALL_DIR="/opt/mmpm"
+INSTALL_DIR="$(pwd)"
+COMPOSE_FILE="integrations/deploy/docker-compose.production.yml"
+
+# Verify we're in the repo root
+if [[ ! -f "$COMPOSE_FILE" ]]; then
+    echo "ERROR: Run this script from the repo root (where integrations/deploy/ exists)"
+    echo "  cd ~/Parametric-Memory && bash integrations/deploy/setup-droplet.sh"
+    exit 1
+fi
 
 echo "═══════════════════════════════════════════════════"
 echo "  MMPM Production Setup"
 echo "  Domain: ${DOMAIN}"
+echo "  Dir:    ${INSTALL_DIR}"
 echo "═══════════════════════════════════════════════════"
 
 # ── 1. System updates ────────────────────────────────────────────────────────
@@ -61,15 +70,12 @@ ufw allow 443/tcp  comment "HTTPS"
 ufw --force enable
 echo "  Firewall: SSH + HTTP + HTTPS only"
 
-# ── 4. Clone repo ───────────────────────────────────────────────────────────
-if [[ -d "$INSTALL_DIR" ]]; then
-    echo "→ Updating existing repo at ${INSTALL_DIR}..."
-    cd "$INSTALL_DIR"
-    git pull --ff-only
+# ── 4. Install certbot ──────────────────────────────────────────────────────
+if ! command -v certbot &>/dev/null; then
+    echo "→ Installing certbot..."
+    apt-get install -y -qq certbot
 else
-    echo "→ Cloning repo to ${INSTALL_DIR}..."
-    git clone "$REPO" "$INSTALL_DIR"
-    cd "$INSTALL_DIR"
+    echo "→ certbot already installed"
 fi
 
 # ── 5. Generate API keys ────────────────────────────────────────────────────
@@ -77,8 +83,8 @@ ENV_FILE="${INSTALL_DIR}/.env.production"
 
 if [[ ! -f "$ENV_FILE" ]]; then
     echo "→ Generating .env.production..."
-    MMPM_API_KEY="mmk_$(openssl rand -hex 32)"
-    MMPM_MCP_AUTH_KEY="mcp_$(openssl rand -hex 32)"
+    MMPM_API_KEY="mmk_$(openssl rand -hex 24)"
+    MMPM_MCP_AUTH_KEY="mcp_$(openssl rand -hex 24)"
 
     cat > "$ENV_FILE" <<EOF
 # ── MMPM Production Environment ──────────────────────────────────────────────
@@ -88,29 +94,34 @@ if [[ ! -f "$ENV_FILE" ]]; then
 NODE_ENV=production
 MMPM_API_KEY=${MMPM_API_KEY}
 MMPM_MCP_AUTH_KEY=${MMPM_MCP_AUTH_KEY}
+MMPM_OAUTH_ISSUER=https://${DOMAIN}
 MMPM_BLOCK_SECRET_ATOMS=1
 SHARD_COUNT=4
 EOF
 
     chmod 600 "$ENV_FILE"
-    echo "  API Key:     ${MMPM_API_KEY}"
-    echo "  MCP Auth Key: ${MMPM_MCP_AUTH_KEY}"
     echo ""
-    echo "  ⚠️  SAVE THESE KEYS — they are in ${ENV_FILE}"
+    echo "  ┌─────────────────────────────────────────────────┐"
+    echo "  │  SAVE THESE KEYS (stored in .env.production)    │"
+    echo "  ├─────────────────────────────────────────────────┤"
+    echo "  │  API Key:     ${MMPM_API_KEY}"
+    echo "  │  MCP Auth:    ${MMPM_MCP_AUTH_KEY}"
+    echo "  └─────────────────────────────────────────────────┘"
     echo ""
 else
     echo "→ .env.production already exists, keeping existing keys"
-    # Source existing keys
-    set -a; source "$ENV_FILE"; set +a
 fi
+
+# Source env for docker compose
+set -a; source "$ENV_FILE"; set +a
 
 # ── 6. Obtain TLS certificate ───────────────────────────────────────────────
 # Use standalone mode for initial cert (nginx not running yet)
 if [[ ! -d "/etc/letsencrypt/live/${DOMAIN}" ]]; then
     echo "→ Obtaining Let's Encrypt certificate for ${DOMAIN}..."
 
-    # Install certbot standalone
-    apt-get install -y -qq certbot
+    # Stop anything on port 80 first
+    docker compose -f "$COMPOSE_FILE" down 2>/dev/null || true
 
     certbot certonly \
         --standalone \
@@ -125,15 +136,8 @@ else
 fi
 
 # ── 7. Start production stack ────────────────────────────────────────────────
-echo "→ Starting production stack..."
-
-# Export keys for docker compose
-export MMPM_API_KEY MMPM_MCP_AUTH_KEY
-
-# Load .env.production
-set -a; source "$ENV_FILE"; set +a
-
-docker compose -f integrations/deploy/docker-compose.production.yml up -d --build
+echo "→ Building and starting production stack..."
+docker compose -f "$COMPOSE_FILE" up -d --build
 
 # Wait for health
 echo "→ Waiting for services..."
@@ -142,16 +146,20 @@ for i in $(seq 1 30); do
     if curl -sf "https://${DOMAIN}/health" >/dev/null 2>&1; then
         echo ""
         echo "═══════════════════════════════════════════════════"
-        echo "  ✓ MMPM is live at https://${DOMAIN}"
+        echo "  MMPM is live at https://${DOMAIN}"
         echo ""
-        echo "  Health:  https://${DOMAIN}/health"
-        echo "  MCP:     https://${DOMAIN}/mcp"
-        echo "  API:     https://${DOMAIN}/atoms (requires Bearer token)"
+        echo "  Endpoints:"
+        echo "    Health:  https://${DOMAIN}/health"
+        echo "    MCP:     https://${DOMAIN}/mcp"
+        echo "    API:     https://${DOMAIN}/atoms (Bearer token)"
+        echo "    OAuth:   https://${DOMAIN}/.well-known/oauth-authorization-server"
         echo ""
-        echo "  Cowork custom connector URL:"
-        echo "    https://${DOMAIN}/mcp"
+        echo "  Cowork setup:"
+        echo "    Settings → Connectors → Add custom connector"
+        echo "    URL: https://${DOMAIN}/mcp"
+        echo "    (OAuth is automatic — just click Connect)"
         echo ""
-        echo "  API keys are in: ${ENV_FILE}"
+        echo "  Keys:  ${ENV_FILE}"
         echo "═══════════════════════════════════════════════════"
         exit 0
     fi
@@ -160,5 +168,5 @@ done
 
 echo ""
 echo "WARNING: Services did not become healthy in 60s."
-echo "Check logs: docker compose -f integrations/deploy/docker-compose.production.yml logs"
+echo "Check logs: docker compose -f ${COMPOSE_FILE} logs"
 exit 1
