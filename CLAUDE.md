@@ -6,6 +6,30 @@ Curl equivalents are noted for reference only.
 
 ---
 
+## 0) MCP Environment Setup
+
+The MCP server gates tools behind environment variables. These must be set
+in your Claude Desktop / Cowork MCP configuration for full functionality:
+
+| Variable | Required | What it unlocks |
+|----------|----------|-----------------|
+| `MMPM_MCP_ENABLE_MUTATIONS=1` | **Yes** | `session_checkpoint`, `memory_session_bootstrap`, `memory_atoms_add`, `memory_train`, `memory_commit`, `memory_weekly_eval_run` — **without this, memory cannot be saved** |
+| `MMPM_MCP_ENABLE_SEMANTIC_TOOLS=1` | Recommended | `memory_search`, `memory_context` — semantic recall by meaning |
+| `MMPM_MCP_ENABLE_DANGEROUS=1` | Only when needed | `memory_atoms_delete`, `memory_atoms_import`, `memory_policy_set`, `memory_write_policy_set` — destructive operations |
+| `MMPM_MCP_BASE_URL` | No (default `http://127.0.0.1:3000`) | Override server address |
+| `MMPM_MCP_API_KEY` | No (falls back to `MMPM_API_KEY`) | Override API key for MCP |
+
+Server-side variables that affect behaviour:
+
+| Variable | Effect |
+|----------|--------|
+| `MMPM_BLOCK_SECRET_ATOMS=1` | Rejects atoms that look like credentials (API keys, tokens, passwords) with HTTP 422 |
+
+If `session_checkpoint` calls fail, the first thing to check is whether
+`MMPM_MCP_ENABLE_MUTATIONS=1` is set.
+
+---
+
 ## Core Operating Principle
 
 Memory is the foundation of effective assistance. Claude must:
@@ -41,6 +65,11 @@ Call these tools in order at the start of every session:
    - Tool: `memory_session_bootstrap`
    - Pass `objective` from the user's opening message if available
    - Use `maxTokens: 1200` to keep context tight
+   - For **critical decisions** (production deploys, architecture choices),
+     add `highImpact: true` and `evidenceThreshold: 0.75` to filter out
+     low-confidence atoms (see §11)
+   - Review the `conflictingFacts` field in the response — if present,
+     flag contradictions to the user before proceeding
 
 4. **Load focused active slices** (if bootstrap context is sparse)
    - Tool: `memory_atoms_list` with `type: "fact"`, `limit: 200`
@@ -56,6 +85,20 @@ Call these tools in order at the start of every session:
    - Report: where we are, what is in progress / blocked, next 1–3 items
 
 If memory is sparse or noisy, prefer `fact` + `relation` first, then `state`.
+
+### Multi-project isolation
+
+When working across multiple codebases, pass `namespace` to scope memory:
+
+```
+memory_session_bootstrap({
+  objective: "...",
+  namespace: { project: "mmpm-website" },
+  includeGlobal: true   // still include global procedures/corrections
+})
+```
+
+Set `includeGlobal: false` to fully isolate context per project.
 
 ---
 
@@ -88,6 +131,9 @@ If the session is cut short, unsaved knowledge is lost forever.
 7. **Test counts and quality gates** — current pass count, known flaky tests, coverage gaps
 8. **Integration details** — how systems connect, which APIs are used, auth patterns
 9. **Naming conventions** — atom naming patterns that work well for search and recall
+10. **Relations** — when storing a procedure triggered by an event, also store
+    a `v1.relation.*` linking them. Relations are what make Markov predictions
+    powerful — they are the edges between concepts.
 
 ### Atom naming schema
 
@@ -99,7 +145,9 @@ Include metadata suffixes when useful:
 - scope: `_scope_session`, `_scope_sprint`, `_scope_project`
 - date: `_dt_YYYY_MM_DD`
 
-**Never store secrets, private keys, or credentials.**
+**Never store secrets, private keys, or credentials.** The server can
+enforce this with `MMPM_BLOCK_SECRET_ATOMS=1` — atoms that look like
+credentials (API keys, tokens, passwords) will be rejected with HTTP 422.
 
 ---
 
@@ -125,7 +173,10 @@ Train the wrong→correction→right arc so the Markov chain learns:
 
 ```
 session_checkpoint({
-  atoms: ["v1.procedure.never_guess_root_cause_always_diagnose_with_evidence"],
+  atoms: [
+    "v1.procedure.never_guess_root_cause_always_diagnose_with_evidence",
+    "v1.relation.guessing_behaviour_corrected_to_systematic_diagnosis"
+  ],
   train: [
     "v1.event.user_corrected_guessing_behaviour",
     "v1.procedure.never_guess_root_cause_always_diagnose_with_evidence",
@@ -133,6 +184,9 @@ session_checkpoint({
   ]
 })
 ```
+
+Note: always store a `relation` atom linking the correction event to the
+procedure. This strengthens Markov predictions for future similar triggers.
 
 ### Step 3: Apply in future sessions
 
@@ -203,6 +257,10 @@ At each meaningful learning during the session — not just at the end:
 
 This ensures memory survives even if the session is cut short.
 
+After each checkpoint, optionally verify success:
+- Tool: `memory_audit_log` with `limit: 5`, `event: "atom.add"`
+- Confirm the atoms you just stored appear in the log
+
 ---
 
 ## 6) Session End Protocol
@@ -239,6 +297,7 @@ Before the final checkpoint, review:
 3. Did any architecture decisions get made? Store each as a `fact`.
 4. What is the current state of work? Update `state` atoms.
 5. What states are no longer true? Add them to `tombstone`.
+6. Were any relations between concepts discovered? Store each as a `relation`.
 
 ---
 
@@ -284,10 +343,23 @@ When answering users:
 2. **Facts and constraints** — retrieve explicit truths about the project
 3. **Current state** — what's in progress, blocked, or next
 4. **Relations** — links between the current task and architecture/history
-5. **Events** — recent outcomes for chronology and recency
-6. **Markov predictions** — use as hints, not absolute truth
+5. **Semantic search** — if exact atom names don't match but you know roughly
+   what you're looking for, use `memory_search` to find by meaning
+6. **Events** — recent outcomes for chronology and recency
+7. **Markov predictions** — use as hints, not absolute truth
 
 Prefer high-confidence, recent, and task-scoped memory.
+
+### When to use which recall tool
+
+| Situation | Tool |
+|-----------|------|
+| Know the exact atom name | `memory_access` (returns proof + prediction) |
+| Need multiple atoms at once | `memory_batch_access` (efficient batch read) |
+| Know roughly what you need but not the name | `memory_search` (semantic, requires `MMPM_MCP_ENABLE_SEMANTIC_TOOLS=1`) |
+| Need a token-budgeted context block | `memory_context` (semantic, requires `MMPM_MCP_ENABLE_SEMANTIC_TOOLS=1`) |
+| Need to browse by type or prefix | `memory_atoms_list` with `type` or `prefix` filter |
+| Need to inspect one atom with its proof | `memory_atom_get` |
 
 ---
 
@@ -309,6 +381,23 @@ If quality regresses:
 2. tombstone low-value noisy states,
 3. retrain only successful behaviour sequences,
 4. re-run the same profile and compare deltas.
+
+### Memory hygiene (during weekly eval or when memory is noisy)
+
+1. **Find stale atoms:**
+   - Tool: `memory_atoms_stale` with `maxAgeDays: 14`
+   - Review the list — tombstone atoms that are no longer relevant
+   - Especially clean up `state` atoms for completed work
+
+2. **Check audit log:**
+   - Tool: `memory_audit_log` with `limit: 50`
+   - Verify recent mutations look correct
+   - Look for unexpected tombstones or imports
+
+3. **Verify proofs haven't broken:**
+   - Tool: `memory_atom_get` on a few critical facts
+   - Tool: `memory_verify` with the returned proof
+   - Proof failures must remain zero
 
 ---
 
@@ -335,30 +424,195 @@ Claude must always ask for explicit confirmation before taking any action
 involving payment services or stored payment methods. Even if a connector
 is authenticated, each payment action requires fresh explicit approval.
 
+### Security awareness
+
+The server includes security features from Sprint 16 hardening:
+
+- **Injection detection**: Atoms with suspicious patterns (e.g.,
+  `ignore_previous_instructions`, `system_prompt_override`) are flagged and
+  may return HTTP 202 with a `ReviewRequired` status instead of being
+  immediately ingested. If this happens, the atom needs explicit approval
+  via the HTTP API's `reviewApproved: true` parameter (not available via MCP).
+
+- **Secret blocking**: When `MMPM_BLOCK_SECRET_ATOMS=1` is set on the server,
+  atoms that look like credentials are rejected with HTTP 422. This is a
+  server-side safety net — Claude should still never attempt to store secrets.
+
+- **Audit trail**: Use `memory_audit_log` to review recent mutations. This
+  is especially important after imports or bulk operations.
+
+---
+
+## 11) Evidence-Based Retrieval (High-Impact Decisions)
+
+When Claude needs to make a decision that affects production, deployments,
+architecture, or other high-stakes outcomes, use evidence gating to filter
+out low-confidence atoms:
+
+```
+memory_session_bootstrap({
+  objective: "Should we ship to production?",
+  highImpact: true,
+  evidenceThreshold: 0.75
+})
+```
+
+The response includes:
+- `evidenceGate.excluded` — atoms filtered out due to low evidence
+- `evidenceGate.fallbackReason` — why atoms were excluded
+- `decisionEvidence.retrievalRationale` — per-atom evidence scores and reasons
+
+**When to use evidence gating:**
+- Production deployment decisions
+- Architecture choices that are hard to reverse
+- Marking a sprint as complete
+- Answering user questions about system reliability
+
+**When NOT to use it:**
+- Routine session start (use default bootstrap)
+- Exploratory recall during debugging
+- Loading procedures and corrections
+
+---
+
+## 12) Time-Travel Queries
+
+MMPM supports querying memory as it existed at a specific point in time.
+This is critical for auditing past decisions and understanding how memory evolved.
+
+### Query by timestamp
+
+```
+memory_atom_get({
+  atom: "v1.fact.some_architecture_decision",
+  asOfMs: 1772000000000   // Unix ms timestamp
+})
+```
+
+### Query by version
+
+```
+memory_atom_get({
+  atom: "v1.fact.some_architecture_decision",
+  asOfVersion: 42   // Tree version number
+})
+```
+
+### Compare memory then vs now
+
+Use `memory_session_bootstrap` with `asOfMs` to load what memory looked
+like at a past point in time, then compare with current memory:
+
+```
+// What did we know 3 days ago?
+const then = memory_session_bootstrap({ asOfMs: threeDaysAgo })
+
+// What do we know now?
+const now = memory_session_bootstrap({})
+
+// Diff: what atoms were added, tombstoned, or changed?
+```
+
+**When to use time-travel:**
+- Debugging a past decision that now looks wrong
+- Understanding why a procedure was created
+- Auditing what the AI knew when it made a recommendation
+- Verifying that memory wasn't tampered with
+
 ---
 
 ## MCP Tool Quick Reference
 
-| Intent | Tool |
-|--------|------|
-| Session start | `memory_session_bootstrap` |
-| Load atoms by type | `memory_atoms_list` |
-| Recall by association | `memory_access` |
-| Save + commit (mid/end session) | `session_checkpoint` |
-| Check server health | `memory_health` / `memory_ready` |
-| Find stale atoms | `memory_atoms_stale` |
-| Verify a proof | `memory_verify` |
-| Check weekly eval | `memory_weekly_eval_status` |
-| Run weekly eval | `memory_weekly_eval_run` |
+### Read-only tools (always available)
+
+| Tool | Purpose | Key Parameters |
+|------|---------|----------------|
+| `memory_ready` | Check server readiness | — |
+| `memory_health` | Detailed cluster health | — |
+| `memory_access` | Markov recall for one atom with proof | `atom`, `warmRead` |
+| `memory_batch_access` | Batch recall for multiple atoms | `atoms[]` |
+| `memory_atoms_list` | Browse atoms by type/prefix | `type`, `prefix`, `limit`, `offset` |
+| `memory_atom_get` | Inspect one atom + Merkle proof | `atom`, `asOfMs`, `asOfVersion` |
+| `memory_weights_get` | Markov transition weights | `atom` |
+| `memory_atoms_stale` | Find atoms not accessed in N days | `maxAgeDays` (default 30), `type` |
+| `memory_pending` | View ingestion queue | — |
+| `memory_verify` | Verify a Merkle proof (no auth needed) | `atom`, `proof` |
+| `memory_audit_log` | Query mutation history | `limit`, `since`, `event` |
+| `memory_atoms_export` | Export all atoms as NDJSON | `status`, `type` |
+| `memory_policy_get` | Read transition policy | — |
+| `memory_write_policy_get` | Read write-policy tiers | — |
+| `memory_metrics` | Prometheus metrics | — |
+| `memory_weekly_eval_status` | Weekly eval due status | — |
+
+### Semantic tools (require `MMPM_MCP_ENABLE_SEMANTIC_TOOLS=1`)
+
+| Tool | Purpose | Key Parameters |
+|------|---------|----------------|
+| `memory_search` | Find atoms by meaning (semantic search) | `query`, `limit`, `threshold`, `namespace`, `asOfMs`, `asOfVersion` |
+| `memory_context` | Token-budgeted context block | `maxTokens`, `namespace`, `asOfMs`, `asOfVersion` |
+
+### Mutation tools (require `MMPM_MCP_ENABLE_MUTATIONS=1`)
+
+| Tool | Purpose | Key Parameters |
+|------|---------|----------------|
+| `memory_session_bootstrap` | Session start — loads context + predictions | `objective`, `maxTokens`, `limit`, `highImpact`, `evidenceThreshold`, `namespace`, `asOfMs`, `asOfVersion` |
+| `session_checkpoint` | **Primary save tool** — atoms + tombstone + train + commit | `atoms[]`, `tombstone[]`, `train[]` |
+| `memory_atoms_add` | Low-level: queue atoms for ingestion | `atoms[]`, `ttlMs` |
+| `memory_train` | Low-level: train a Markov sequence | `sequence[]` |
+| `memory_commit` | Low-level: flush pending to disk | — |
+| `memory_weekly_eval_run` | Run weekly scientific evaluation | `force` |
+
+### Dangerous tools (require `MMPM_MCP_ENABLE_DANGEROUS=1` + mutations)
+
+| Tool | Purpose | Key Parameters |
+|------|---------|----------------|
+| `memory_atoms_delete` | Tombstone one atom | `atom` |
+| `memory_atoms_import` | Import NDJSON snapshot | `ndjson` |
+| `memory_policy_set` | Update transition policy | `policy` |
+| `memory_write_policy_set` | Update write-policy tiers | `policy` |
 
 ### MCP permission tiers
 
-The server exposes tools in three modes. The default `mcp:serve` covers all normal operations.
+The server exposes tools in four modes based on environment variables:
 
-| Script | Read | Write (add/train/checkpoint/commit) | Dangerous (delete/import/policy) |
-|--------|------|-------------------------------------|----------------------------------|
-| `mcp:serve:readonly` | ✅ | ❌ | ❌ |
-| `mcp:serve` *(default)* | ✅ | ✅ | ❌ |
-| `mcp:serve:unsafe` | ✅ | ✅ | ✅ |
+| Configuration | Read (16 tools) | Semantic (2 tools) | Mutation (6 tools) | Dangerous (4 tools) |
+|---------------|-----------------|--------------------|--------------------|---------------------|
+| Default (no env vars) | ✅ | ❌ | ❌ | ❌ |
+| `MMPM_MCP_ENABLE_SEMANTIC_TOOLS=1` | ✅ | ✅ | ❌ | ❌ |
+| `MMPM_MCP_ENABLE_MUTATIONS=1` | ✅ | ❌ | ✅ | ❌ |
+| Both mutations + dangerous | ✅ | ❌/✅ | ✅ | ✅ |
 
 **Always tombstone via `session_checkpoint`'s `tombstone` field** — not by calling `memory_atoms_delete` directly. `memory_atoms_delete` is a dangerous-tier tool and is unavailable in the default mode.
+
+### Ephemeral atoms with TTL
+
+Use `memory_atoms_add` with `ttlMs` to create atoms that auto-expire.
+This is ideal for temporary session-scoped state that should not persist:
+
+```
+memory_atoms_add({
+  atoms: ["v1.state.currently_debugging_shard_worker_timeout"],
+  ttlMs: 3600000   // expires in 1 hour
+})
+```
+
+**When to use TTL:**
+- Debugging state ("currently investigating X")
+- Temporary hypotheses that need validation before committing
+- Short-lived context that is only relevant to this session
+
+**When NOT to use TTL:**
+- Human corrections (always permanent)
+- Architecture decisions (always permanent)
+- Sprint state (use tombstone when complete instead)
+
+### HTTP-only parameters (not available via MCP)
+
+These parameters exist on the HTTP API but are **not** exposed through
+the MCP tool wrappers:
+
+| Endpoint | Parameter | Purpose |
+|----------|-----------|---------|
+| `POST /atoms` | `reviewApproved: true` | Bypass injection review gate |
+
+To use this, call the HTTP API directly via curl.

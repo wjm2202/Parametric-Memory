@@ -568,16 +568,26 @@ export function createToolDefinitions(options: MmpmMcpOptions = {}): ToolDef[] {
         },
         {
             name: 'memory_atoms_add',
-            description: 'Queue new atoms for ingestion. Wraps POST /atoms.',
+            description:
+                'Queue new atoms for ingestion. Optionally set ttlMs to auto-expire atoms after a duration (useful for temporary session state). Wraps POST /atoms.',
             inputSchema: {
                 type: 'object',
                 properties: {
                     atoms: { type: 'array', items: { type: 'string' }, minItems: 1 },
+                    ttlMs: {
+                        type: 'number',
+                        description:
+                            'Time-to-live in milliseconds. Atoms will auto-expire after this duration. Use for temporary session-scoped state that should not persist.',
+                    },
                 },
                 required: ['atoms'],
                 additionalProperties: false,
             },
-            handler: async args => callApi('POST', '/atoms', { atoms: parseStringArray(args.atoms) }),
+            handler: async args => {
+                const body: Record<string, unknown> = { atoms: parseStringArray(args.atoms) };
+                if (args.ttlMs != null && Number(args.ttlMs) > 0) body.ttlMs = Number(args.ttlMs);
+                return callApi('POST', '/atoms', body);
+            },
             mutating: true,
         },
         {
