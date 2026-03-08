@@ -26,6 +26,7 @@
     "mcp:serve:readonly": "ts-node tools/mcp/mmpm_mcp_server.ts",
     "mcp:serve": "MMPM_MCP_ENABLE_MUTATIONS=1 ts-node tools/mcp/mmpm_mcp_server.ts",
     "mcp:serve:unsafe": "MMPM_MCP_ENABLE_MUTATIONS=1 MMPM_MCP_ENABLE_DANGEROUS=1 ts-node tools/mcp/mmpm_mcp_server.ts",
+    "mcp:http": "MMPM_MCP_ENABLE_MUTATIONS=1 MMPM_MCP_ENABLE_SEMANTIC_TOOLS=1 ts-node tools/mcp/mmpm_mcp_http.ts",
     "backup": "ts-node tools/backup.ts",
     "restore": "ts-node tools/restore.ts",
     "setup": "npm install && npm run build && (test -f .env || cp .env.example .env) && echo 'Ready. Edit .env then: ./start.sh'",

@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "./dist-mcp"
+  },
+  "include": [
+    "tools/mcp/mmpm_mcp_http.ts",
+    "tools/mcp/mmpm_mcp_server.ts",
+    "src/**/*"
+  ],
+  "exclude": [
+    "src/__tests__/**/*"
+  ]
+}
