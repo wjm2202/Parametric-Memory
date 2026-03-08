@@ -74,8 +74,8 @@ services:
       - "443:443"
     volumes:
       - ./nginx.production.conf:/etc/nginx/conf.d/default.conf:ro
-      - certbot-etc:/etc/letsencrypt:ro
-      - certbot-var:/var/lib/letsencrypt
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/lib/letsencrypt:/var/lib/letsencrypt
     depends_on:
       - mmpm-service
       - mmpm-mcp
@@ -87,16 +87,14 @@ services:
   certbot:
     image: certbot/certbot
     volumes:
-      - certbot-etc:/etc/letsencrypt
-      - certbot-var:/var/lib/letsencrypt
+      - /etc/letsencrypt:/etc/letsencrypt
+      - /var/lib/letsencrypt:/var/lib/letsencrypt
     entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/lib/letsencrypt --quiet; sleep 12h & wait $${!}; done'"
     depends_on:
       - nginx
 
 volumes:
   mmpm-data:
-  certbot-etc:
-  certbot-var:
 
 networks:
   mmpm-net:
