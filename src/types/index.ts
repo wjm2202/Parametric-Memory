@@ -14,6 +14,32 @@ export interface MerkleProof {
     index: number;
 }
 
+/**
+ * Consistency proof between two master-tree versions.
+ *
+ * Proves that the tree at `toVersion` is a legitimate evolution of the tree
+ * at `fromVersion`.  A verifier recomputes both master roots from their
+ * respective shard-root snapshots and checks they match the stated hashes.
+ *
+ * Analogous to Certificate Transparency consistency proofs (RFC 6962 §2.1.2)
+ * but adapted for a mutable Merkle tree over shard roots rather than an
+ * append-only log.
+ */
+export interface ConsistencyProof {
+    fromVersion: number;
+    toVersion: number;
+    fromRoot: Hash;
+    toRoot: Hash;
+    fromTimestamp: number;
+    toTimestamp: number;
+    /** Shard roots at fromVersion — recompute master root to verify. */
+    fromShardRoots: Hash[];
+    /** Shard roots at toVersion — recompute master root to verify. */
+    toShardRoots: Hash[];
+    /** Intermediate version→root pairs for chain-of-custody audit. */
+    intermediateRoots: Array<{ version: number; root: Hash }>;
+}
+
 export interface PredictionReport {
     currentData: DataAtom;
     currentProof: MerkleProof;

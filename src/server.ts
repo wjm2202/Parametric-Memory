@@ -21,9 +21,11 @@ import { logger } from './logger';
 import { assertAtomsV1, ATOM_TYPES, AtomType, encodeAtomV1, isAtomV1, normalizeAtomInput, parseAtomV1 } from './atom_schema';
 import { TransitionPolicy, TypePolicyConfig } from './transition_policy';
 import { MerkleSnapshot } from './merkle_snapshot';
-import { MerkleProof } from './types';
+import { ConsistencyProof, MerkleProof } from './types';
+import { MasterKernel } from './master';
 import { AuditLog, AuditEventType } from './audit_log';
 import { TtlRegistry } from './ttl_registry';
+import { Bm25Index, tokenizeText as bm25Tokenize } from './bm25';
 
 // Collect Node.js / process metrics automatically (visible at GET /metrics)
 collectDefaultMetrics();
@@ -137,13 +139,14 @@ function parseMaxTokens(input: unknown): number | null {
 }
 
 function tokenizeText(input: string): string[] {
-    return input
-        .toLowerCase()
-        .split(/[^a-z0-9]+/)
-        .filter(Boolean);
+    return bm25Tokenize(input);
 }
 
-function semanticSimilarityScore(query: string, candidate: string): number {
+/**
+ * Legacy Jaccard similarity — retained for fallback if BM25 index is empty.
+ * @deprecated Prefer bm25Index.scoreBySemanticText() for ranked retrieval.
+ */
+function jaccardSimilarityScore(query: string, candidate: string): number {
     const q = new Set(tokenizeText(query));
     const c = new Set(tokenizeText(candidate));
     if (q.size === 0 || c.size === 0) return 0;
@@ -156,6 +159,33 @@ function semanticSimilarityScore(query: string, candidate: string): number {
 
     const union = new Set([...q, ...c]).size;
     return overlap / union;
+}
+
+/**
+ * Score query vs candidate using the BM25 index if available, Jaccard fallback.
+ * The bm25Index is rebuilt after each ingestion flush (see buildApp).
+ */
+let _bm25Index: Bm25Index = Bm25Index.empty();
+
+function semanticSimilarityScore(query: string, candidate: string): number {
+    if (_bm25Index.size > 0) {
+        return _bm25Index.scoreBySemanticText(query, candidate);
+    }
+    return jaccardSimilarityScore(query, candidate);
+}
+
+/**
+ * Rebuild the BM25 index from the current atom corpus.
+ * Called after orchestrator init and after each ingestion flush.
+ */
+function rebuildBm25Index(orchestrator: ShardedOrchestrator): void {
+    const atoms = orchestrator.listAtoms().filter(e => e.status === 'active');
+    const corpus = atoms.map(entry => {
+        const parsed = parseAtomV1(entry.atom);
+        const semanticText = parsed ? `${parsed.type} ${parsed.value} ${entry.atom}` : entry.atom;
+        return { atom: entry.atom, semanticText };
+    });
+    _bm25Index = Bm25Index.build(corpus);
 }
 
 function parseSearchLimit(input: unknown): number | null {
@@ -736,7 +766,20 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
     const auditLog = new AuditLog(parseInt(process.env.MMPM_AUDIT_LOG_MAX_ENTRIES ?? '1000', 10));
 
     // 14-C-1: TTL registry — optional per-atom expiry with access-aware reset.
-    const ttlRegistry = new TtlRegistry();
+    // Step 5: Auto-promotion — atoms accessed ≥ threshold times graduate to permanent.
+    const promotionThreshold = parseInt(process.env.MMPM_TTL_PROMOTION_THRESHOLD ?? '3', 10);
+    const ttlRegistry = new TtlRegistry({
+        promotionThreshold,
+        onPromote: (atom, entry) => {
+            logger.info({ atom, accessCount: entry.accessCount, ttlMs: entry.ttlMs },
+                '[TTL] Atom promoted to permanent (memory consolidation)');
+            auditLog.record('atom.add', {
+                atoms: [atom],
+                count: 1,
+                meta: { reason: 'ttl-promotion', accessCount: entry.accessCount, threshold: promotionThreshold },
+            });
+        },
+    });
 
     server.addContentTypeParser('application/json', { parseAs: 'string' }, (_request, body, done) => {
         const rawBody = typeof body === 'string' ? body : body.toString('utf8');
@@ -815,7 +858,10 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
     const pipeline = new IngestionPipeline(orchestrator, {
         batchSize: parseInt(process.env.INGEST_BATCH_SIZE ?? '100'),
         flushIntervalMs: parseInt(process.env.INGEST_FLUSH_MS ?? '1000'),
+        onFlush: () => rebuildBm25Index(orchestrator),
     });
+    // Build initial BM25 index from seed/persisted atoms.
+    rebuildBm25Index(orchestrator);
     let writePolicy: WritePolicyConfig = createDefaultWritePolicy();
 
     // Paths that bypass auth and readiness checks.
@@ -825,7 +871,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
     // Set MMPM_METRICS_PUBLIC=1 to expose it without auth (e.g. for Prometheus
     // scrapers that cannot send Authorization headers).
     const metricsPublic = (process.env.MMPM_METRICS_PUBLIC ?? '0') === '1';
-    const probePaths = new Set<string>(['/health', '/ready', '/verify']);
+    const probePaths = new Set<string>(['/health', '/ready', '/verify', '/tree-head', '/verify-consistency']);
     if (metricsPublic) probePaths.add('/metrics');
 
     const resolveTemporalScope = (asOfMsInput: unknown, asOfVersionInput: unknown):
@@ -2107,6 +2153,64 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
     });
 
     /**
+     * GET /tree-head  —  Current master tree version, root, and timestamp.
+     *
+     * Public endpoint (no auth required) — clients cache this and pass
+     * fromVersion on subsequent sessions to detect tampering.
+     */
+    server.get('/tree-head', async (_request, reply) => {
+        const head = orchestrator.getTreeHead();
+        return {
+            version: head.version,
+            root: head.root,
+            timestamp: head.timestamp,
+            checkedAt: Date.now(),
+        };
+    });
+
+    /**
+     * POST /verify-consistency  —  Verify a consistency proof between two tree versions.
+     *
+     * Public endpoint (no auth required).  Accepts either:
+     *   - { fromVersion, toVersion } — server generates and verifies the proof
+     *   - { proof } — client provides a previously obtained proof for re-verification
+     *
+     * Returns: { valid, proof, reason? }
+     */
+    server.post('/verify-consistency', async (request, reply) => {
+        const body = request.body as Record<string, unknown> | null;
+        if (!body || typeof body !== 'object') {
+            return reply.status(400).send({ error: 'Request body must be a JSON object.' });
+        }
+
+        let proof: ConsistencyProof;
+
+        if (body.proof && typeof body.proof === 'object') {
+            // Client-supplied proof — verify it independently
+            proof = body.proof as ConsistencyProof;
+        } else if (typeof body.fromVersion === 'number' && typeof body.toVersion === 'number') {
+            // Server generates proof from its history
+            try {
+                proof = orchestrator.getConsistencyProof(body.fromVersion, body.toVersion);
+            } catch (e: any) {
+                return reply.status(400).send({ error: e.message });
+            }
+        } else {
+            return reply.status(400).send({
+                error: 'Provide either { fromVersion, toVersion } or { proof }.',
+            });
+        }
+
+        const result = MasterKernel.verifyConsistencyProof(proof);
+        return {
+            valid: result.valid,
+            reason: result.reason,
+            proof,
+            checkedAt: Date.now(),
+        };
+    });
+
+    /**
      * DELETE /atoms/:atom  —  Tombstone (soft-delete) a single atom.
      *
      * The atom's Merkle leaf is replaced with a zero sentinel.  No indices shift,
@@ -2122,6 +2226,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
         }
         try {
             const treeVersion = await orchestrator.removeAtom(atom);
+            rebuildBm25Index(orchestrator); // Refresh BM25 after tombstone
             ttlRegistry.delete(atom); // 14-C-1: remove TTL tracking after tombstone
             auditLog.record('atom.tombstone', {
                 atoms: [atom],

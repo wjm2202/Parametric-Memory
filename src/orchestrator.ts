@@ -308,9 +308,17 @@ export class ShardedOrchestrator {
      * Train/Reinforce a sequence across the sharded cluster.
      * Training writes to the Markov matrix only — completely decoupled
      * from the Merkle tree state.  No commit needed.
+     *
+     * Also trains the PPM (variable-order Markov) model on each shard
+     * with the full hash sequence so higher-order contexts are captured.
      */
     async train(sequence: string[]): Promise<void> {
         assertAtomsV1(sequence, 'train.sequence');
+
+        // Build the full hash sequence for PPM training
+        const hashSequence: string[] = [];
+        const shardsTouched = new Set<number>();
+
         for (let i = 0; i < sequence.length - 1; i++) {
             const from = sequence[i];
             const to = sequence[i + 1];
@@ -327,7 +335,20 @@ export class ShardedOrchestrator {
 
                 if (fromHash && toHash) {
                     await shard.recordTransition(fromHash, toHash);
+                    // Collect hashes for PPM training
+                    if (hashSequence.length === 0) hashSequence.push(fromHash);
+                    hashSequence.push(toHash);
+                    shardsTouched.add(fromShardIdx);
+                    shardsTouched.add(toShardIdx);
                 }
+            }
+        }
+
+        // Train PPM on each touched shard with the full hash sequence
+        if (hashSequence.length >= 2) {
+            for (const shardIdx of shardsTouched) {
+                const shard = this.shards.get(shardIdx);
+                if (shard) shard.trainPpm(hashSequence);
             }
         }
     }
@@ -571,6 +592,16 @@ export class ShardedOrchestrator {
     /** Commit timestamp (Unix ms) recorded for a historical master version, if retained. */
     getMasterVersionTimestamp(version: number): number | undefined {
         return this.master.getVersionTimestamp(version);
+    }
+
+    /** Generate a consistency proof between two master-tree versions. */
+    getConsistencyProof(fromVersion: number, toVersion: number) {
+        return this.master.getConsistencyProof(fromVersion, toVersion);
+    }
+
+    /** Current tree head: version + root + timestamp. */
+    getTreeHead() {
+        return this.master.treeHead;
     }
 
     /** Readiness state used by orchestrator probes and startup guards. */
