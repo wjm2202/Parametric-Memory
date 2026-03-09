@@ -535,9 +535,11 @@ export function createToolDefinitions(options: MmpmMcpOptions = {}): ToolDef[] {
             },
             handler: async args => {
                 const results: Record<string, unknown> = {};
+                const hasNewAtoms = Array.isArray(args.atoms) && (args.atoms as string[]).length > 0;
+                const hasTrain = Array.isArray(args.train) && (args.train as string[]).length >= 2;
 
                 // 1. Store new atoms
-                if (Array.isArray(args.atoms) && (args.atoms as string[]).length > 0) {
+                if (hasNewAtoms) {
                     results.stored = await callApi('POST', '/atoms', { atoms: parseStringArray(args.atoms) });
                 }
 
@@ -554,12 +556,19 @@ export function createToolDefinitions(options: MmpmMcpOptions = {}): ToolDef[] {
                     results.tombstoned = tombResults;
                 }
 
-                // 3. Train Markov arc
-                if (Array.isArray(args.train) && (args.train as string[]).length >= 2) {
+                // 3. Commit BEFORE training so newly stored atoms exist in shards.
+                //    Without this, POST /train silently skips atoms that are still
+                //    pending (the "train-on-new-atoms" bug).
+                if (hasNewAtoms || results.tombstoned) {
+                    results.midCommit = await callApi('POST', '/admin/commit', {});
+                }
+
+                // 4. Train Markov arc — atoms are now committed and visible
+                if (hasTrain) {
                     results.trained = await callApi('POST', '/train', { sequence: parseStringArray(args.train) });
                 }
 
-                // 4. Always commit — ensures nothing is lost on restart
+                // 5. Final commit — persists training weights to disk
                 results.committed = await callApi('POST', '/admin/commit', {});
 
                 return results;
@@ -666,6 +675,47 @@ export function createToolDefinitions(options: MmpmMcpOptions = {}): ToolDef[] {
                 };
             },
             mutating: true,
+        },
+        // ── Sprint Step 4: Consistency Proofs ─────────────────────────────────
+        {
+            name: 'memory_tree_head',
+            description:
+                'Get current master tree version, root hash, and timestamp. ' +
+                'Public endpoint (no auth required). Clients cache this and pass ' +
+                'fromVersion on subsequent sessions to detect tampering. ' +
+                'Wraps GET /tree-head.',
+            inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+            handler: async () => callApi('GET', '/tree-head'),
+        },
+        {
+            name: 'memory_verify_consistency',
+            description:
+                'Verify a consistency proof between two tree versions, proving the ' +
+                'master tree evolved honestly (no rewriting history). ' +
+                'Public endpoint (no auth required). ' +
+                'Provide { fromVersion, toVersion } to have the server generate and verify a proof, ' +
+                'or provide { proof } with a previously obtained ConsistencyProof object. ' +
+                'Returns { valid, proof, reason?, checkedAt }. ' +
+                'Wraps POST /verify-consistency.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    fromVersion: { type: 'number', description: 'Starting tree version.' },
+                    toVersion: { type: 'number', description: 'Ending tree version.' },
+                    proof: {
+                        type: 'object',
+                        description: 'A previously obtained ConsistencyProof object for re-verification.',
+                    },
+                },
+                additionalProperties: false,
+            },
+            handler: async args => {
+                const body: Record<string, unknown> = {};
+                if (typeof args.fromVersion === 'number') body.fromVersion = args.fromVersion;
+                if (typeof args.toVersion === 'number') body.toVersion = args.toVersion;
+                if (typeof args.proof === 'object' && args.proof !== null) body.proof = args.proof;
+                return callApi('POST', '/verify-consistency', body);
+            },
         },
         // ── 14-B-1: Export ────────────────────────────────────────────────────
         {

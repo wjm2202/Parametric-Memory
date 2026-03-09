@@ -287,6 +287,67 @@ describe('MCP tool catalog wiring', () => {
         expect(url).toContain('asOfMs=12345');
     });
 
+    it('memory_tree_head handler calls GET /tree-head', async () => {
+        const fetchMock = mockFetchReturning({ version: 5, root: 'abc123', timestamp: 1234567890, checkedAt: 1234567891 });
+        const defs = createToolDefinitions({
+            baseUrl: 'http://127.0.0.1:3000',
+            fetchImpl: fetchMock as unknown as typeof fetch,
+        });
+        const tool = defs.find(t => t.name === 'memory_tree_head');
+        expect(tool).toBeDefined();
+
+        const result = await tool!.handler({});
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        expect(url).toBe('http://127.0.0.1:3000/tree-head');
+        expect(init.method).toBe('GET');
+        expect((result as { version: number }).version).toBe(5);
+    });
+
+    it('memory_verify_consistency handler calls POST /verify-consistency with version range', async () => {
+        const fetchMock = mockFetchReturning({ valid: true, proof: {}, checkedAt: 1234567890 });
+        const defs = createToolDefinitions({
+            baseUrl: 'http://127.0.0.1:3000',
+            fetchImpl: fetchMock as unknown as typeof fetch,
+        });
+        const tool = defs.find(t => t.name === 'memory_verify_consistency');
+        expect(tool).toBeDefined();
+
+        await tool!.handler({ fromVersion: 1, toVersion: 5 });
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        expect(url).toBe('http://127.0.0.1:3000/verify-consistency');
+        expect(init.method).toBe('POST');
+        expect(init.body).toBe(JSON.stringify({ fromVersion: 1, toVersion: 5 }));
+    });
+
+    it('memory_verify_consistency handler forwards a pre-obtained proof object', async () => {
+        const fetchMock = mockFetchReturning({ valid: true });
+        const defs = createToolDefinitions({
+            baseUrl: 'http://127.0.0.1:3000',
+            fetchImpl: fetchMock as unknown as typeof fetch,
+        });
+        const tool = defs.find(t => t.name === 'memory_verify_consistency');
+        expect(tool).toBeDefined();
+
+        const mockProof = { fromVersion: 1, toVersion: 3, fromRoot: 'a', toRoot: 'b', fromShardRoots: [], toShardRoots: [] };
+        await tool!.handler({ proof: mockProof });
+
+        const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        expect(init.body).toBe(JSON.stringify({ proof: mockProof }));
+    });
+
+    it('memory_tree_head is visible by default (no auth required)', () => {
+        const defs = createToolDefinitions({ fetchImpl: mockFetchReturning({ ok: true }) as unknown as typeof fetch });
+        const visible = selectVisibleTools(defs, { enableMutations: false, enableSemanticTools: false });
+        const names = new Set(visible.map(t => t.name));
+
+        expect(names.has('memory_tree_head')).toBe(true);
+        expect(names.has('memory_verify_consistency')).toBe(true);
+    });
+
     it('memory_atoms_delete sends DELETE with minimal JSON body', async () => {
         const fetchMock = mockFetchReturning({ status: 'Success' });
         const defs = createToolDefinitions({
@@ -303,6 +364,95 @@ describe('MCP tool catalog wiring', () => {
         expect(url).toBe('http://127.0.0.1:3000/atoms/v1.fact.example');
         expect(init.method).toBe('DELETE');
         expect(init.body).toBe(JSON.stringify({}));
+    });
+
+    it('session_checkpoint commits BEFORE training so new atoms are visible to train', async () => {
+        const callLog: Array<{ method: string; url: string; body?: string }> = [];
+        const orderTrackingFetch = vi.fn(async (url: string, init: RequestInit) => {
+            callLog.push({ method: init.method ?? 'GET', url, body: init.body as string | undefined });
+            return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        });
+
+        const defs = createToolDefinitions({
+            baseUrl: 'http://127.0.0.1:3000',
+            fetchImpl: orderTrackingFetch as unknown as typeof fetch,
+        });
+        const tool = defs.find(t => t.name === 'session_checkpoint');
+        expect(tool).toBeDefined();
+
+        await tool!.handler({
+            atoms: ['v1.fact.new_atom_A', 'v1.fact.new_atom_B'],
+            train: ['v1.fact.new_atom_A', 'v1.fact.new_atom_B'],
+        });
+
+        // Extract the call sequence
+        const endpoints = callLog.map(c => `${c.method} ${new URL(c.url).pathname}`);
+
+        // Should be: POST /atoms → POST /admin/commit (mid) → POST /train → POST /admin/commit (final)
+        expect(endpoints).toEqual([
+            'POST /atoms',
+            'POST /admin/commit',
+            'POST /train',
+            'POST /admin/commit',
+        ]);
+    });
+
+    it('session_checkpoint skips mid-commit when no atoms or tombstones are involved', async () => {
+        const callLog: Array<{ method: string; url: string }> = [];
+        const orderTrackingFetch = vi.fn(async (url: string, init: RequestInit) => {
+            callLog.push({ method: init.method ?? 'GET', url });
+            return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        });
+
+        const defs = createToolDefinitions({
+            baseUrl: 'http://127.0.0.1:3000',
+            fetchImpl: orderTrackingFetch as unknown as typeof fetch,
+        });
+        const tool = defs.find(t => t.name === 'session_checkpoint');
+        expect(tool).toBeDefined();
+
+        // Train-only checkpoint (atoms already exist from a prior checkpoint)
+        await tool!.handler({
+            train: ['v1.fact.existing_A', 'v1.fact.existing_B'],
+        });
+
+        const endpoints = callLog.map(c => `${c.method} ${new URL(c.url).pathname}`);
+
+        // No mid-commit needed — only train + final commit
+        expect(endpoints).toEqual([
+            'POST /train',
+            'POST /admin/commit',
+        ]);
+    });
+
+    it('session_checkpoint mid-commits after tombstones before training', async () => {
+        const callLog: Array<{ method: string; url: string }> = [];
+        const orderTrackingFetch = vi.fn(async (url: string, init: RequestInit) => {
+            callLog.push({ method: init.method ?? 'GET', url });
+            return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        });
+
+        const defs = createToolDefinitions({
+            baseUrl: 'http://127.0.0.1:3000',
+            fetchImpl: orderTrackingFetch as unknown as typeof fetch,
+        });
+        const tool = defs.find(t => t.name === 'session_checkpoint');
+        expect(tool).toBeDefined();
+
+        await tool!.handler({
+            tombstone: ['v1.state.old_state'],
+            train: ['v1.fact.A', 'v1.fact.B'],
+        });
+
+        const endpoints = callLog.map(c => `${c.method} ${new URL(c.url).pathname}`);
+
+        // Tombstone + mid-commit + train + final commit
+        expect(endpoints).toEqual([
+            'DELETE /atoms/v1.state.old_state',
+            'POST /admin/commit',
+            'POST /train',
+            'POST /admin/commit',
+        ]);
     });
 
     it('memory_weekly_eval_status reads due-state from weekly_eval_state.json', async () => {

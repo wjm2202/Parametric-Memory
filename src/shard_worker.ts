@@ -19,6 +19,8 @@ import {
 import { assertAtomV1, AtomType, parseAtomV1 } from './atom_schema';
 import { CsrTransitionMatrix } from './csr_matrix';
 import { TransitionPolicy } from './transition_policy';
+import { HalfLifeModel, extractProvenance, parseThetaFromEnv } from './hlr';
+import { PpmModel } from './ppm';
 
 /** High-resolution Unix timestamp in ms (sub-millisecond precision). */
 const hrnow = (): number => performance.timeOrigin + performance.now();
@@ -105,6 +107,15 @@ export class ShardWorker {
     private transitionUpdatedAt: Map<number, Map<Hash, number>> = new Map();
     private readonly confidenceHalfLifeMs: number;
 
+    // ─── HLR: adaptive per-atom decay ─────────────────────────────────
+    private accessCounts: Map<number, number> = new Map();
+    private readonly hlrModel: HalfLifeModel | null;
+    /** Provenance cache per atom index (extracted once from atom name). */
+    private atomProvenances: Array<'human' | 'test' | 'research' | 'default'> = [];
+
+    // ─── PPM: variable-order Markov prediction ──────────────────────
+    private readonly ppmModel: PpmModel | null;
+
     // ─── Tombstone tracking ─────────────────────────────────────────────
     private tombstoned: Set<number> = new Set();
 
@@ -186,6 +197,28 @@ export class ShardWorker {
             : undefined;
         const configuredHalfLife = options?.confidenceHalfLifeMs ?? envHalfLife ?? (7 * 24 * 60 * 60 * 1000);
         this.confidenceHalfLifeMs = Number.isFinite(configuredHalfLife) ? configuredHalfLife : 0;
+
+        // HLR: adaptive per-atom half-life.  Enabled when base half-life > 0
+        // and MMPM_HLR_ENABLED is not explicitly '0'.
+        const hlrEnabled = (process.env.MMPM_HLR_ENABLED ?? '1') !== '0';
+        if (hlrEnabled && this.confidenceHalfLifeMs > 0) {
+            const theta = parseThetaFromEnv(process.env.MMPM_HLR_THETA);
+            this.hlrModel = new HalfLifeModel(this.confidenceHalfLifeMs, theta);
+        } else {
+            this.hlrModel = null;
+        }
+        // Initialise provenance cache for seed atoms
+        this.atomProvenances = dataBlocks.map(atom => extractProvenance(atom));
+
+        // PPM: variable-order Markov.  Enabled unless MMPM_PPM_ENABLED=0.
+        const ppmEnabled = (process.env.MMPM_PPM_ENABLED ?? '1') !== '0';
+        if (ppmEnabled) {
+            const maxOrder = parseInt(process.env.MMPM_PPM_MAX_ORDER ?? '3', 10);
+            const escapeThreshold = parseFloat(process.env.MMPM_PPM_ESCAPE_THRESHOLD ?? '0.3');
+            this.ppmModel = new PpmModel({ maxOrder, escapeThreshold });
+        } else {
+            this.ppmModel = null;
+        }
     }
 
     /**
@@ -428,6 +461,17 @@ export class ShardWorker {
                 this.transitionUpdatedAt.get(fromIdx)!.set(toHash, updatedAtMs);
             }
 
+            // ── 8c. Hydrate access counts & provenance for HLR ───────────
+            this.accessCounts = new Map();
+            for await (const [key, value] of this.db.iterator({ gte: 'ac:', lte: 'ac:~' })) {
+                const idx = parseInt(key.slice(3), 10);
+                const count = parseInt(value, 10);
+                if (Number.isFinite(idx) && Number.isFinite(count) && count > 0) {
+                    this.accessCounts.set(idx, count);
+                }
+            }
+            this.atomProvenances = this.data.map(atom => extractProvenance(atom));
+
             // Build CSR projection once on startup so read path is warm.
             this.rebuildCsrMatrix();
             this.csrDirty = false;
@@ -559,6 +603,7 @@ export class ShardWorker {
             this.atomHashes.set(atom, this.hashAtom(atom));
             this.dataIndex.set(atom, idx);
             this.atomCreatedAtMs[idx] = createdAtMs;
+            this.atomProvenances[idx] = extractProvenance(atom);
 
             // 3. Queue for snapshot commit
             this.pending.addLeaf(atom);
@@ -716,6 +761,22 @@ export class ShardWorker {
         return bestIdx >= 0 ? this.data[bestIdx] : null;
     }
 
+    /**
+     * Train the PPM model with a sequence of leaf hashes.
+     * Called by the orchestrator with the full hash sequence (may include
+     * cross-shard hashes — the PPM trie handles unknown symbols gracefully).
+     */
+    trainPpm(hashSequence: Hash[]): void {
+        if (this.ppmModel && hashSequence.length >= 2) {
+            this.ppmModel.train(hashSequence);
+        }
+    }
+
+    /** Get PPM model statistics (for diagnostics). */
+    getPpmStats(): { maxOrder: number; escapeThreshold: number; nodeCount: number; historyLength: number } | null {
+        return this.ppmModel?.getStats() ?? null;
+    }
+
     async recordTransition(from: Hash, to: Hash) {
         const fromIdx = this.hashToIndex.get(from);
         if (fromIdx === undefined) return;
@@ -816,25 +877,58 @@ export class ShardWorker {
     }
 
     private buildAccessResult(snapshot: MerkleSnapshot, idx: number): ShardAccessResult {
+        // HLR: increment access count (fire-and-forget persistence)
+        const newCount = (this.accessCounts.get(idx) ?? 0) + 1;
+        this.accessCounts.set(idx, newCount);
+        const acKey = `ac:${String(idx).padStart(10, '0')}`;
+        this.db.put(acKey, String(newCount))
+            .catch((err: unknown) => logger.error({ err }, 'Access count persist error'));
+
         const hash = snapshot.getLeafHash(idx);
         const proof = snapshot.getProof(idx);
+
+        // PPM: record this access in the running history for context-aware prediction
+        if (this.ppmModel) {
+            this.ppmModel.recordAccess(hash);
+        }
 
         let predictedHash: Hash | null = null;
         let predictedIdx = -1;
         let policyFiltered = false;
 
         if (this.policy.isOpenPolicy()) {
-            if (this.isConfidenceDecayEnabled()) {
-                predictedHash = this.getPredictedHashFromMap(idx);
-            } else if (this.csrMatrix.atomCount === 0) {
-                predictedHash = this.getPredictedHashFromMap(idx);
-            } else {
-                const topIdx = this.csrMatrix.getTopPrediction(idx);
-                if (topIdx >= 0 && !this.tombstoned.has(topIdx) && topIdx < snapshot.leafCount) {
-                    predictedHash = snapshot.getLeafHash(topIdx);
-                    predictedIdx = topIdx;
-                } else {
+            // PPM: try variable-order prediction first (higher-order context)
+            if (this.ppmModel) {
+                const tombstoneHashes = new Set<string>();
+                for (const tIdx of this.tombstoned) {
+                    if (tIdx < snapshot.leafCount) tombstoneHashes.add(snapshot.getLeafHash(tIdx));
+                }
+                const ppmPrediction = this.ppmModel.predict(tombstoneHashes);
+                if (ppmPrediction && ppmPrediction.order >= 2) {
+                    // Only use PPM when it has genuine higher-order context (order ≥ 2)
+                    // Order-1 is equivalent to our existing first-order Markov with decay
+                    const ppmIdx = this.hashToIndex.get(ppmPrediction.predicted);
+                    if (ppmIdx !== undefined && this.isCandidateIndexReadable(snapshot, ppmIdx)) {
+                        predictedHash = ppmPrediction.predicted;
+                        predictedIdx = ppmIdx;
+                    }
+                }
+            }
+
+            // Fall back to first-order Markov if PPM didn't produce a result
+            if (predictedHash === null) {
+                if (this.isConfidenceDecayEnabled()) {
                     predictedHash = this.getPredictedHashFromMap(idx);
+                } else if (this.csrMatrix.atomCount === 0) {
+                    predictedHash = this.getPredictedHashFromMap(idx);
+                } else {
+                    const topIdx = this.csrMatrix.getTopPrediction(idx);
+                    if (topIdx >= 0 && !this.tombstoned.has(topIdx) && topIdx < snapshot.leafCount) {
+                        predictedHash = snapshot.getLeafHash(topIdx);
+                        predictedIdx = topIdx;
+                    } else {
+                        predictedHash = this.getPredictedHashFromMap(idx);
+                    }
                 }
             }
 
@@ -1021,8 +1115,31 @@ export class ShardWorker {
         if (updatedAt === undefined) return rawWeight;
 
         const elapsedMs = Math.max(0, this.clock() - updatedAt);
+
+        // HLR: use per-atom half-life if model is available
+        if (this.hlrModel) {
+            const features = this.getHlrFeatures(fromIdx);
+            return this.hlrModel.computeEffectiveWeight(rawWeight, elapsedMs, features);
+        }
+
+        // Fallback: global half-life
         const decayFactor = Math.pow(0.5, elapsedMs / this.confidenceHalfLifeMs);
         return rawWeight * decayFactor;
+    }
+
+    /** Build HLR features for a given atom index. */
+    private getHlrFeatures(idx: number): import('./hlr').HlrFeatures {
+        const outgoing = this.transitions.get(idx);
+        let trainingPasses = 0;
+        if (outgoing) {
+            for (const w of outgoing.values()) trainingPasses += w;
+        }
+        return {
+            accessCount: this.accessCounts.get(idx) ?? 0,
+            trainingPasses,
+            atomType: this.atomTypes[idx] ?? 'other',
+            provenance: this.atomProvenances[idx] ?? 'default',
+        };
     }
 
     async close(): Promise<void> {

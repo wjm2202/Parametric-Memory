@@ -1,6 +1,7 @@
+import { createHash } from 'crypto';
 import { performance } from 'perf_hooks';
 import { MerkleKernel } from './merkle';
-import { Hash, MerkleProof } from './types';
+import { ConsistencyProof, Hash, MerkleProof } from './types';
 
 const hrnow = (): number => performance.timeOrigin + performance.now();
 
@@ -15,6 +16,12 @@ export class MasterKernel {
      */
     private readonly rootHistory: Map<number, Hash> = new Map();
     private readonly versionTimestampHistory: Map<number, number> = new Map();
+    /**
+     * Maps masterVersion → snapshot of shard roots at that version.
+     * Required for consistency proofs: verifier recomputes master root from shard roots.
+     * Evicted alongside rootHistory entries.
+     */
+    private readonly shardRootSnapshots: Map<number, Hash[]> = new Map();
     private readonly HISTORY_WINDOW = 100;
     /**
      * Records the snapshot version that produced each shard's current root.
@@ -117,18 +124,161 @@ export class MasterKernel {
         return this.kernel?.getProof(shardIdx);
     }
 
+    // -----------------------------------------------------------------------
+    // Consistency Proofs
+    // -----------------------------------------------------------------------
+
+    /**
+     * Generate a consistency proof between two master-tree versions.
+     *
+     * The proof contains the shard-root snapshots at both versions, allowing
+     * an independent verifier to recompute both master roots and confirm
+     * the tree evolved legitimately.
+     *
+     * @throws RangeError if either version is outside the history window.
+     */
+    getConsistencyProof(fromVersion: number, toVersion: number): ConsistencyProof {
+        if (fromVersion >= toVersion) {
+            throw new RangeError(`fromVersion (${fromVersion}) must be less than toVersion (${toVersion})`);
+        }
+
+        const fromRoot = this.rootHistory.get(fromVersion);
+        const toRoot = this.rootHistory.get(toVersion);
+        if (fromRoot === undefined) {
+            throw new RangeError(`fromVersion ${fromVersion} is outside the history window (oldest: ${this.oldestVersion})`);
+        }
+        if (toRoot === undefined) {
+            throw new RangeError(`toVersion ${toVersion} is outside the history window (newest: ${this._version})`);
+        }
+
+        const fromShardRoots = this.shardRootSnapshots.get(fromVersion);
+        const toShardRoots = this.shardRootSnapshots.get(toVersion);
+        if (!fromShardRoots || !toShardRoots) {
+            throw new RangeError('Shard root snapshots missing for requested versions');
+        }
+
+        const fromTimestamp = this.versionTimestampHistory.get(fromVersion) ?? 0;
+        const toTimestamp = this.versionTimestampHistory.get(toVersion) ?? 0;
+
+        // Collect intermediate roots for chain-of-custody audit
+        const intermediateRoots: Array<{ version: number; root: Hash }> = [];
+        for (let v = fromVersion + 1; v < toVersion; v++) {
+            const root = this.rootHistory.get(v);
+            if (root !== undefined) {
+                intermediateRoots.push({ version: v, root });
+            }
+        }
+
+        return {
+            fromVersion,
+            toVersion,
+            fromRoot,
+            toRoot,
+            fromTimestamp,
+            toTimestamp,
+            fromShardRoots: [...fromShardRoots],
+            toShardRoots: [...toShardRoots],
+            intermediateRoots,
+        };
+    }
+
+    /**
+     * Verify a consistency proof independently.
+     *
+     * Recomputes both master roots from the provided shard-root snapshots
+     * and checks they match the stated hashes.  Also verifies the
+     * intermediate chain is monotonically ordered.
+     *
+     * This is a static method — can be called without access to the server's
+     * state, making it suitable for client-side verification.
+     */
+    static verifyConsistencyProof(proof: ConsistencyProof): { valid: boolean; reason?: string } {
+        // 1. Version ordering
+        if (proof.fromVersion >= proof.toVersion) {
+            return { valid: false, reason: 'fromVersion must be less than toVersion' };
+        }
+
+        // 2. Recompute master root from fromShardRoots
+        const recomputedFrom = MasterKernel.computeMasterRoot(proof.fromShardRoots);
+        if (recomputedFrom !== proof.fromRoot) {
+            return {
+                valid: false,
+                reason: `fromRoot mismatch: stated ${proof.fromRoot.slice(0, 16)}... recomputed ${recomputedFrom.slice(0, 16)}...`,
+            };
+        }
+
+        // 3. Recompute master root from toShardRoots
+        const recomputedTo = MasterKernel.computeMasterRoot(proof.toShardRoots);
+        if (recomputedTo !== proof.toRoot) {
+            return {
+                valid: false,
+                reason: `toRoot mismatch: stated ${proof.toRoot.slice(0, 16)}... recomputed ${recomputedTo.slice(0, 16)}...`,
+            };
+        }
+
+        // 4. Verify intermediate chain is monotonically ordered
+        let prevVersion = proof.fromVersion;
+        for (const { version } of proof.intermediateRoots) {
+            if (version <= prevVersion) {
+                return {
+                    valid: false,
+                    reason: `Intermediate chain not monotonic at version ${version}`,
+                };
+            }
+            prevVersion = version;
+        }
+
+        // 5. Verify timestamps are non-decreasing
+        if (proof.toTimestamp < proof.fromTimestamp) {
+            return {
+                valid: false,
+                reason: 'toTimestamp is earlier than fromTimestamp',
+            };
+        }
+
+        return { valid: true };
+    }
+
+    /**
+     * Compute a master Merkle root from shard roots — mirrors the internal
+     * MerkleKernel construction.  Used for independent proof verification.
+     */
+    static computeMasterRoot(shardRoots: Hash[]): Hash {
+        if (shardRoots.length === 0) return '0'.repeat(64);
+        const kernel = new MerkleKernel(shardRoots);
+        return kernel.root;
+    }
+
+    /** The oldest version still in the history window. */
+    get oldestVersion(): number {
+        const oldest = this._version - this.HISTORY_WINDOW + 1;
+        return Math.max(1, oldest);
+    }
+
+    /** Current tree head: version + root + timestamp. */
+    get treeHead(): { version: number; root: Hash; timestamp: number } {
+        return {
+            version: this._version,
+            root: this.masterRoot,
+            timestamp: this.versionTimestampHistory.get(this._version) ?? 0,
+        };
+    }
+
     private recordVersionAfterRootChange(): void {
         // Re-build the master tree whenever child shard roots change.
         this.kernel = new MerkleKernel(this.shardRoots);
         this._version++;
         this.rootHistory.set(this._version, this.kernel.root);
         this.versionTimestampHistory.set(this._version, hrnow());
+        // Snapshot shard roots for consistency proofs
+        this.shardRootSnapshots.set(this._version, [...this.shardRoots]);
 
         // Evict the oldest entries once the history window is exceeded.
         const evictVersion = this._version - this.HISTORY_WINDOW;
         if (evictVersion > 0) {
             this.rootHistory.delete(evictVersion);
             this.versionTimestampHistory.delete(evictVersion);
+            this.shardRootSnapshots.delete(evictVersion);
         }
     }
 }
