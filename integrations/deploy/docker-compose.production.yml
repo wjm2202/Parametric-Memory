@@ -62,9 +62,10 @@ services:
       - ../../.env.production
     environment:
       # MCP-specific overrides
+      # MMPM_API_KEY and MMPM_MCP_AUTH_KEY come from env_file above.
+      # Do NOT re-declare them here — docker compose interpolates ${VAR} from
+      # the host shell (not from env_file), which overwrites with blank strings.
       MMPM_MCP_BASE_URL: "http://mmpm-service:3000"
-      MMPM_MCP_API_KEY: "${MMPM_API_KEY}"
-      MMPM_MCP_AUTH_KEY: "${MMPM_MCP_AUTH_KEY}"
       MMPM_MCP_ENABLE_MUTATIONS: "1"
       MMPM_MCP_ENABLE_SEMANTIC_TOOLS: "1"
       MCP_PORT: "3001"
