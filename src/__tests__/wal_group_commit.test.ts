@@ -315,8 +315,7 @@ describe('ShardWorker — Batched Training (Group Commit)', () => {
         // Results should be identical
         expect(stats2.trainedAtoms).toBe(stats1.trainedAtoms);
         expect(stats2.totalEdges).toBe(stats1.totalEdges);
-        expect(r2.predictedNext?.atom).toBe(r1.predictedNext?.atom);
-        expect(r2.predictedNext?.weight).toBe(r1.predictedNext?.weight);
+        expect(r2.next).toBe(r1.next);
 
         await w1.close();
         await w2.close();
