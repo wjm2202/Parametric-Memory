@@ -25,9 +25,13 @@ RUN apk add --no-cache libstdc++
 WORKDIR /app
 # Pre-create the mount point so Docker bind-mounts it with correct ownership.
 # The actual DB files come from the host at ${HOME}/.mmpm/data (see compose).
-RUN mkdir -p /app/mmpm-db
+RUN mkdir -p /app/mmpm-db /app/data
 COPY package*.json ./
 RUN npm install --only=production
 COPY --from=builder /app/dist ./dist
+# Model2Vec vocabulary — mounted at runtime via docker-compose bind-mount.
+# fromFile() auto-detects: tries .bin first (10× faster), falls back to .json,
+# then n-gram hash embeddings if neither exists.
+ENV MODEL2VEC_VOCAB_PATH=/app/data/model2vec_vocab.bin
 EXPOSE 3000
 CMD ["node", "dist/server.js"]

@@ -20,19 +20,22 @@ services:
     build: .
     ports:
       - "3000:3000"
+    # Load all env vars from .env — keeps Docker in sync with bare-metal (start.sh).
+    # Container-specific overrides below take precedence over the env file.
+    env_file:
+      - .env
     environment:
-      - MMPM_API_KEY=${MMPM_API_KEY:-}
-      - MMPM_ATOM_FILE=/app/seeds.json
-      - SHARD_COUNT=${SHARD_COUNT:-4}
-      # DB lives at ~/.mmpm/data on the host, bind-mounted into the container.
-      # This is the same path used by start.sh and the MCP config — all three
-      # modes share one DB so memory is never split across locations.
-      - DB_BASE_PATH=/app/mmpm-db
+      # Container-specific overrides:
       # Bind all interfaces so Docker port-forwarding can reach the server.
       # The server defaults to 127.0.0.1 (S16 hardening) which is correct for
       # bare-metal deployments, but inside a container network isolation comes
       # from Docker itself — the app must listen on 0.0.0.0.
       - HOST=0.0.0.0
+      # DB lives at ~/.mmpm/data on the host, bind-mounted into the container.
+      # This is the same path used by start.sh and the MCP config — all three
+      # modes share one DB so memory is never split across locations.
+      - DB_BASE_PATH=/app/mmpm-db
+      - MMPM_ATOM_FILE=/app/seeds.json
     volumes:
       # Bind-mount host ~/.mmpm/data so Docker, start.sh, and MCP all share
       # the same LevelDB files.  ${HOME} is expanded by Docker Compose from

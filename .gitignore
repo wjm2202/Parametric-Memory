@@ -9,13 +9,23 @@ dist-mcp/
 
 # ── LevelDB / runtime data ────────────────────────────────────────────
 # All runtime DB and WAL files live under DB_BASE_PATH (default: ./data)
-data/
+# Note: data/ directory is NOT blanket-ignored because we commit model2vec_vocab.bin.
+# Instead, ignore specific runtime files within data/.
+data/*.json
+data/*.ldb
+data/*.sst
+data/LOCK
+data/CURRENT
+data/LOG
+data/MANIFEST-*
 # Legacy path (pre-v1.1 default)
 mmpm-db/
 # Harness and smoke-test databases (still written to cwd by some tools)
 mmpm-test-smoke-db*/
 mmpm-demo-db/
 mmpm-harness-cli-db*/
+mmpm-bench-db*/
+test-*-db-*/
 
 # ── Environment files ─────────────────────────────────────────────────
 # Block ALL .env variants — they may contain secrets
@@ -59,6 +69,11 @@ docs/README_PUBLIC_ARCHIVE.md
 
 # ── Benchmark artifacts ─────────────────────────────────────────────────────
 tools/harness/results/**/
+
+# ── Deploy artifacts ─────────────────────────────────────────────────
+.droplet-info
+.mmpm-keys
+backups/
 
 # ── Docker ────────────────────────────────────────────────────────────
 # (docker-compose.yml and Dockerfile ARE committed)

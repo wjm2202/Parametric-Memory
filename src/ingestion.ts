@@ -74,16 +74,16 @@ export class IngestionPipeline {
     private totalCommitted: number = 0;
     private lastFlushMs: number | null = null;
 
-    /** Optional callback invoked after each successful flush (e.g. BM25 index rebuild). */
-    private readonly onFlush: (() => void) | undefined;
+    /** Optional callback invoked after each successful flush (e.g. BM25 index update). */
+    private readonly onFlush: ((flushedAtoms: string[]) => void) | undefined;
 
     constructor(
         orchestrator: ShardedOrchestrator,
         options?: {
             batchSize?: number;
             flushIntervalMs?: number;
-            /** Called after each successful flush — useful for rebuilding derived indices. */
-            onFlush?: () => void;
+            /** Called after each successful flush with the atoms that were added. */
+            onFlush?: (flushedAtoms: string[]) => void;
         }
     ) {
         this.orchestrator = orchestrator;
@@ -195,7 +195,7 @@ export class IngestionPipeline {
                 this.totalCommitted += batch.length;
                 this.lastFlushMs = Date.now();
                 if (this.onFlush) {
-                    try { this.onFlush(); } catch { /* index rebuild failure must not break ingestion */ }
+                    try { this.onFlush(batch); } catch { /* index update failure must not break ingestion */ }
                 }
             } catch (err) {
                 // Re-queue on failure so atoms aren't silently dropped
