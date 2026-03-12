@@ -27,10 +27,12 @@
     "mcp:serve": "MMPM_MCP_ENABLE_MUTATIONS=1 ts-node tools/mcp/mmpm_mcp_server.ts",
     "mcp:serve:unsafe": "MMPM_MCP_ENABLE_MUTATIONS=1 MMPM_MCP_ENABLE_DANGEROUS=1 ts-node tools/mcp/mmpm_mcp_server.ts",
     "mcp:http": "MMPM_MCP_ENABLE_MUTATIONS=1 MMPM_MCP_ENABLE_SEMANTIC_TOOLS=1 ts-node tools/mcp/mmpm_mcp_http.ts",
+    "snapshot:pre-upgrade": "ts-node tools/snapshot_pre_upgrade.ts",
     "backup": "ts-node tools/backup.ts",
     "restore": "ts-node tools/restore.ts",
     "setup": "npm install && npm run build && (test -f .env || cp .env.example .env) && echo 'Ready. Edit .env then: ./start.sh'",
-    "skill:pack": "cd integrations && zip -r parametric-memory.skill claude-skill/ && echo 'Packaged integrations/parametric-memory.skill'"
+    "skill:pack": "cd integrations && zip -r parametric-memory.skill claude-skill/ && echo 'Packaged integrations/parametric-memory.skill'",
+    "convert:vocab": "ts-node tools/convert_vocab_to_binary.ts"
   },
   "keywords": [
     "ai-memory",

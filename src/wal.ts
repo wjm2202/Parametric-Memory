@@ -60,6 +60,7 @@ export class ShardWAL {
     private fd: fsp.FileHandle | null = null;
     private seq: number = 0;
     private bytesSinceLastStat: number = 0;
+    private batchBuffer: WalEntry[] = [];
 
     /**
      * @param walFilePath  Full path to the WAL file, e.g. "./mmpm-db/shard_0.wal"
@@ -142,6 +143,70 @@ export class ShardWAL {
         };
         entry.ck = checksum(entry);
         await this.appendLine(entry);
+    }
+
+    // ─── Batched writes (group commit) ────────────────────────────────
+
+    /**
+     * Buffer an ADD entry without fsyncing.
+     * Call flushBatch() after all entries are buffered to fsync once.
+     */
+    writeAddBatched(data: string, index?: number): void {
+        const entry: WalEntry = {
+            seq: ++this.seq,
+            ts: Date.now(),
+            op: 'ADD',
+            data,
+            index,
+            ck: '',
+        };
+        entry.ck = checksum(entry);
+        this.batchBuffer.push(entry);
+    }
+
+    /**
+     * Buffer a TOMBSTONE entry without fsyncing.
+     * Call flushBatch() after all entries are buffered to fsync once.
+     */
+    writeTombstoneBatched(index: number): void {
+        const entry: WalEntry = {
+            seq: ++this.seq,
+            ts: Date.now(),
+            op: 'TOMBSTONE',
+            index,
+            ck: '',
+        };
+        entry.ck = checksum(entry);
+        this.batchBuffer.push(entry);
+    }
+
+    /**
+     * Flush all buffered entries in a single write() + single fsync().
+     * This is the group commit: N entries, 1 fsync instead of N fsyncs.
+     * Returns the number of entries flushed.
+     */
+    async flushBatch(): Promise<number> {
+        const count = this.batchBuffer.length;
+        if (count === 0) return 0;
+
+        if (!this.fd) await this.open();
+
+        const payload = this.batchBuffer.map(e => JSON.stringify(e)).join('\n') + '\n';
+        await this.fd!.write(payload);
+        await this.fd!.sync();
+
+        this.bytesSinceLastStat += Buffer.byteLength(payload, 'utf8');
+        this.batchBuffer = [];
+
+        await this.compactIfNeeded();
+        return count;
+    }
+
+    /**
+     * Number of entries currently buffered (not yet fsynced).
+     */
+    get pendingBatchSize(): number {
+        return this.batchBuffer.length;
     }
 
     /**

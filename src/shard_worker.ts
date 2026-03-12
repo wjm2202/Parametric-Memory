@@ -1,8 +1,9 @@
-import { ClassicLevel as Level } from 'classic-level';
 import { performance } from 'perf_hooks';
 import { DataAtom, Hash, MerkleProof, TOMBSTONE_HASH } from './types';
 import { MerkleSnapshot } from './merkle_snapshot';
 import { PendingWrites } from './pending_writes';
+import { StorageBackend } from './storage_backend';
+import { LevelDbBackend } from './leveldb_backend';
 import { EpochManager, ReadTicket } from './epoch';
 import { ShardWAL } from './wal';
 import { createHash } from 'crypto';
@@ -21,6 +22,15 @@ import { CsrTransitionMatrix } from './csr_matrix';
 import { TransitionPolicy } from './transition_policy';
 import { HalfLifeModel, extractProvenance, parseThetaFromEnv } from './hlr';
 import { PpmModel } from './ppm';
+import { AccessLog } from './access_log';
+import { TierEngine, parseThresholdsFromEnv } from './tier_engine';
+import {
+    ConsolidationCycle,
+    ConsolidationShardInterface,
+    ConsolidationResult,
+    parseConsolidationOptionsFromEnv,
+} from './consolidation';
+import type { Tier } from './tier_engine';
 
 /** High-resolution Unix timestamp in ms (sub-millisecond precision). */
 const hrnow = (): number => performance.timeOrigin + performance.now();
@@ -83,6 +93,11 @@ export type ShardBatchAccessItemResult =
  *   ai:<paddedIdx>         — All atoms (seeds + dynamically added)
  *   th:<hash>              — Tombstone marker
  *   ts:<paddedIdx>         — Atom creation timestamp (Unix ms, stored as string)
+ *   ac:<paddedIdx>         — Access count
+ *   la:<paddedIdx>         — Last access timestamp (Sprint 15)
+ *   tier:<paddedIdx>       — Tier classification: h|w|c (Sprint 15)
+ *   ppm:<context>          — PPM trie node (Sprint 13)
+ *   al:<padTimestamp>      — Access log entry (Sprint 14)
  */
 export class ShardWorker {
     // ─── Atom state ─────────────────────────────────────────────────────
@@ -116,11 +131,42 @@ export class ShardWorker {
     // ─── PPM: variable-order Markov prediction ──────────────────────
     private readonly ppmModel: PpmModel | null;
 
+    // ─── Access log: HLR training data (Sprint 14) ───────────────────
+    private readonly accessLog: AccessLog | null;
+
+    // ─── Tier classification & consolidation (Sprint 15) ──────────────
+    private readonly tierEngine: TierEngine | null;
+    private readonly consolidation: ConsolidationCycle | null;
+    private consolidationTimer: ReturnType<typeof setInterval> | null = null;
+    private readonly consolidationIntervalMs: number;
+
+    // ─── Last access timestamp per atom (for tier classification) ─────
+    private lastAccessedAtMs: Map<number, number> = new Map();
+
     // ─── Tombstone tracking ─────────────────────────────────────────────
     private tombstoned: Set<number> = new Set();
 
+    // ─── Batched transition writes (group commit) ─────────────────────
+    private pendingTransitionBatch: Array<{ key: string; value: string }> = [];
+
+    // ─── STDP: Spike-Timing-Dependent Plasticity (Sprint 12) ─────────
+    /**
+     * Time constant for STDP exponential decay (ms).
+     * Training within tauMs of the last transition update gives full weight.
+     * Default: 300_000 ms = 5 minutes.  Set to 0 to disable STDP (classic +1).
+     */
+    private readonly stdpTauMs: number;
+
+    // ─── Active forgetting / pruning (Sprint 12) ─────────────────────
+    /** Whether background pruning is enabled. Default: false. */
+    private readonly pruneEnabled: boolean;
+    /** Minimum age (ms) before a transition is eligible for pruning. */
+    private readonly pruneStaleDays: number;
+    /** Effective weight threshold below which stale transitions are pruned. */
+    private readonly pruneWeightThreshold: number;
+
     // ─── Persistence ────────────────────────────────────────────────────
-    private db: Level<string, string>;
+    private storage: StorageBackend;
     private wal: ShardWAL;
     private readonly dbPath: string;
 
@@ -151,6 +197,16 @@ export class ShardWorker {
             confidenceHalfLifeMs?: number;
             /** Custom clock function returning Unix ms. Defaults to sub-ms hrnow(). */
             clock?: () => number;
+            /** Custom storage backend. Defaults to LevelDbBackend(dbPath). */
+            storage?: StorageBackend;
+            /** STDP time constant in ms. Training within this window gives full weight. 0 = disabled (classic +1). Default: 300000. */
+            stdpTauMs?: number;
+            /** Enable background pruning of stale transitions. Default: false. */
+            pruneEnabled?: boolean;
+            /** Age in days before a transition becomes prune-eligible. Default: 30. */
+            pruneStaleDays?: number;
+            /** Effective weight threshold for pruning. Default: 0.1. */
+            pruneWeightThreshold?: number;
         }
     ) {
         this.clock = options?.clock ?? hrnow;
@@ -167,10 +223,7 @@ export class ShardWorker {
         this.activeSnapshot = MerkleSnapshot.fromData(dataBlocks, 0);
         this.pending = new PendingWrites(0);
 
-        this.db = new Level<string, string>(dbPath, {
-            blockSize: 4096,
-            cacheSize: 2 * 1024 * 1024,
-        });
+        this.storage = options?.storage ?? new LevelDbBackend(dbPath);
 
         const walCompactThresholdBytes = process.env.MMPM_WAL_COMPACT_THRESHOLD_BYTES
             ? parseInt(process.env.MMPM_WAL_COMPACT_THRESHOLD_BYTES, 10)
@@ -211,14 +264,54 @@ export class ShardWorker {
         this.atomProvenances = dataBlocks.map(atom => extractProvenance(atom));
 
         // PPM: variable-order Markov.  Enabled unless MMPM_PPM_ENABLED=0.
+        // Sprint 13: PPM trie is now persisted to LevelDB on commit.
         const ppmEnabled = (process.env.MMPM_PPM_ENABLED ?? '1') !== '0';
         if (ppmEnabled) {
             const maxOrder = parseInt(process.env.MMPM_PPM_MAX_ORDER ?? '3', 10);
             const escapeThreshold = parseFloat(process.env.MMPM_PPM_ESCAPE_THRESHOLD ?? '0.3');
-            this.ppmModel = new PpmModel({ maxOrder, escapeThreshold });
+            const maxNodes = parseInt(process.env.MMPM_PPM_MAX_NODES ?? '100000', 10);
+            this.ppmModel = new PpmModel({ maxOrder, escapeThreshold, maxNodes });
         } else {
             this.ppmModel = null;
         }
+
+        // Sprint 14: Access log for HLR training data.  Enabled unless MMPM_ACCESS_LOG_ENABLED=0.
+        const accessLogEnabled = (process.env.MMPM_ACCESS_LOG_ENABLED ?? '1') !== '0';
+        if (accessLogEnabled) {
+            const maxEntries = parseInt(process.env.MMPM_ACCESS_LOG_MAX ?? '50000', 10);
+            this.accessLog = new AccessLog(this.storage, { maxEntries });
+        } else {
+            this.accessLog = null;
+        }
+
+        // Sprint 15: Tier classification engine.  Enabled unless MMPM_TIER_ENABLED=0.
+        const tierEnabled = (process.env.MMPM_TIER_ENABLED ?? '1') !== '0';
+        if (tierEnabled) {
+            const thresholds = parseThresholdsFromEnv();
+            this.tierEngine = new TierEngine(this.hlrModel, thresholds);
+
+            const consolidationOpts = parseConsolidationOptionsFromEnv();
+            this.consolidationIntervalMs = consolidationOpts.intervalMs ?? 60 * 60 * 1000; // 1 hour
+            const shardInterface = this.buildConsolidationInterface();
+            this.consolidation = new ConsolidationCycle(this.tierEngine, shardInterface, {
+                ...consolidationOpts,
+                clock: this.clock,
+            });
+        } else {
+            this.tierEngine = null;
+            this.consolidation = null;
+            this.consolidationIntervalMs = 0;
+        }
+
+        // STDP: Spike-Timing-Dependent Plasticity (Sprint 12)
+        // Default: 0 (disabled, classic +1). Set MMPM_STDP_TAU_MS=300000 in production.
+        const envTau = parseInt(process.env.MMPM_STDP_TAU_MS ?? '', 10);
+        this.stdpTauMs = options?.stdpTauMs ?? (Number.isFinite(envTau) && envTau > 0 ? envTau : 0);
+
+        // Active forgetting / pruning (Sprint 12)
+        this.pruneEnabled = options?.pruneEnabled ?? (process.env.MMPM_PRUNE_ENABLED === '1');
+        this.pruneStaleDays = options?.pruneStaleDays ?? parseInt(process.env.MMPM_PRUNE_STALE_DAYS ?? '30', 10);
+        this.pruneWeightThreshold = options?.pruneWeightThreshold ?? 0.1;
     }
 
     /**
@@ -243,12 +336,12 @@ export class ShardWorker {
      */
     async init() {
         try {
-            await this.db.open(); await this.wal.open();
+            await this.storage.open(); await this.wal.open();
             this.retiredSnapshots.clear();
 
             // ── 1. Persist seeds to LevelDB ─────────────────────────────
             if (this.data.length > 0) {
-                const batch = this.db.batch();
+                const batch = this.storage.batch();
                 for (let i = 0; i < this.data.length; i++) {
                     batch.put(`ai:${String(i).padStart(10, '0')}`, this.data[i]);
                 }
@@ -261,7 +354,7 @@ export class ShardWorker {
             this.atomHashes = new Map();
             this.dataIndex = new Map();
             this.atomCreatedAtMs = [];
-            for await (const [, value] of this.db.iterator({ gte: 'ai:', lte: 'ai:~' })) {
+            for await (const [, value] of this.storage.iterator({ gte: 'ai:', lte: 'ai:~' })) {
                 const atom = value as string;
                 const parsed = parseAtomV1(atom);
                 if (!parsed) {
@@ -281,7 +374,7 @@ export class ShardWorker {
                 const tsKey = `ts:${String(i).padStart(10, '0')}`;
                 let createdAtMs: number;
                 try {
-                    const raw = await this.db.get(tsKey);
+                    const raw = await this.storage.get(tsKey);
                     if (raw === undefined) {
                         throw new Error(`Missing timestamp value for key ${tsKey}`);
                     }
@@ -292,7 +385,7 @@ export class ShardWorker {
                     createdAtMs = parsed;
                 } catch {
                     createdAtMs = this.clock();
-                    await this.db.put(tsKey, String(createdAtMs))
+                    await this.storage.put(tsKey, String(createdAtMs))
                         .catch((err: unknown) => logger.error({ err }, 'Timestamp backfill persist error'));
                 }
                 this.atomCreatedAtMs[i] = createdAtMs;
@@ -300,7 +393,7 @@ export class ShardWorker {
 
             // ── 3. Collect tombstone hashes ──────────────────────────────
             const tombstoneHashes = new Set<string>();
-            for await (const [key] of this.db.iterator({ gte: 'th:', lte: 'th:~' })) {
+            for await (const [key] of this.storage.iterator({ gte: 'th:', lte: 'th:~' })) {
                 tombstoneHashes.add(key.slice(3));
             }
 
@@ -323,7 +416,7 @@ export class ShardWorker {
             const rawWeights: Array<[number, string, number]> = [];   // [fromIdx, toHash, weight]
             const legacyKeys: Array<[string, string, string, number]> = []; // [wKey, fromHash, toHash, weight]
 
-            for await (const [key, value] of this.db.iterator({ gte: 'w:', lte: 'w:~' })) {
+            for await (const [key, value] of this.storage.iterator({ gte: 'w:', lte: 'w:~' })) {
                 const parts = key.split(':');
                 if (parts.length !== 3) continue;
                 const weight = parseInt(value, 10);
@@ -356,10 +449,10 @@ export class ShardWorker {
                     this.dataIndex.set(entry.data, idx);
                     const createdAtMs = Number.isFinite(entry.ts) && entry.ts > 0 ? entry.ts : this.clock();
                     this.atomCreatedAtMs[idx] = createdAtMs;
-                    await this.db
+                    await this.storage
                         .put(`ai:${String(idx).padStart(10, '0')}`, entry.data)
                         .catch((err: unknown) => logger.error({ err }, 'WAL recovery db.put error'));
-                    await this.db
+                    await this.storage
                         .put(`ts:${String(idx).padStart(10, '0')}`, String(createdAtMs))
                         .catch((err: unknown) => logger.error({ err }, 'WAL recovery timestamp persist error'));
                 } else if (entry.op === 'TOMBSTONE' && entry.index !== undefined) {
@@ -385,7 +478,7 @@ export class ShardWorker {
                     const hash = idx < this.activeSnapshot.leafCount
                         ? this.activeSnapshot.getLeafHash(idx) : '';
                     if (hash) {
-                        await this.db.put(`th:${hash}`, '1')
+                        await this.storage.put(`th:${hash}`, '1')
                             .catch((err: unknown) => logger.error({ err }, 'WAL tombstone persist error'));
                     }
                 }
@@ -409,7 +502,7 @@ export class ShardWorker {
                     const fromIdx = this.hashToIndex.get(fromHash);
                     if (fromIdx === undefined) {
                         // Atom not present in this shard — stale key, drop it
-                        await this.db.del(oldWKey)
+                        await this.storage.del(oldWKey)
                             .catch((err: unknown) => logger.error({ err }, 'Migration: del stale legacy w: key'));
                         continue;
                     }
@@ -419,18 +512,18 @@ export class ShardWorker {
                     const newTsKey = `wu:${String(fromIdx).padStart(10, '0')}:${toHash}`;
 
                     // Write new key then delete old — idempotent if interrupted
-                    await this.db.put(newWKey, String(weight))
+                    await this.storage.put(newWKey, String(weight))
                         .catch((err: unknown) => logger.error({ err }, 'Migration: write new w: key'));
-                    await this.db.del(oldWKey)
+                    await this.storage.del(oldWKey)
                         .catch((err: unknown) => logger.error({ err }, 'Migration: del old w: key'));
 
                     // Migrate timestamp key if it exists
                     let tsVal: string | undefined;
-                    try { tsVal = await this.db.get(oldTsKey); } catch { /* missing is fine */ }
+                    try { tsVal = await this.storage.get(oldTsKey); } catch { /* missing is fine */ }
                     if (tsVal !== undefined) {
-                        await this.db.put(newTsKey, tsVal)
+                        await this.storage.put(newTsKey, tsVal)
                             .catch((err: unknown) => logger.error({ err }, 'Migration: write new wu: key'));
-                        await this.db.del(oldTsKey)
+                        await this.storage.del(oldTsKey)
                             .catch((err: unknown) => logger.error({ err }, 'Migration: del old wu: key'));
                     }
 
@@ -444,7 +537,7 @@ export class ShardWorker {
             // issuing one db.get() per weight — turns O(N) random-access reads
             // into a single sequential sweep, cutting startup I/O significantly.
             const wuMap = new Map<string, number>();
-            for await (const [key, value] of this.db.iterator({ gte: 'wu:', lte: 'wu:~' })) {
+            for await (const [key, value] of this.storage.iterator({ gte: 'wu:', lte: 'wu:~' })) {
                 const parsed = parseInt(value, 10);
                 if (Number.isFinite(parsed) && parsed > 0) wuMap.set(key, parsed);
             }
@@ -463,7 +556,7 @@ export class ShardWorker {
 
             // ── 8c. Hydrate access counts & provenance for HLR ───────────
             this.accessCounts = new Map();
-            for await (const [key, value] of this.db.iterator({ gte: 'ac:', lte: 'ac:~' })) {
+            for await (const [key, value] of this.storage.iterator({ gte: 'ac:', lte: 'ac:~' })) {
                 const idx = parseInt(key.slice(3), 10);
                 const count = parseInt(value, 10);
                 if (Number.isFinite(idx) && Number.isFinite(count) && count > 0) {
@@ -471,6 +564,56 @@ export class ShardWorker {
                 }
             }
             this.atomProvenances = this.data.map(atom => extractProvenance(atom));
+
+            // ── 8d. Restore PPM trie from LevelDB (Sprint 13) ────────────
+            if (this.ppmModel) {
+                const ppmEntries = new Map<string, string>();
+                for await (const [key, value] of this.storage.iterator({ gte: 'ppm:', lte: 'ppm:~' })) {
+                    ppmEntries.set(key, value);
+                }
+                if (ppmEntries.size > 0) {
+                    this.ppmModel.deserialize(ppmEntries);
+                    const warnings = this.ppmModel.verify();
+                    if (warnings.length > 0) {
+                        logger.warn(
+                            { shard: this._shardId, warnings },
+                            'PPM trie integrity warnings — clearing and starting fresh'
+                        );
+                        this.ppmModel.clear();
+                    } else {
+                        logger.info(
+                            { shard: this._shardId, nodeCount: this.ppmModel.getStats().nodeCount },
+                            'PPM trie restored from LevelDB'
+                        );
+                    }
+                }
+            }
+
+            // ── 8e. Initialize access log (Sprint 14) ─────────────────────
+            if (this.accessLog) {
+                await this.accessLog.init();
+                logger.info(
+                    { shard: this._shardId, entries: this.accessLog.count },
+                    'Access log initialized'
+                );
+            }
+
+            // ── 8f. Load tier metadata & last-access timestamps (Sprint 15) ──
+            this.lastAccessedAtMs = new Map();
+            for await (const [key, value] of this.storage.iterator({ gte: 'la:', lte: 'la:~' })) {
+                const idx = parseInt(key.slice(3), 10);
+                const ts = parseInt(value, 10);
+                if (Number.isFinite(idx) && Number.isFinite(ts) && ts > 0) {
+                    this.lastAccessedAtMs.set(idx, ts);
+                }
+            }
+            if (this.consolidation) {
+                await this.consolidation.loadTiers();
+                logger.info(
+                    { shard: this._shardId, tiers: this.consolidation.getCachedSummary() },
+                    'Tier metadata loaded'
+                );
+            }
 
             // Build CSR projection once on startup so read path is warm.
             this.rebuildCsrMatrix();
@@ -493,6 +636,17 @@ export class ShardWorker {
                 }
             }, this.commitIntervalMs);
         }
+
+        // ── 11. Consolidation timer (Sprint 15) ──────────────────────────
+        if (this.consolidation && this.consolidationIntervalMs > 0) {
+            this.consolidationTimer = setInterval(async () => {
+                if (this.consolidation && !this.consolidation.isRunning()) {
+                    await this.consolidation.run().catch(
+                        (err: unknown) => logger.error({ err, shard: this._shardId }, 'Consolidation cycle failed'),
+                    );
+                }
+            }, this.consolidationIntervalMs);
+        }
     }
 
     // ─── Snapshot & commit operations ───────────────────────────────────
@@ -513,6 +667,38 @@ export class ShardWorker {
         // Record the commit in the WAL and clear it — the snapshot is now durable
         await this.wal.writeCommit();
         await this.wal.truncate();
+
+        // Sprint 13: Persist PPM trie if it has been modified since last save
+        if (this.ppmModel?.dirty) {
+            await this.persistPpmTrie().catch(
+                (err: unknown) => logger.error({ err, shard: this._shardId }, 'PPM trie persistence failed'),
+            );
+        }
+
+        // Sprint 15: Classify tiers for all active atoms during commit
+        if (this.consolidation) {
+            const nowMs = this.clock();
+            const atomsToClassify: Array<{ index: number; features: import('./hlr').HlrFeatures; lastAccessedMs: number }> = [];
+            for (let i = 0; i < this.data.length; i++) {
+                if (this.tombstoned.has(i)) continue;
+                atomsToClassify.push({
+                    index: i,
+                    features: this.getHlrFeatures(i),
+                    lastAccessedMs: this.lastAccessedAtMs.get(i) ?? this.atomCreatedAtMs[i] ?? 0,
+                });
+            }
+            await this.consolidation.batchClassifyAndPersist(atomsToClassify, this.storage, nowMs).catch(
+                (err: unknown) => logger.error({ err, shard: this._shardId }, 'Tier classification failed'),
+            );
+        }
+
+        // Sprint 12: Active forgetting — prune stale transitions during commit
+        if (this.pruneEnabled) {
+            await this.pruneStaleTransitions().catch(
+                (err: unknown) => logger.error({ err, shard: this._shardId }, 'Prune stale transitions failed'),
+            );
+        }
+
         return version;
     }
 
@@ -587,6 +773,8 @@ export class ShardWorker {
      * the LevelDB write completes.
      */
     async addAtoms(atoms: DataAtom[]): Promise<void> {
+        // Group commit: buffer all WAL entries, then single fsync + single storage batch
+        const toAdd: Array<{ atom: DataAtom; idx: number; createdAtMs: number }> = [];
         for (const atom of atoms) {
             assertAtomV1(atom, 'addAtoms.atom');
             if (this.dataIndex.has(atom)) continue;
@@ -594,8 +782,8 @@ export class ShardWorker {
             const idx = this.data.length;
             const createdAtMs = this.clock();
 
-            // 1. WAL first — fsync ensures we can recover from here
-            await this.wal.writeAdd(atom, idx);
+            // 1a. Buffer WAL entry (no fsync yet)
+            this.wal.writeAddBatched(atom, idx);
 
             // 2. In-memory state
             this.data.push(atom);
@@ -609,13 +797,25 @@ export class ShardWorker {
             this.pending.addLeaf(atom);
             this.lastPendingMutationAtMs = this.clock();
 
-            // 4. LevelDB persist
-            await this.db
-                .put(`ai:${String(idx).padStart(10, '0')}`, atom)
-                .catch((err: unknown) => logger.error({ err }, 'Shard persistence error (addAtoms)'));
-            await this.db
-                .put(`ts:${String(idx).padStart(10, '0')}`, String(createdAtMs))
-                .catch((err: unknown) => logger.error({ err }, 'Shard persistence error (addAtoms ts)'));
+            toAdd.push({ atom, idx, createdAtMs });
+        }
+
+        if (toAdd.length > 0) {
+            // 1b. Single WAL fsync for all entries
+            await this.wal.flushBatch();
+
+            // 4. Single storage batch for all atoms + timestamps
+            try {
+                let batch = this.storage.batch();
+                for (const { atom, idx, createdAtMs } of toAdd) {
+                    const idxStr = String(idx).padStart(10, '0');
+                    batch = batch.put(`ai:${idxStr}`, atom);
+                    batch = batch.put(`ts:${idxStr}`, String(createdAtMs));
+                }
+                await batch.write();
+            } catch (err: unknown) {
+                logger.error({ err }, 'Shard persistence error (addAtoms batch)');
+            }
         }
 
         if (this.pending.size >= this.commitThreshold && !this.epoch.isCommitting) {
@@ -651,7 +851,7 @@ export class ShardWorker {
         this.lastPendingMutationAtMs = this.clock();
 
         // 4. LevelDB persist
-        await this.db
+        await this.storage
             .put(`th:${hash}`, '1')
             .catch((err: unknown) => logger.error({ err }, 'Shard persistence error (tombstone)'));
     }
@@ -772,9 +972,144 @@ export class ShardWorker {
         }
     }
 
+    /**
+     * Sprint 14: Log a training event for HLR training data.
+     * Called from orchestrator.train() with the atom names in the sequence.
+     */
+    logTrainEvents(atomNames: string[]): void {
+        if (!this.accessLog) return;
+        const ts = this.clock();
+        const entries = atomNames.map(atom => ({ atom, type: 'train' as const, ts }));
+        this.accessLog.appendBatch(entries)
+            .catch((err: unknown) => logger.error({ err }, 'Access log train event error'));
+    }
+
+    /** Sprint 14: Expose access log for diagnostics / training pipeline. */
+    getAccessLog(): AccessLog | null {
+        return this.accessLog;
+    }
+
+    /** Sprint 15: Expose tier classification for an atom. */
+    getAtomTier(atom: DataAtom): Tier | undefined {
+        const idx = this.dataIndex.get(atom);
+        if (idx === undefined) return undefined;
+        return this.consolidation?.getTier(idx);
+    }
+
+    /** Sprint 15: Get tier summary. */
+    getTierSummary(): { hot: number; warm: number; cold: number; total: number } | null {
+        return this.consolidation?.getCachedSummary() ?? null;
+    }
+
+    /** Sprint 15: Get last consolidation result. */
+    getLastConsolidationResult(): ConsolidationResult | null {
+        return this.consolidation?.getLastResult() ?? null;
+    }
+
+    /** Sprint 15: Run consolidation cycle manually. */
+    async runConsolidation(): Promise<ConsolidationResult | null> {
+        if (!this.consolidation) return null;
+        return this.consolidation.run();
+    }
+
+    /**
+     * Sprint 15: Build the ConsolidationShardInterface adapter.
+     * Bridges between the ShardWorker and the ConsolidationCycle without
+     * exposing the full ShardWorker to consolidation.ts.
+     */
+    private buildConsolidationInterface(): ConsolidationShardInterface {
+        // eslint-disable-next-line @typescript-eslint/no-this-alias
+        const self = this;
+        return {
+            getAtomCount(): number {
+                return self.data.length;
+            },
+            isTombstoned(index: number): boolean {
+                return self.tombstoned.has(index);
+            },
+            getHlrFeatures(index: number): import('./hlr').HlrFeatures {
+                return self.getHlrFeatures(index);
+            },
+            getLastAccessedMs(index: number): number {
+                return self.lastAccessedAtMs.get(index) ?? self.atomCreatedAtMs[index] ?? 0;
+            },
+            getStorage(): StorageBackend {
+                return self.storage;
+            },
+            async replayMarkovArcs(indices: number[]): Promise<void> {
+                // Hippocampal replay: for each hot atom, re-train its strongest
+                // outgoing Markov transition with a fresh timestamp.
+                // This refreshes the decay timer on important connections.
+                for (const fromIdx of indices) {
+                    const targets = self.transitions.get(fromIdx);
+                    if (!targets || targets.size === 0) continue;
+
+                    // Find the strongest outgoing edge
+                    let bestHash: string | null = null;
+                    let bestWeight = -Infinity;
+                    for (const [toHash, weight] of targets) {
+                        const effectiveWeight = self.getEffectiveTransitionWeight(fromIdx, toHash, weight);
+                        if (effectiveWeight > bestWeight) {
+                            bestWeight = effectiveWeight;
+                            bestHash = toHash;
+                        }
+                    }
+
+                    if (bestHash !== null) {
+                        // Refresh the timestamp — this counters decay
+                        const nowMs = self.clock();
+                        const updatedAtMap = self.transitionUpdatedAt.get(fromIdx);
+                        if (updatedAtMap) {
+                            updatedAtMap.set(bestHash, nowMs);
+                        }
+                        // Persist refreshed timestamp
+                        const idxStr = String(fromIdx).padStart(10, '0');
+                        await self.storage
+                            .put(`wu:${idxStr}:${bestHash}`, nowMs.toString())
+                            .catch((err: unknown) => logger.error({ err }, 'Replay timestamp persist error'));
+                    }
+                }
+            },
+        };
+    }
+
     /** Get PPM model statistics (for diagnostics). */
     getPpmStats(): { maxOrder: number; escapeThreshold: number; nodeCount: number; historyLength: number } | null {
         return this.ppmModel?.getStats() ?? null;
+    }
+
+    /**
+     * Compute the STDP weight delta for a transition from a given atom.
+     *
+     * STDP (Spike-Timing-Dependent Plasticity):
+     *   delta = max(1, round(1000 * exp(-dt / tau)))
+     *
+     * where dt = now - lastTransitionUpdateTime(fromIdx).
+     * If STDP is disabled (tau = 0), returns 1000 (equivalent to classic +1 at 1000x scale).
+     *
+     * The 1000x multiplier gives sub-millisecond precision when quantized to integer.
+     * Minimum delta is 1 — no trained transition ever has zero weight.
+     */
+    private computeStdpDelta(fromIdx: number): number {
+        if (this.stdpTauMs <= 0) return 1; // STDP disabled — classic +1
+
+        const nowMs = this.clock();
+        // Use the most recent transition update time for this atom (any edge)
+        const updatedAtMap = this.transitionUpdatedAt.get(fromIdx);
+        let lastUpdateMs = 0;
+        if (updatedAtMap && updatedAtMap.size > 0) {
+            for (const ts of updatedAtMap.values()) {
+                if (ts > lastUpdateMs) lastUpdateMs = ts;
+            }
+        }
+        // Fall back to atom creation time if no transitions exist
+        if (lastUpdateMs === 0) {
+            lastUpdateMs = this.atomCreatedAtMs[fromIdx] ?? nowMs;
+        }
+
+        const dt = Math.max(0, nowMs - lastUpdateMs);
+        const raw = Math.exp(-dt / this.stdpTauMs);
+        return Math.max(1, Math.round(raw * 1000));
     }
 
     async recordTransition(from: Hash, to: Hash) {
@@ -784,7 +1119,8 @@ export class ShardWorker {
         if (!this.transitionUpdatedAt.has(fromIdx)) this.transitionUpdatedAt.set(fromIdx, new Map());
         const targets = this.transitions.get(fromIdx)!;
         const targetsUpdatedAt = this.transitionUpdatedAt.get(fromIdx)!;
-        const newWeight = (targets.get(to) || 0) + 1;
+        const delta = this.computeStdpDelta(fromIdx);
+        const newWeight = (targets.get(to) || 0) + delta;
         const updatedAtMs = this.clock();
         targets.set(to, newWeight);
         targetsUpdatedAt.set(to, updatedAtMs);
@@ -793,12 +1129,63 @@ export class ShardWorker {
         // all outgoing edges from a given atom are lexicographically adjacent,
         // improving compaction locality and cutting key size by ~40%.
         const idxStr = String(fromIdx).padStart(10, '0');
-        await this.db
+        await this.storage
             .put(`w:${idxStr}:${to}`, newWeight.toString())
             .catch((err: unknown) => logger.error({ err }, 'Shard persistence error'));
-        await this.db
+        await this.storage
             .put(`wu:${idxStr}:${to}`, updatedAtMs.toString())
             .catch((err: unknown) => logger.error({ err }, 'Shard confidence timestamp persistence error'));
+    }
+
+    /**
+     * Buffer a transition in memory without writing to storage.
+     * In-memory maps are updated immediately (so subsequent recordTransitionBatched
+     * calls see cumulative weights), but storage writes are deferred until
+     * flushTransitionBatch() is called — a single storage.batch().write() for
+     * all buffered edges. This reduces per-edge I/O from 2 puts to 0, with
+     * a single batch write at the end.
+     *
+     * Uses STDP delta: recent training gives full weight, distant training diminishes.
+     */
+    recordTransitionBatched(from: Hash, to: Hash): void {
+        const fromIdx = this.hashToIndex.get(from);
+        if (fromIdx === undefined) return;
+        if (!this.transitions.has(fromIdx)) this.transitions.set(fromIdx, new Map());
+        if (!this.transitionUpdatedAt.has(fromIdx)) this.transitionUpdatedAt.set(fromIdx, new Map());
+        const targets = this.transitions.get(fromIdx)!;
+        const targetsUpdatedAt = this.transitionUpdatedAt.get(fromIdx)!;
+        const delta = this.computeStdpDelta(fromIdx);
+        const newWeight = (targets.get(to) || 0) + delta;
+        const updatedAtMs = this.clock();
+        targets.set(to, newWeight);
+        targetsUpdatedAt.set(to, updatedAtMs);
+        this.csrDirty = true;
+        const idxStr = String(fromIdx).padStart(10, '0');
+        this.pendingTransitionBatch.push(
+            { key: `w:${idxStr}:${to}`, value: newWeight.toString() },
+            { key: `wu:${idxStr}:${to}`, value: updatedAtMs.toString() },
+        );
+    }
+
+    /**
+     * Flush all buffered transition writes in a single storage batch operation.
+     * Returns the number of individual put operations written.
+     */
+    async flushTransitionBatch(): Promise<number> {
+        const ops = this.pendingTransitionBatch;
+        if (ops.length === 0) return 0;
+        try {
+            let batch = this.storage.batch();
+            for (const op of ops) {
+                batch = batch.put(op.key, op.value);
+            }
+            await batch.write();
+        } catch (err: unknown) {
+            logger.error({ err }, 'flushTransitionBatch storage error');
+        }
+        const count = ops.length;
+        this.pendingTransitionBatch = [];
+        return count;
     }
 
     async access(item: DataAtom): Promise<ShardAccessResult> {
@@ -881,8 +1268,21 @@ export class ShardWorker {
         const newCount = (this.accessCounts.get(idx) ?? 0) + 1;
         this.accessCounts.set(idx, newCount);
         const acKey = `ac:${String(idx).padStart(10, '0')}`;
-        this.db.put(acKey, String(newCount))
+        this.storage.put(acKey, String(newCount))
             .catch((err: unknown) => logger.error({ err }, 'Access count persist error'));
+
+        // Sprint 15: Track last-access timestamp for tier classification
+        const nowMs = this.clock();
+        this.lastAccessedAtMs.set(idx, nowMs);
+        const laKey = `la:${String(idx).padStart(10, '0')}`;
+        this.storage.put(laKey, String(Math.round(nowMs)))
+            .catch((err: unknown) => logger.error({ err }, 'Last-access timestamp persist error'));
+
+        // Sprint 14: Log access event for HLR training data
+        if (this.accessLog && idx < this.data.length) {
+            this.accessLog.append({ atom: this.data[idx], type: 'access', ts: this.clock() })
+                .catch((err: unknown) => logger.error({ err }, 'Access log append error'));
+        }
 
         const hash = snapshot.getLeafHash(idx);
         const proof = snapshot.getProof(idx);
@@ -1105,6 +1505,110 @@ export class ShardWorker {
         return result;
     }
 
+    /**
+     * Sprint 12: Active forgetting — prune stale, low-weight transitions.
+     *
+     * A transition is pruned when BOTH conditions are met:
+     *   1. Not updated in `pruneStaleDays` days
+     *   2. Effective weight (after HLR/global decay) below `pruneWeightThreshold`
+     *
+     * High-weight transitions survive regardless of age.
+     * Only prunes weights — atoms are only removed by explicit tombstone.
+     */
+    async pruneStaleTransitions(): Promise<number> {
+        const nowMs = this.clock();
+        const staleThresholdMs = this.pruneStaleDays * 24 * 60 * 60 * 1000;
+        const keysToDelete: string[] = [];
+        const inMemoryDeletes: Array<{ fromIdx: number; toHash: Hash }> = [];
+
+        for (const [fromIdx, targets] of this.transitions) {
+            const updatedAtMap = this.transitionUpdatedAt.get(fromIdx);
+            if (!targets || targets.size === 0) continue;
+
+            for (const [toHash, rawWeight] of targets) {
+                const updatedAt = updatedAtMap?.get(toHash) ?? 0;
+                const age = nowMs - updatedAt;
+                if (age < staleThresholdMs) continue; // not stale
+
+                const effectiveWeight = this.getEffectiveTransitionWeight(fromIdx, toHash, rawWeight);
+                if (effectiveWeight >= this.pruneWeightThreshold) continue; // still strong
+
+                // Both conditions met — mark for pruning
+                const idxStr = String(fromIdx).padStart(10, '0');
+                keysToDelete.push(`w:${idxStr}:${toHash}`);
+                keysToDelete.push(`wu:${idxStr}:${toHash}`);
+                inMemoryDeletes.push({ fromIdx, toHash });
+            }
+        }
+
+        if (keysToDelete.length === 0) return 0;
+
+        // Batch delete from storage
+        let batch = this.storage.batch();
+        for (const key of keysToDelete) {
+            batch = batch.del(key);
+        }
+        await batch.write();
+
+        // Delete from in-memory maps
+        for (const { fromIdx, toHash } of inMemoryDeletes) {
+            this.transitions.get(fromIdx)?.delete(toHash);
+            this.transitionUpdatedAt.get(fromIdx)?.delete(toHash);
+            // Clean up empty maps
+            if (this.transitions.get(fromIdx)?.size === 0) {
+                this.transitions.delete(fromIdx);
+                this.transitionUpdatedAt.delete(fromIdx);
+            }
+        }
+
+        if (inMemoryDeletes.length > 0) {
+            this.csrDirty = true;
+        }
+
+        logger.info(
+            { shard: this._shardId, pruned: inMemoryDeletes.length },
+            'Pruned stale transitions',
+        );
+
+        return inMemoryDeletes.length;
+    }
+
+    /**
+     * Sprint 13: Persist the PPM trie to LevelDB.
+     *
+     * Strategy: serialize the full trie to a flat key-value map, then
+     * write all entries in a single batch.  Old ppm: keys are deleted first
+     * to handle node removal (e.g. after pruning).
+     *
+     * If the trie exceeds maxNodes, prune before serializing.
+     */
+    private async persistPpmTrie(): Promise<void> {
+        if (!this.ppmModel) return;
+
+        // Prune if over the node cap
+        this.ppmModel.prune();
+
+        const entries = this.ppmModel.serialize();
+        let batch = this.storage.batch();
+
+        // Delete all existing ppm: keys first (clean slate)
+        for await (const [key] of this.storage.iterator({ gte: 'ppm:', lte: 'ppm:~' })) {
+            batch = batch.del(key);
+        }
+
+        // Write new entries
+        for (const [key, value] of entries) {
+            batch = batch.put(key, value);
+        }
+
+        await batch.write();
+
+        logger.info(
+            { shard: this._shardId, ppmEntries: entries.size },
+            'PPM trie persisted to LevelDB'
+        );
+    }
+
     private isConfidenceDecayEnabled(): boolean {
         return this.confidenceHalfLifeMs > 0;
     }
@@ -1142,13 +1646,260 @@ export class ShardWorker {
         };
     }
 
+    // ─── Full-fidelity export ──────────────────────────────────────────
+
+    /**
+     * Export all shard state as portable NDJSON records.
+     *
+     * Records are fully resolved: weight keys (which use shard-local indices
+     * internally) are mapped back to atom names so the export is portable
+     * across shard count / routing changes.
+     *
+     * An optional `hashResolver` resolves toHash values that point to atoms
+     * on OTHER shards (cross-shard transitions).  The orchestrator provides
+     * this to produce a globally complete export.
+     *
+     * Record types:
+     *   atom          — atom name, hash, index, createdAtMs, status
+     *   weight        — fromAtom, toAtom, toHash, raw weight, updatedAtMs
+     *   access_count  — atom name, access count
+     */
+    exportFull(hashResolver?: (hash: Hash) => DataAtom | null): string[] {
+        const lines: string[] = [];
+
+        // 1. Atoms (active + tombstoned)
+        for (let idx = 0; idx < this.data.length; idx++) {
+            const atom = this.data[idx];
+            const hash = this.atomHashes.get(atom) ?? this.hashAtom(atom);
+            lines.push(JSON.stringify({
+                type: 'atom',
+                atom,
+                index: idx,
+                hash,
+                createdAtMs: this.atomCreatedAtMs[idx] ?? 0,
+                status: this.tombstoned.has(idx) ? 'tombstoned' : 'active',
+            }));
+        }
+
+        // 2. Weights — resolve index-based keys to atom names
+        for (const [fromIdx, targets] of this.transitions) {
+            const fromAtom = fromIdx < this.data.length ? this.data[fromIdx] : null;
+            if (!fromAtom) continue; // orphaned index — skip
+
+            for (const [toHash, weight] of targets) {
+                // Try local resolution first
+                let toAtom: DataAtom | null = null;
+                const toIdx = this.hashToIndex.get(toHash);
+                if (toIdx !== undefined && toIdx < this.data.length) {
+                    toAtom = this.data[toIdx];
+                }
+                // Fall back to cross-shard resolver
+                if (toAtom === null && hashResolver) {
+                    toAtom = hashResolver(toHash);
+                }
+
+                const updatedAtMs = this.transitionUpdatedAt.get(fromIdx)?.get(toHash) ?? null;
+
+                lines.push(JSON.stringify({
+                    type: 'weight',
+                    fromAtom,
+                    toHash,
+                    toAtom, // null if unresolvable — import will re-resolve
+                    weight,
+                    updatedAtMs,
+                }));
+            }
+        }
+
+        // 3. Access counts
+        for (const [idx, count] of this.accessCounts) {
+            const atom = idx < this.data.length ? this.data[idx] : null;
+            if (!atom || count <= 0) continue;
+            lines.push(JSON.stringify({
+                type: 'access_count',
+                atom,
+                count,
+            }));
+        }
+
+        return lines;
+    }
+
+    // ─── Full-fidelity import ───────────────────────────────────────────
+
+    /**
+     * Import atoms, weights, and access counts from portable NDJSON records
+     * produced by exportFull().
+     *
+     * Import order:
+     *   1. Atoms — addAtoms() for any not already present, skip duplicates
+     *   2. Commit — ensure atoms are in the snapshot so hashToIndex is populated
+     *   3. Weights — resolve atom names to local indices and write to LevelDB
+     *   4. Access counts — merge (max) with existing counts
+     *
+     * @returns Summary of what was imported.
+     */
+    async importFull(lines: string[]): Promise<{
+        atomsImported: number;
+        atomsSkipped: number;
+        weightsImported: number;
+        weightsSkipped: number;
+        accessCountsImported: number;
+        errors: string[];
+    }> {
+        const atomRecords: Array<{ atom: string; createdAtMs: number; status: string }> = [];
+        const weightRecords: Array<{ fromAtom: string; toHash: string; toAtom: string | null; weight: number; updatedAtMs: number | null }> = [];
+        const accessRecords: Array<{ atom: string; count: number }> = [];
+        const errors: string[] = [];
+
+        // Parse records
+        for (const line of lines) {
+            try {
+                const rec = JSON.parse(line);
+                if (rec.type === 'atom') atomRecords.push(rec);
+                else if (rec.type === 'weight') weightRecords.push(rec);
+                else if (rec.type === 'access_count') accessRecords.push(rec);
+            } catch {
+                errors.push(`JSON parse error: ${line.slice(0, 80)}`);
+            }
+        }
+
+        // 1. Import atoms
+        let atomsImported = 0;
+        let atomsSkipped = 0;
+        const newAtoms: DataAtom[] = [];
+        const atomTimestamps: Map<string, number> = new Map();
+
+        for (const rec of atomRecords) {
+            atomTimestamps.set(rec.atom, rec.createdAtMs);
+            if (this.dataIndex.has(rec.atom)) {
+                atomsSkipped++;
+                continue;
+            }
+            const parsed = parseAtomV1(rec.atom);
+            if (!parsed) {
+                errors.push(`Invalid atom: ${rec.atom.slice(0, 80)}`);
+                continue;
+            }
+            newAtoms.push(rec.atom);
+        }
+
+        if (newAtoms.length > 0) {
+            // Use addAtoms with preserved timestamps
+            for (const atom of newAtoms) {
+                const idx = this.data.length;
+                this.data.push(atom);
+                const parsedAtom = parseAtomV1(atom);
+                this.atomTypes.push(parsedAtom?.type ?? 'other');
+                const hash = this.hashAtom(atom);
+                this.atomHashes.set(atom, hash);
+                this.dataIndex.set(atom, idx);
+                const createdAtMs = atomTimestamps.get(atom) ?? this.clock();
+                this.atomCreatedAtMs[idx] = createdAtMs;
+                this.atomProvenances.push(extractProvenance(atom));
+
+                // WAL + LevelDB
+                await this.wal.writeAdd(atom).catch((err: unknown) =>
+                    logger.error({ err }, 'importFull WAL writeAdd error'));
+                const padIdx = String(idx).padStart(10, '0');
+                await this.storage.put(`ai:${padIdx}`, atom);
+                await this.storage.put(`ts:${padIdx}`, String(createdAtMs));
+
+                this.pending.addLeaf(atom);
+                this.lastPendingMutationAtMs = this.clock();
+                atomsImported++;
+            }
+
+            // Commit so hashToIndex is populated for weight resolution
+            await this.commit();
+        }
+
+        // Apply tombstones for atoms marked tombstoned in export
+        for (const rec of atomRecords) {
+            if (rec.status === 'tombstoned') {
+                const idx = this.dataIndex.get(rec.atom);
+                if (idx !== undefined && !this.tombstoned.has(idx)) {
+                    await this.tombstoneAtom(rec.atom);
+                }
+            }
+        }
+        if (!this.pending.isEmpty()) await this.commit();
+
+        // 2. Import weights
+        let weightsImported = 0;
+        let weightsSkipped = 0;
+
+        for (const rec of weightRecords) {
+            const fromIdx = this.dataIndex.get(rec.fromAtom);
+            if (fromIdx === undefined) {
+                weightsSkipped++;
+                continue;
+            }
+
+            // Resolve toHash: if toAtom is provided, compute its hash
+            let toHash = rec.toHash;
+            if (rec.toAtom) {
+                const resolvedIdx = this.dataIndex.get(rec.toAtom);
+                if (resolvedIdx !== undefined && resolvedIdx < this.activeSnapshot.leafCount) {
+                    toHash = this.activeSnapshot.getLeafHash(resolvedIdx);
+                } else if (resolvedIdx !== undefined) {
+                    toHash = this.hashAtom(rec.toAtom);
+                }
+                // If toAtom isn't in this shard, keep original toHash
+            }
+
+            // Write transition to memory
+            if (!this.transitions.has(fromIdx)) this.transitions.set(fromIdx, new Map());
+            const existing = this.transitions.get(fromIdx)!.get(toHash) ?? 0;
+            this.transitions.get(fromIdx)!.set(toHash, Math.max(existing, rec.weight));
+
+            if (rec.updatedAtMs !== null) {
+                if (!this.transitionUpdatedAt.has(fromIdx)) this.transitionUpdatedAt.set(fromIdx, new Map());
+                const existingTs = this.transitionUpdatedAt.get(fromIdx)!.get(toHash) ?? 0;
+                this.transitionUpdatedAt.get(fromIdx)!.set(toHash, Math.max(existingTs, rec.updatedAtMs));
+            }
+
+            // Persist to LevelDB
+            const padFrom = String(fromIdx).padStart(10, '0');
+            const weight = Math.max(existing, rec.weight);
+            await this.storage.put(`w:${padFrom}:${toHash}`, String(weight));
+            if (rec.updatedAtMs !== null) {
+                const tsVal = this.transitionUpdatedAt.get(fromIdx)?.get(toHash) ?? rec.updatedAtMs;
+                await this.storage.put(`wu:${padFrom}:${toHash}`, String(tsVal));
+            }
+
+            weightsImported++;
+        }
+
+        // 3. Import access counts (merge: take max)
+        let accessCountsImported = 0;
+        for (const rec of accessRecords) {
+            const idx = this.dataIndex.get(rec.atom);
+            if (idx === undefined || rec.count <= 0) continue;
+
+            const existing = this.accessCounts.get(idx) ?? 0;
+            const merged = Math.max(existing, rec.count);
+            this.accessCounts.set(idx, merged);
+            await this.storage.put(`ac:${idx}`, String(merged));
+            accessCountsImported++;
+        }
+
+        // Rebuild CSR since transitions changed
+        if (weightsImported > 0) {
+            this.rebuildCsrMatrix();
+            this.csrDirty = false;
+        }
+
+        return { atomsImported, atomsSkipped, weightsImported, weightsSkipped, accessCountsImported, errors };
+    }
+
     async close(): Promise<void> {
         if (this.commitTimer) { clearInterval(this.commitTimer); this.commitTimer = null; }
         if (!this.pending.isEmpty()) {
             await this.commit().catch((err: unknown) => logger.error({ err }, 'Final commit failed during close'));
         }
         await this.wal.close();
-        await this.db.close();
+        await this.storage.close();
         this.collectRetiredSnapshots();
     }
 

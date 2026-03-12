@@ -319,6 +319,7 @@ export class ShardedOrchestrator {
         const hashSequence: string[] = [];
         const shardsTouched = new Set<number>();
 
+        // Phase 1: Buffer all transitions in memory (no I/O per edge)
         for (let i = 0; i < sequence.length - 1; i++) {
             const from = sequence[i];
             const to = sequence[i + 1];
@@ -334,7 +335,8 @@ export class ShardedOrchestrator {
                 const toHash = toShard?.getHash(to);
 
                 if (fromHash && toHash) {
-                    await shard.recordTransition(fromHash, toHash);
+                    // Buffer in memory — no storage write yet
+                    shard.recordTransitionBatched(fromHash, toHash);
                     // Collect hashes for PPM training
                     if (hashSequence.length === 0) hashSequence.push(fromHash);
                     hashSequence.push(toHash);
@@ -344,11 +346,28 @@ export class ShardedOrchestrator {
             }
         }
 
-        // Train PPM on each touched shard with the full hash sequence
+        // Phase 2: Flush all buffered transitions per shard (single batch write each)
+        for (const shardIdx of shardsTouched) {
+            const shard = this.shards.get(shardIdx);
+            if (shard) await shard.flushTransitionBatch();
+        }
+
+        // Phase 3: Train PPM on each touched shard with the full hash sequence
         if (hashSequence.length >= 2) {
             for (const shardIdx of shardsTouched) {
                 const shard = this.shards.get(shardIdx);
                 if (shard) shard.trainPpm(hashSequence);
+            }
+        }
+
+        // Phase 4 (Sprint 14): Log training events for HLR training pipeline
+        // Each shard that was involved in the training gets the atom names
+        // it owns logged as 'train' events in its access log.
+        for (const shardIdx of shardsTouched) {
+            const shard = this.shards.get(shardIdx);
+            if (shard) {
+                const shardAtoms = sequence.filter(a => this.router.getShardIndex(a) === shardIdx);
+                if (shardAtoms.length > 0) shard.logTrainEvents(shardAtoms);
             }
         }
     }
@@ -607,6 +626,208 @@ export class ShardedOrchestrator {
     /** Readiness state used by orchestrator probes and startup guards. */
     isReady(): boolean {
         return this.ready;
+    }
+
+    // ─── Full-fidelity export/import ────────────────────────────────────
+
+    /**
+     * Export the entire cluster state as portable NDJSON lines.
+     *
+     * Builds a global hash→atom resolver so that cross-shard weight
+     * references are resolved to atom names (not shard-local indices).
+     *
+     * The output is a flat array of NDJSON lines — each line is a
+     * self-contained JSON record with a "type" field (atom, weight,
+     * access_count).  A "meta" header record is prepended with cluster
+     * metadata to support import validation.
+     */
+    exportFull(): string[] {
+        // Build a global hash→atom resolver across all shards
+        const globalHashToAtom = new Map<Hash, DataAtom>();
+        for (const shard of this.shards.values()) {
+            for (const { atom, status } of shard.getAtoms()) {
+                const hash = shard.getHash(atom);
+                if (hash) {
+                    globalHashToAtom.set(hash, atom);
+                } else {
+                    // Tombstoned atoms: getHash returns undefined, use getAtomRecord
+                    const record = shard.getAtomRecord(atom);
+                    if (record) globalHashToAtom.set(record.hash, atom);
+                }
+            }
+        }
+
+        const hashResolver = (hash: Hash): DataAtom | null => {
+            return globalHashToAtom.get(hash) ?? null;
+        };
+
+        // Meta header
+        const lines: string[] = [];
+        lines.push(JSON.stringify({
+            type: 'meta',
+            version: 1,
+            exportedAtMs: Date.now(),
+            exportedAtIso: new Date().toISOString(),
+            shardCount: this.shards.size,
+            treeVersion: this.master.currentVersion,
+            treeRoot: this.master.treeHead.root,
+        }));
+
+        // Collect per-shard exports
+        for (const [shardIdx, shard] of this.shards.entries()) {
+            const shardLines = shard.exportFull(hashResolver);
+            // Tag each line with the originating shard
+            for (const line of shardLines) {
+                try {
+                    const rec = JSON.parse(line);
+                    rec.shard = shardIdx;
+                    lines.push(JSON.stringify(rec));
+                } catch {
+                    lines.push(line); // pass through unparseable lines
+                }
+            }
+        }
+
+        return lines;
+    }
+
+    /**
+     * Import cluster state from portable NDJSON lines produced by exportFull().
+     *
+     * Routes each atom record to its correct shard (via the current router),
+     * groups weight and access_count records by their resolved shard, then
+     * calls per-shard importFull() in parallel.
+     *
+     * @returns Aggregate import summary.
+     */
+    async importFull(lines: string[]): Promise<{
+        atomsImported: number;
+        atomsSkipped: number;
+        weightsImported: number;
+        weightsSkipped: number;
+        accessCountsImported: number;
+        errors: string[];
+        meta: Record<string, unknown> | null;
+    }> {
+        // Parse and bucket records by target shard
+        const buckets = new Map<number, string[]>();
+        let meta: Record<string, unknown> | null = null;
+        const errors: string[] = [];
+
+        for (const line of lines) {
+            try {
+                const rec = JSON.parse(line);
+                if (rec.type === 'meta') {
+                    meta = rec;
+                    continue;
+                }
+
+                // Determine target shard from the atom name
+                let targetAtom: string | null = null;
+                if (rec.type === 'atom') targetAtom = rec.atom;
+                else if (rec.type === 'weight') targetAtom = rec.fromAtom;
+                else if (rec.type === 'access_count') targetAtom = rec.atom;
+
+                if (!targetAtom) {
+                    errors.push(`No atom reference in record: ${line.slice(0, 80)}`);
+                    continue;
+                }
+
+                const shardIdx = this.router.getShardIndex(targetAtom);
+                if (!buckets.has(shardIdx)) buckets.set(shardIdx, []);
+                buckets.get(shardIdx)!.push(line);
+            } catch {
+                errors.push(`JSON parse error: ${line.slice(0, 80)}`);
+            }
+        }
+
+        // Import each shard's records — atoms first (in parallel across shards)
+        // We do atoms in a first pass, then weights+access in a second pass,
+        // because weights may reference atoms that live on a different shard.
+
+        // Pass 1: atom records only
+        const atomBuckets = new Map<number, string[]>();
+        const nonAtomBuckets = new Map<number, string[]>();
+        for (const [shardIdx, shardLines] of buckets) {
+            for (const line of shardLines) {
+                const rec = JSON.parse(line);
+                if (rec.type === 'atom') {
+                    if (!atomBuckets.has(shardIdx)) atomBuckets.set(shardIdx, []);
+                    atomBuckets.get(shardIdx)!.push(line);
+                } else {
+                    if (!nonAtomBuckets.has(shardIdx)) nonAtomBuckets.set(shardIdx, []);
+                    nonAtomBuckets.get(shardIdx)!.push(line);
+                }
+            }
+        }
+
+        // Import atoms first (parallel across shards)
+        const atomResults = await Promise.all(
+            Array.from(atomBuckets.entries()).map(async ([shardIdx, shardLines]) => {
+                const shard = this.shards.get(shardIdx);
+                if (!shard) return { atomsImported: 0, atomsSkipped: 0, weightsImported: 0, weightsSkipped: 0, accessCountsImported: 0, errors: [`Shard ${shardIdx} not found`] };
+                return shard.importFull(shardLines);
+            })
+        );
+
+        // Update master after atom imports
+        const rootUpdates = new Map<number, string>();
+        const shardVersions = new Map<number, number>();
+        for (const [shardIdx, shard] of this.shards.entries()) {
+            rootUpdates.set(shardIdx, shard.getKernelRoot());
+            shardVersions.set(shardIdx, shard.snapshotVersion);
+        }
+        this.master.batchUpdateShardRoots(rootUpdates, shardVersions);
+        this.rebuildHashIndex();
+
+        // Pass 2: weight + access_count records (parallel across shards)
+        const weightResults = await Promise.all(
+            Array.from(nonAtomBuckets.entries()).map(async ([shardIdx, shardLines]) => {
+                const shard = this.shards.get(shardIdx);
+                if (!shard) return { atomsImported: 0, atomsSkipped: 0, weightsImported: 0, weightsSkipped: 0, accessCountsImported: 0, errors: [`Shard ${shardIdx} not found`] };
+                return shard.importFull(shardLines);
+            })
+        );
+
+        // Aggregate results
+        const allResults = [...atomResults, ...weightResults];
+        const totals = {
+            atomsImported: 0,
+            atomsSkipped: 0,
+            weightsImported: 0,
+            weightsSkipped: 0,
+            accessCountsImported: 0,
+            errors: [...errors],
+            meta,
+        };
+        for (const r of allResults) {
+            totals.atomsImported += r.atomsImported;
+            totals.atomsSkipped += r.atomsSkipped;
+            totals.weightsImported += r.weightsImported;
+            totals.weightsSkipped += r.weightsSkipped;
+            totals.accessCountsImported += r.accessCountsImported;
+            totals.errors.push(...r.errors);
+        }
+
+        // Update master again after weight imports
+        for (const [shardIdx, shard] of this.shards.entries()) {
+            rootUpdates.set(shardIdx, shard.getKernelRoot());
+            shardVersions.set(shardIdx, shard.snapshotVersion);
+        }
+        this.master.batchUpdateShardRoots(rootUpdates, shardVersions);
+
+        // Re-record committedAtVersion for new atoms
+        const newVersion = this.master.currentVersion;
+        for (const shard of this.shards.values()) {
+            for (const { atom } of shard.getAtoms()) {
+                if (!this.atomCommittedAtVersion.has(atom)) {
+                    this.atomCommittedAtVersion.set(atom, newVersion);
+                }
+            }
+        }
+        this.rebuildHashIndex();
+
+        return totals;
     }
 
     /** Close all shard LevelDB instances gracefully. */

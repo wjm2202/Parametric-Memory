@@ -29,6 +29,9 @@ jobs:
           docker --version
           docker compose version
 
+      - name: Create .env from example
+        run: cp .env.example .env
+
       - name: Run health-gated API benchmark
         env:
           MMPM_SLO_ACCESS_P95_MS: '250'

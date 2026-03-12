@@ -35,5 +35,8 @@ jobs:
           docker --version
           docker compose version
 
+      - name: Create .env from example
+        run: cp .env.example .env
+
       - name: Run health-gated API benchmark
         run: npm run bench:ci:api

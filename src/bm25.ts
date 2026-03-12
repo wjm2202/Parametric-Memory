@@ -35,15 +35,19 @@ export interface Bm25Options {
  */
 export class Bm25Index {
     /** Number of documents (atoms) in corpus. */
-    private readonly N: number;
+    private N: number;
     /** Average document length in tokens. */
-    private readonly avgDl: number;
+    private avgDl: number;
+    /** Total token count across all documents (used to recompute avgDl). */
+    private totalLength: number;
     /** Document frequency: token → number of documents containing it. */
     private readonly df: Map<string, number>;
     /** Per-document token bags: atom index → Map<token, count>. */
     private readonly docs: Map<number, { tokens: Map<string, number>; length: number }>;
     /** Atom string → index mapping for fast lookup. */
     private readonly atomIndex: Map<string, number>;
+    /** Next auto-increment index for addDocument(). */
+    private nextIdx: number;
 
     private readonly k1: number;
     private readonly b: number;
@@ -51,17 +55,21 @@ export class Bm25Index {
     private constructor(
         N: number,
         avgDl: number,
+        totalLength: number,
         df: Map<string, number>,
         docs: Map<number, { tokens: Map<string, number>; length: number }>,
         atomIndex: Map<string, number>,
+        nextIdx: number,
         k1: number,
         b: number,
     ) {
         this.N = N;
         this.avgDl = avgDl;
+        this.totalLength = totalLength;
         this.df = df;
         this.docs = docs;
         this.atomIndex = atomIndex;
+        this.nextIdx = nextIdx;
         this.k1 = k1;
         this.b = b;
     }
@@ -107,12 +115,75 @@ export class Bm25Index {
         }
 
         const avgDl = N > 0 ? totalLength / N : 0;
-        return new Bm25Index(N, avgDl, df, docs, atomIndex, k1, b);
+        return new Bm25Index(N, avgDl, totalLength, df, docs, atomIndex, N, k1, b);
     }
 
     /** Build an empty index (scores everything as 0). */
     static empty(opts: Bm25Options = {}): Bm25Index {
-        return new Bm25Index(0, 0, new Map(), new Map(), new Map(), opts.k1 ?? 1.2, opts.b ?? 0.75);
+        return new Bm25Index(0, 0, 0, new Map(), new Map(), new Map(), 0, opts.k1 ?? 1.2, opts.b ?? 0.75);
+    }
+
+    // ─── Incremental updates (O(|tokens in atom|) per operation) ──────
+
+    /**
+     * Add a single document to the index incrementally.
+     * Updates N, totalLength, avgDl, df, docs, and atomIndex.
+     * O(|tokens in semanticText|) — no full corpus scan.
+     *
+     * If the atom already exists in the index, this is a no-op.
+     */
+    addDocument(atom: string, semanticText: string): void {
+        if (this.atomIndex.has(atom)) return;
+
+        const idx = this.nextIdx++;
+        this.atomIndex.set(atom, idx);
+
+        const rawTokens = tokenizeText(semanticText);
+        const tokenCounts = new Map<string, number>();
+        for (const t of rawTokens) {
+            tokenCounts.set(t, (tokenCounts.get(t) ?? 0) + 1);
+        }
+
+        this.docs.set(idx, { tokens: tokenCounts, length: rawTokens.length });
+        this.totalLength += rawTokens.length;
+        this.N++;
+        this.avgDl = this.N > 0 ? this.totalLength / this.N : 0;
+
+        // Update document frequency for each unique token
+        for (const t of tokenCounts.keys()) {
+            this.df.set(t, (this.df.get(t) ?? 0) + 1);
+        }
+    }
+
+    /**
+     * Remove a document from the index incrementally.
+     * Updates N, totalLength, avgDl, df, and removes from docs/atomIndex.
+     * O(|tokens in document|) — no full corpus scan.
+     *
+     * If the atom is not in the index, this is a no-op.
+     */
+    removeDocument(atom: string): void {
+        const idx = this.atomIndex.get(atom);
+        if (idx === undefined) return;
+
+        const doc = this.docs.get(idx);
+        if (doc) {
+            // Decrement document frequency for each unique token
+            for (const t of doc.tokens.keys()) {
+                const count = this.df.get(t) ?? 0;
+                if (count <= 1) {
+                    this.df.delete(t);
+                } else {
+                    this.df.set(t, count - 1);
+                }
+            }
+            this.totalLength -= doc.length;
+            this.docs.delete(idx);
+        }
+
+        this.atomIndex.delete(atom);
+        this.N--;
+        this.avgDl = this.N > 0 ? this.totalLength / this.N : 0;
     }
 
     /**

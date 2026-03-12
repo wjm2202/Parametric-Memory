@@ -26,9 +26,32 @@ import { MasterKernel } from './master';
 import { AuditLog, AuditEventType } from './audit_log';
 import { TtlRegistry } from './ttl_registry';
 import { Bm25Index, tokenizeText as bm25Tokenize } from './bm25';
+import { HybridScorer } from './hybrid_scorer';
+import { Model2VecEmbedding, EmbeddingProvider } from './embedding';
+import { existsSync, statSync } from 'fs';
 
 // Collect Node.js / process metrics automatically (visible at GET /metrics)
 collectDefaultMetrics();
+
+// ─── Model2Vec vocabulary loading ───────────────────────────────────────────
+// Look for the vocab file at: <project>/data/model2vec_vocab.{bin,json}
+// Binary (.bin) is preferred for ~10× faster startup (~128ms vs ~1.3s).
+// fromFile() auto-detects .bin sibling when given a .json path.
+// If no vocab found, falls back to NgramHashEmbedding (char n-gram approach).
+let _embeddingProvider: EmbeddingProvider | undefined;
+const MODEL2VEC_PATH = process.env.MODEL2VEC_VOCAB_PATH
+    ?? path.join(__dirname, '..', 'data', 'model2vec_vocab.json');
+
+try {
+    if (existsSync(MODEL2VEC_PATH) && statSync(MODEL2VEC_PATH).isFile()) {
+        const t0 = Date.now();
+        _embeddingProvider = Model2VecEmbedding.fromFile(MODEL2VEC_PATH);
+        const elapsed = Date.now() - t0;
+        console.log(`[model2vec] Loaded ${(_embeddingProvider as Model2VecEmbedding).vocabSize} tokens in ${elapsed}ms from ${MODEL2VEC_PATH}`);
+    }
+} catch (err) {
+    console.warn('[model2vec] Failed to load vocabulary, falling back to NgramHashEmbedding:', err);
+}
 
 interface BuildAppOpts {
     data?: string[];
@@ -162,12 +185,18 @@ function jaccardSimilarityScore(query: string, candidate: string): number {
 }
 
 /**
- * Score query vs candidate using the BM25 index if available, Jaccard fallback.
- * The bm25Index is rebuilt after each ingestion flush (see buildApp).
+ * Score query vs candidate using the hybrid scorer (BM25 + n-gram embeddings).
+ * Falls back to Jaccard if both indices are empty (cold-start).
  */
 let _bm25Index: Bm25Index = Bm25Index.empty();
+let _hybridScorer: HybridScorer = HybridScorer.empty({
+    embedding: _embeddingProvider ? { provider: _embeddingProvider } : undefined,
+});
 
 function semanticSimilarityScore(query: string, candidate: string): number {
+    if (_hybridScorer.size > 0) {
+        return _hybridScorer.scoreBySemanticText(query, candidate);
+    }
     if (_bm25Index.size > 0) {
         return _bm25Index.scoreBySemanticText(query, candidate);
     }
@@ -175,10 +204,10 @@ function semanticSimilarityScore(query: string, candidate: string): number {
 }
 
 /**
- * Rebuild the BM25 index from the current atom corpus.
- * Called after orchestrator init and after each ingestion flush.
+ * Rebuild search indices from scratch from the current atom corpus.
+ * Called once at init time.  After init, prefer the incremental helpers.
  */
-function rebuildBm25Index(orchestrator: ShardedOrchestrator): void {
+function rebuildSearchIndices(orchestrator: ShardedOrchestrator): void {
     const atoms = orchestrator.listAtoms().filter(e => e.status === 'active');
     const corpus = atoms.map(entry => {
         const parsed = parseAtomV1(entry.atom);
@@ -186,6 +215,36 @@ function rebuildBm25Index(orchestrator: ShardedOrchestrator): void {
         return { atom: entry.atom, semanticText };
     });
     _bm25Index = Bm25Index.build(corpus);
+    _hybridScorer = HybridScorer.build(corpus, {
+        embedding: _embeddingProvider ? { provider: _embeddingProvider } : undefined,
+    });
+}
+
+/** Semantic text for scoring — same format used in rebuildSearchIndices. */
+function atomSemanticText(atom: string): string {
+    const parsed = parseAtomV1(atom);
+    return parsed ? `${parsed.type} ${parsed.value} ${atom}` : atom;
+}
+
+/**
+ * Incrementally add atoms to the live search indices.
+ * O(sum of token lengths) instead of O(entire corpus).
+ */
+function searchAddAtoms(atoms: string[]): void {
+    for (const atom of atoms) {
+        const text = atomSemanticText(atom);
+        _bm25Index.addDocument(atom, text);
+        _hybridScorer.addDocument(atom, text);
+    }
+}
+
+/**
+ * Incrementally remove an atom from the live search indices.
+ * O(tokens in removed document) instead of O(entire corpus).
+ */
+function searchRemoveAtom(atom: string): void {
+    _bm25Index.removeDocument(atom);
+    _hybridScorer.removeDocument(atom);
 }
 
 function parseSearchLimit(input: unknown): number | null {
@@ -858,10 +917,10 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
     const pipeline = new IngestionPipeline(orchestrator, {
         batchSize: parseInt(process.env.INGEST_BATCH_SIZE ?? '100'),
         flushIntervalMs: parseInt(process.env.INGEST_FLUSH_MS ?? '1000'),
-        onFlush: () => rebuildBm25Index(orchestrator),
+        onFlush: (flushedAtoms) => searchAddAtoms(flushedAtoms),
     });
-    // Build initial BM25 index from seed/persisted atoms.
-    rebuildBm25Index(orchestrator);
+    // Build initial search indices from seed/persisted atoms (full rebuild once at startup).
+    rebuildSearchIndices(orchestrator);
     let writePolicy: WritePolicyConfig = createDefaultWritePolicy();
 
     // Paths that bypass auth and readiness checks.
@@ -2031,6 +2090,71 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
     });
 
     /**
+     * GET /admin/export-full  —  Full-fidelity export of all cluster state.
+     *
+     * Exports atoms, Markov transition weights, weight timestamps, and access
+     * counts as portable NDJSON.  Weight keys are resolved from shard-local
+     * indices to atom names, making the export safe for re-import into a
+     * cluster with different shard count or routing.
+     *
+     * Each line is a JSON record with a "type" field:
+     *   meta          — cluster metadata (version, shard count, tree root)
+     *   atom          — atom name, hash, index, createdAtMs, status, shard
+     *   weight        — fromAtom, toAtom, toHash, weight, updatedAtMs, shard
+     *   access_count  — atom name, count, shard
+     */
+    server.get('/admin/export-full', async (request, reply) => {
+        const lines = orchestrator.exportFull();
+
+        const dateStr = new Date().toISOString().slice(0, 10);
+        auditLog.record('admin.export', {
+            count: lines.length,
+            requestId: request.id as string,
+            clientName: getClientName(request),
+            meta: { full: true },
+        });
+        reply.header('Content-Type', 'application/x-ndjson');
+        reply.header('Content-Disposition', `attachment; filename="mmpm-export-full-${dateStr}.ndjson"`);
+        return reply.send(lines.join('\n') + (lines.length > 0 ? '\n' : ''));
+    });
+
+    /**
+     * POST /admin/import-full  —  Import full-fidelity NDJSON backup.
+     *
+     * Accepts the NDJSON format produced by GET /admin/export-full.
+     * Imports atoms (with preserved timestamps), Markov weights (with
+     * preserved timestamps), and access counts.
+     *
+     * Returns: { atomsImported, atomsSkipped, weightsImported, weightsSkipped,
+     *            accessCountsImported, errors, meta }
+     */
+    server.post('/admin/import-full', async (request, reply) => {
+        const rawBody = typeof request.body === 'string'
+            ? request.body
+            : JSON.stringify(request.body ?? '');
+
+        const lines = rawBody.split('\n').map(l => l.trim()).filter(Boolean);
+        if (lines.length === 0) {
+            return reply.status(400).send({ error: 'Request body is empty — expected NDJSON records.' });
+        }
+
+        const result = await orchestrator.importFull(lines);
+
+        auditLog.record('admin.import', {
+            count: result.atomsImported,
+            requestId: request.id as string,
+            clientName: getClientName(request),
+            meta: {
+                full: true,
+                weightsImported: result.weightsImported,
+                accessCountsImported: result.accessCountsImported,
+            },
+        });
+
+        return result;
+    });
+
+    /**
      * POST /admin/import  —  Ingest atoms from an NDJSON snapshot.
      *
      * Accepts the same NDJSON format produced by GET /admin/export, or any
@@ -2226,7 +2350,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
         }
         try {
             const treeVersion = await orchestrator.removeAtom(atom);
-            rebuildBm25Index(orchestrator); // Refresh BM25 after tombstone
+            searchRemoveAtom(atom); // Incremental search index update after tombstone
             ttlRegistry.delete(atom); // 14-C-1: remove TTL tracking after tombstone
             auditLog.record('atom.tombstone', {
                 atoms: [atom],

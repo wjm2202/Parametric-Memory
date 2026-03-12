@@ -1,84 +1,138 @@
 # HELP mmpm_harness_throughput_ops_per_sec Total operations per second
 # TYPE mmpm_harness_throughput_ops_per_sec gauge
-mmpm_harness_throughput_ops_per_sec{run_id="2026-03-06T05-43-35-882Z"} 1179.969977
+mmpm_harness_throughput_ops_per_sec{run_id="2026-03-11T08-00-54-198Z"} 2869.342802
 # HELP mmpm_harness_throughput_reads_per_sec Read operations per second
 # TYPE mmpm_harness_throughput_reads_per_sec gauge
-mmpm_harness_throughput_reads_per_sec{run_id="2026-03-06T05-43-35-882Z"} 187.882124
+mmpm_harness_throughput_reads_per_sec{run_id="2026-03-11T08-00-54-198Z"} 1942.890516
 # HELP mmpm_harness_throughput_writes_per_sec Write operations per second
 # TYPE mmpm_harness_throughput_writes_per_sec gauge
-mmpm_harness_throughput_writes_per_sec{run_id="2026-03-06T05-43-35-882Z"} 992.087853
+mmpm_harness_throughput_writes_per_sec{run_id="2026-03-11T08-00-54-198Z"} 304.877746
 # HELP mmpm_harness_throughput_commits_per_sec Commit operations per second
 # TYPE mmpm_harness_throughput_commits_per_sec gauge
-mmpm_harness_throughput_commits_per_sec{run_id="2026-03-06T05-43-35-882Z"} 0.585303
+mmpm_harness_throughput_commits_per_sec{run_id="2026-03-11T08-00-54-198Z"} 101.804992
 # HELP mmpm_harness_latency_access_p50_ms Access latency p50 in milliseconds
 # TYPE mmpm_harness_latency_access_p50_ms gauge
-mmpm_harness_latency_access_p50_ms{run_id="2026-03-06T05-43-35-882Z"} 0.321402
+mmpm_harness_latency_access_p50_ms{run_id="2026-03-11T08-00-54-198Z"} 3.040040
 # HELP mmpm_harness_latency_access_p95_ms Access latency p95 in milliseconds
 # TYPE mmpm_harness_latency_access_p95_ms gauge
-mmpm_harness_latency_access_p95_ms{run_id="2026-03-06T05-43-35-882Z"} 0.559265
+mmpm_harness_latency_access_p95_ms{run_id="2026-03-11T08-00-54-198Z"} 21.078031
 # HELP mmpm_harness_latency_access_p99_ms Access latency p99 in milliseconds
 # TYPE mmpm_harness_latency_access_p99_ms gauge
-mmpm_harness_latency_access_p99_ms{run_id="2026-03-06T05-43-35-882Z"} 2.099234
+mmpm_harness_latency_access_p99_ms{run_id="2026-03-11T08-00-54-198Z"} 92.296141
 # HELP mmpm_harness_latency_context_load_p95_ms Context-load latency p95 in milliseconds
 # TYPE mmpm_harness_latency_context_load_p95_ms gauge
-mmpm_harness_latency_context_load_p95_ms{run_id="2026-03-06T05-43-35-882Z"} 20.994462
+mmpm_harness_latency_context_load_p95_ms{run_id="2026-03-11T08-00-54-198Z"} 91.832106
 # HELP mmpm_harness_latency_commit_p95_ms Commit latency p95 in milliseconds
 # TYPE mmpm_harness_latency_commit_p95_ms gauge
-mmpm_harness_latency_commit_p95_ms{run_id="2026-03-06T05-43-35-882Z"} 96.700396
+mmpm_harness_latency_commit_p95_ms{run_id="2026-03-11T08-00-54-198Z"} 10.084508
 # HELP mmpm_harness_latency_proof_verify_avg_ms Average proof verification time in milliseconds (per-proof)
 # TYPE mmpm_harness_latency_proof_verify_avg_ms gauge
-mmpm_harness_latency_proof_verify_avg_ms{run_id="2026-03-06T05-43-35-882Z"} 0.010960
+mmpm_harness_latency_proof_verify_avg_ms{run_id="2026-03-11T08-00-54-198Z"} 0.011313
 # HELP mmpm_harness_latency_proof_verify_p50_ms p50 proof verification time in milliseconds (per-proof)
 # TYPE mmpm_harness_latency_proof_verify_p50_ms gauge
-mmpm_harness_latency_proof_verify_p50_ms{run_id="2026-03-06T05-43-35-882Z"} 0.009208
+mmpm_harness_latency_proof_verify_p50_ms{run_id="2026-03-11T08-00-54-198Z"} 0.010125
 # HELP mmpm_harness_latency_proof_verify_p95_ms p95 proof verification time in milliseconds (per-proof)
 # TYPE mmpm_harness_latency_proof_verify_p95_ms gauge
-mmpm_harness_latency_proof_verify_p95_ms{run_id="2026-03-06T05-43-35-882Z"} 0.026874
+mmpm_harness_latency_proof_verify_p95_ms{run_id="2026-03-11T08-00-54-198Z"} 0.030334
 # HELP mmpm_harness_latency_proof_verify_p99_ms p99 proof verification time in milliseconds (per-proof)
 # TYPE mmpm_harness_latency_proof_verify_p99_ms gauge
-mmpm_harness_latency_proof_verify_p99_ms{run_id="2026-03-06T05-43-35-882Z"} 0.039373
+mmpm_harness_latency_proof_verify_p99_ms{run_id="2026-03-11T08-00-54-198Z"} 0.049917
 # HELP mmpm_harness_latency_proof_verify_cv Coefficient of variation for per-proof verify latency
 # TYPE mmpm_harness_latency_proof_verify_cv gauge
-mmpm_harness_latency_proof_verify_cv{run_id="2026-03-06T05-43-35-882Z"} 1.024762
+mmpm_harness_latency_proof_verify_cv{run_id="2026-03-11T08-00-54-198Z"} 1.114726
+# HELP mmpm_harness_latency_proof_verify_avg_ms_by_type Per-type average proof verification time ms
+# TYPE mmpm_harness_latency_proof_verify_avg_ms_by_type gauge
+mmpm_harness_latency_proof_verify_avg_ms_by_type{run_id="2026-03-11T08-00-54-198Z",proof_type="current"} 0.018062
+# HELP mmpm_harness_latency_proof_verify_p95_ms_by_type Per-type p95 proof verification time ms
+# TYPE mmpm_harness_latency_proof_verify_p95_ms_by_type gauge
+mmpm_harness_latency_proof_verify_p95_ms_by_type{run_id="2026-03-11T08-00-54-198Z",proof_type="current"} 0.038668
+# HELP mmpm_harness_latency_proof_verify_p99_ms_by_type Per-type p99 proof verification time ms
+# TYPE mmpm_harness_latency_proof_verify_p99_ms_by_type gauge
+mmpm_harness_latency_proof_verify_p99_ms_by_type{run_id="2026-03-11T08-00-54-198Z",proof_type="current"} 0.068251
+# HELP mmpm_harness_latency_proof_verify_cv_by_type Per-type CV for proof verification latency
+# TYPE mmpm_harness_latency_proof_verify_cv_by_type gauge
+mmpm_harness_latency_proof_verify_cv_by_type{run_id="2026-03-11T08-00-54-198Z",proof_type="current"} 0.849750
+# HELP mmpm_harness_proof_verify_attempts_by_type Per-type proof verification attempt count
+# TYPE mmpm_harness_proof_verify_attempts_by_type gauge
+mmpm_harness_proof_verify_attempts_by_type{run_id="2026-03-11T08-00-54-198Z",proof_type="current"} 1004
+# HELP mmpm_harness_proof_verify_failures_by_type Per-type proof verification failure count
+# TYPE mmpm_harness_proof_verify_failures_by_type gauge
+mmpm_harness_proof_verify_failures_by_type{run_id="2026-03-11T08-00-54-198Z",proof_type="current"} 0
+# HELP mmpm_harness_latency_proof_verify_avg_ms_by_type Per-type average proof verification time ms
+# TYPE mmpm_harness_latency_proof_verify_avg_ms_by_type gauge
+mmpm_harness_latency_proof_verify_avg_ms_by_type{run_id="2026-03-11T08-00-54-198Z",proof_type="predicted"} 0.013480
+# HELP mmpm_harness_latency_proof_verify_p95_ms_by_type Per-type p95 proof verification time ms
+# TYPE mmpm_harness_latency_proof_verify_p95_ms_by_type gauge
+mmpm_harness_latency_proof_verify_p95_ms_by_type{run_id="2026-03-11T08-00-54-198Z",proof_type="predicted"} 0.029334
+# HELP mmpm_harness_latency_proof_verify_p99_ms_by_type Per-type p99 proof verification time ms
+# TYPE mmpm_harness_latency_proof_verify_p99_ms_by_type gauge
+mmpm_harness_latency_proof_verify_p99_ms_by_type{run_id="2026-03-11T08-00-54-198Z",proof_type="predicted"} 0.049917
+# HELP mmpm_harness_latency_proof_verify_cv_by_type Per-type CV for proof verification latency
+# TYPE mmpm_harness_latency_proof_verify_cv_by_type gauge
+mmpm_harness_latency_proof_verify_cv_by_type{run_id="2026-03-11T08-00-54-198Z",proof_type="predicted"} 0.737253
+# HELP mmpm_harness_proof_verify_attempts_by_type Per-type proof verification attempt count
+# TYPE mmpm_harness_proof_verify_attempts_by_type gauge
+mmpm_harness_proof_verify_attempts_by_type{run_id="2026-03-11T08-00-54-198Z",proof_type="predicted"} 804
+# HELP mmpm_harness_proof_verify_failures_by_type Per-type proof verification failure count
+# TYPE mmpm_harness_proof_verify_failures_by_type gauge
+mmpm_harness_proof_verify_failures_by_type{run_id="2026-03-11T08-00-54-198Z",proof_type="predicted"} 0
+# HELP mmpm_harness_latency_proof_verify_avg_ms_by_type Per-type average proof verification time ms
+# TYPE mmpm_harness_latency_proof_verify_avg_ms_by_type gauge
+mmpm_harness_latency_proof_verify_avg_ms_by_type{run_id="2026-03-11T08-00-54-198Z",proof_type="shardRoot"} 0.002830
+# HELP mmpm_harness_latency_proof_verify_p95_ms_by_type Per-type p95 proof verification time ms
+# TYPE mmpm_harness_latency_proof_verify_p95_ms_by_type gauge
+mmpm_harness_latency_proof_verify_p95_ms_by_type{run_id="2026-03-11T08-00-54-198Z",proof_type="shardRoot"} 0.006042
+# HELP mmpm_harness_latency_proof_verify_p99_ms_by_type Per-type p99 proof verification time ms
+# TYPE mmpm_harness_latency_proof_verify_p99_ms_by_type gauge
+mmpm_harness_latency_proof_verify_p99_ms_by_type{run_id="2026-03-11T08-00-54-198Z",proof_type="shardRoot"} 0.011042
+# HELP mmpm_harness_latency_proof_verify_cv_by_type Per-type CV for proof verification latency
+# TYPE mmpm_harness_latency_proof_verify_cv_by_type gauge
+mmpm_harness_latency_proof_verify_cv_by_type{run_id="2026-03-11T08-00-54-198Z",proof_type="shardRoot"} 1.091682
+# HELP mmpm_harness_proof_verify_attempts_by_type Per-type proof verification attempt count
+# TYPE mmpm_harness_proof_verify_attempts_by_type gauge
+mmpm_harness_proof_verify_attempts_by_type{run_id="2026-03-11T08-00-54-198Z",proof_type="shardRoot"} 1004
+# HELP mmpm_harness_proof_verify_failures_by_type Per-type proof verification failure count
+# TYPE mmpm_harness_proof_verify_failures_by_type gauge
+mmpm_harness_proof_verify_failures_by_type{run_id="2026-03-11T08-00-54-198Z",proof_type="shardRoot"} 0
 # HELP mmpm_harness_prediction_hit_rate_ratio Prediction hit rate ratio
 # TYPE mmpm_harness_prediction_hit_rate_ratio gauge
-mmpm_harness_prediction_hit_rate_ratio{run_id="2026-03-06T05-43-35-882Z"} 0.955556
+mmpm_harness_prediction_hit_rate_ratio{run_id="2026-03-11T08-00-54-198Z"} 0.640000
 # HELP mmpm_harness_prediction_avg_latency_saved_ms Average latency saved from prediction in milliseconds
 # TYPE mmpm_harness_prediction_avg_latency_saved_ms gauge
-mmpm_harness_prediction_avg_latency_saved_ms{run_id="2026-03-06T05-43-35-882Z"} 0.034523
+mmpm_harness_prediction_avg_latency_saved_ms{run_id="2026-03-11T08-00-54-198Z"} -0.059340
 # HELP mmpm_harness_prediction_miss_penalty_ms Penalty from incorrect prediction in milliseconds
 # TYPE mmpm_harness_prediction_miss_penalty_ms gauge
-mmpm_harness_prediction_miss_penalty_ms{run_id="2026-03-06T05-43-35-882Z"} 0
+mmpm_harness_prediction_miss_penalty_ms{run_id="2026-03-11T08-00-54-198Z"} 0.059340
 # HELP mmpm_harness_correctness_proof_failures_total Total proof verification failures
 # TYPE mmpm_harness_correctness_proof_failures_total gauge
-mmpm_harness_correctness_proof_failures_total{run_id="2026-03-06T05-43-35-882Z"} 0
+mmpm_harness_correctness_proof_failures_total{run_id="2026-03-11T08-00-54-198Z"} 0
 # HELP mmpm_harness_correctness_stale_reads_total Total stale reads
 # TYPE mmpm_harness_correctness_stale_reads_total gauge
-mmpm_harness_correctness_stale_reads_total{run_id="2026-03-06T05-43-35-882Z"} 0
+mmpm_harness_correctness_stale_reads_total{run_id="2026-03-11T08-00-54-198Z"} 0
 # HELP mmpm_harness_correctness_version_mismatches_total Total snapshot version mismatches
 # TYPE mmpm_harness_correctness_version_mismatches_total gauge
-mmpm_harness_correctness_version_mismatches_total{run_id="2026-03-06T05-43-35-882Z"} 0
+mmpm_harness_correctness_version_mismatches_total{run_id="2026-03-11T08-00-54-198Z"} 0
 # HELP mmpm_harness_pattern_latency_p95_ms Pattern p95 latency in milliseconds
 # TYPE mmpm_harness_pattern_latency_p95_ms gauge
-mmpm_harness_pattern_latency_p95_ms{run_id="2026-03-06T05-43-35-882Z",pattern="sequential"} 0.547974
+mmpm_harness_pattern_latency_p95_ms{run_id="2026-03-11T08-00-54-198Z",pattern="sequential"} 1.009805
 # HELP mmpm_harness_pattern_latency_p95_ms Pattern p95 latency in milliseconds
 # TYPE mmpm_harness_pattern_latency_p95_ms gauge
-mmpm_harness_pattern_latency_p95_ms{run_id="2026-03-06T05-43-35-882Z",pattern="random"} 0.453311
+mmpm_harness_pattern_latency_p95_ms{run_id="2026-03-11T08-00-54-198Z",pattern="random"} 0.510340
 # HELP mmpm_harness_pattern_latency_p95_ms Pattern p95 latency in milliseconds
 # TYPE mmpm_harness_pattern_latency_p95_ms gauge
-mmpm_harness_pattern_latency_p95_ms{run_id="2026-03-06T05-43-35-882Z",pattern="predicted"} 1.218109
+mmpm_harness_pattern_latency_p95_ms{run_id="2026-03-11T08-00-54-198Z",pattern="predicted"} 0.875553
 # HELP mmpm_harness_pattern_latency_p95_ms Pattern p95 latency in milliseconds
 # TYPE mmpm_harness_pattern_latency_p95_ms gauge
-mmpm_harness_pattern_latency_p95_ms{run_id="2026-03-06T05-43-35-882Z",pattern="hotspot"} 0.351567
+mmpm_harness_pattern_latency_p95_ms{run_id="2026-03-11T08-00-54-198Z",pattern="hotspot"} 0.516007
 # HELP mmpm_harness_pattern_latency_p95_ms Pattern p95 latency in milliseconds
 # TYPE mmpm_harness_pattern_latency_p95_ms gauge
-mmpm_harness_pattern_latency_p95_ms{run_id="2026-03-06T05-43-35-882Z",pattern="cross_shard"} 1.563592
+mmpm_harness_pattern_latency_p95_ms{run_id="2026-03-11T08-00-54-198Z",pattern="cross_shard"} 0.843178
 # HELP mmpm_harness_backpressure_events_total Backpressure events during ingestion
 # TYPE mmpm_harness_backpressure_events_total gauge
-mmpm_harness_backpressure_events_total{run_id="2026-03-06T05-43-35-882Z"} 0
+mmpm_harness_backpressure_events_total{run_id="2026-03-11T08-00-54-198Z"} 0
 # HELP mmpm_harness_atoms_queued_total Atoms queued during ingestion
 # TYPE mmpm_harness_atoms_queued_total gauge
-mmpm_harness_atoms_queued_total{run_id="2026-03-06T05-43-35-882Z"} 1500
+mmpm_harness_atoms_queued_total{run_id="2026-03-11T08-00-54-198Z"} 10000
 # HELP mmpm_harness_atoms_committed_total Atoms committed during ingestion
 # TYPE mmpm_harness_atoms_committed_total gauge
-mmpm_harness_atoms_committed_total{run_id="2026-03-06T05-43-35-882Z"} 1500
+mmpm_harness_atoms_committed_total{run_id="2026-03-11T08-00-54-198Z"} 10000

@@ -195,3 +195,41 @@ export const transitionByTypeTotal = getOrCreate(
         labelNames: ['from_type', 'to_type'] as const,
     })
 );
+
+// ─── Cache metrics (Sprint 11) ───────────────────────────────────────────────
+
+/** Total ARC cache hits across all shards. */
+export const cacheHitsTotal = getOrCreate(
+    'mmpm_cache_hits_total',
+    () => new Counter({
+        name: 'mmpm_cache_hits_total',
+        help: 'Total ARC cache hits',
+    })
+);
+
+/** Total ARC cache misses across all shards. */
+export const cacheMissesTotal = getOrCreate(
+    'mmpm_cache_misses_total',
+    () => new Counter({
+        name: 'mmpm_cache_misses_total',
+        help: 'Total ARC cache misses',
+    })
+);
+
+/** Total ARC cache evictions across all shards. */
+export const cacheEvictionsTotal = getOrCreate(
+    'mmpm_cache_evictions_total',
+    () => new Counter({
+        name: 'mmpm_cache_evictions_total',
+        help: 'Total ARC cache evictions',
+    })
+);
+
+/** Current number of entries in the ARC cache. */
+export const cacheSizeGauge = getOrCreate(
+    'mmpm_cache_size',
+    () => new Gauge({
+        name: 'mmpm_cache_size',
+        help: 'Current number of entries in the ARC cache',
+    })
+);
