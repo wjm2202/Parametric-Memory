@@ -1623,6 +1623,248 @@ describe('Sprint 12 — G1: Bootstrap contract tests', () => {
     });
 });
 
+describe('Sprint 18 — Compact proofs bootstrap', () => {
+    const DB_PATH = tmpDb('s18-compact-proofs');
+    let server: FastifyInstance;
+    let orchestrator: ShardedOrchestrator;
+
+    beforeAll(async () => {
+        cleanup(DB_PATH);
+        const app = buildApp({
+            data: [
+                'v1.fact.stack_is_typescript_fastify_leveldb',
+                'v1.state.working_on_sprint_18',
+                'v1.event.sprint_17_model2vec_complete',
+                'v1.procedure.always_run_typecheck_before_sprint_done',
+            ],
+            dbBasePath: DB_PATH,
+        });
+        server = withEnvAuth(app.server);
+        orchestrator = app.orchestrator;
+        await orchestrator.init();
+    });
+
+    afterAll(async () => {
+        await server.close();
+        await orchestrator.close();
+        cleanup(DB_PATH);
+    });
+
+    it('S18.1: default (no compactProofs) returns full Merkle proofs', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/memory/bootstrap',
+            payload: { objective: 'sprint planning', limit: 10 },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.proofMode.mode).toBe('full');
+        expect(body.proofMode.source).toBe('default');
+        if (body.topMemories.length > 0) {
+            const proof = body.topMemories[0].proof;
+            expect(typeof proof.leaf).toBe('string');
+            expect(typeof proof.root).toBe('string');
+            expect(Array.isArray(proof.auditPath)).toBe(true);
+            expect(typeof proof.index).toBe('number');
+        }
+        // decisionEvidence.proofReferences should be an array with full proof refs
+        expect(Array.isArray(body.decisionEvidence.proofReferences)).toBe(true);
+        if (body.decisionEvidence.proofReferences.length > 0) {
+            expect(typeof body.decisionEvidence.proofReferences[0].proofRoot).toBe('string');
+            expect(typeof body.decisionEvidence.proofReferences[0].proofLeaf).toBe('string');
+        }
+    });
+
+    it('S18.2: compactProofs=true returns verified boolean instead of audit paths', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/memory/bootstrap',
+            payload: { objective: 'sprint planning', limit: 10, compactProofs: true },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.proofMode.mode).toBe('compact');
+        expect(body.proofMode.source).toBe('client_request');
+        if (body.topMemories.length > 0) {
+            const proof = body.topMemories[0].proof;
+            expect(typeof proof.verified).toBe('boolean');
+            expect(proof.verified).toBe(true);
+            expect(typeof proof.treeVersion).toBe('number');
+            expect(typeof proof.shardId).toBe('number');
+            // Should NOT have full proof fields
+            expect(proof.auditPath).toBeUndefined();
+            expect(proof.leaf).toBeUndefined();
+            expect(proof.root).toBeUndefined();
+        }
+    });
+
+    it('S18.3: compact decisionEvidence uses summary format', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/memory/bootstrap',
+            payload: { objective: 'sprint planning', limit: 10, compactProofs: true },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        const proofRefs = body.decisionEvidence.proofReferences;
+        // Compact mode returns an object, not an array
+        expect(proofRefs.mode).toBe('compact');
+        expect(typeof proofRefs.allVerified).toBe('boolean');
+        expect(proofRefs.allVerified).toBe(true);
+        expect(typeof proofRefs.treeVersion).toBe('number');
+        expect(proofRefs.atomCount).toBe(body.topMemories.length);
+        // Coverage should still report correct counts
+        expect(body.decisionEvidence.coverage.proofReferences).toBe(body.topMemories.length);
+        expect(body.decisionEvidence.coverage.complete).toBe(true);
+    });
+
+    it('S18.4: compactProofs=false explicitly requests full proofs', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/memory/bootstrap',
+            payload: { objective: 'sprint planning', limit: 10, compactProofs: false },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.proofMode.mode).toBe('full');
+        expect(body.proofMode.source).toBe('client_request');
+        if (body.topMemories.length > 0) {
+            expect(typeof body.topMemories[0].proof.root).toBe('string');
+            expect(Array.isArray(body.topMemories[0].proof.auditPath)).toBe(true);
+        }
+    });
+
+    it('S18.5: invalid compactProofs type returns 400', async () => {
+        const res = await server.inject({
+            method: 'POST', url: '/memory/bootstrap',
+            payload: { objective: 'test', compactProofs: 'yes' },
+        });
+        expect(res.statusCode).toBe(400);
+        expect(JSON.parse(res.payload).error).toContain('compactProofs');
+    });
+
+    it('S18.6: compact mode still scores proofPresent at 25% in evidence', async () => {
+        // Compact proofs where verified=true should still get the proof presence bonus.
+        // Verify by comparing evidence scores between full and compact — they should match.
+        const fullRes = await server.inject({
+            method: 'POST', url: '/memory/bootstrap',
+            payload: { objective: 'sprint planning', limit: 4 },
+        });
+        const compactRes = await server.inject({
+            method: 'POST', url: '/memory/bootstrap',
+            payload: { objective: 'sprint planning', limit: 4, compactProofs: true },
+        });
+        const fullBody = JSON.parse(fullRes.payload);
+        const compactBody = JSON.parse(compactRes.payload);
+        // Same atoms should have same evidence scores
+        const fullScores = fullBody.decisionEvidence.retrievalRationale
+            .map((r: { memoryId: string; evidenceScore: number }) => ({ id: r.memoryId, score: r.evidenceScore }));
+        const compactScores = compactBody.decisionEvidence.retrievalRationale
+            .map((r: { memoryId: string; evidenceScore: number }) => ({ id: r.memoryId, score: r.evidenceScore }));
+        expect(fullScores.length).toBe(compactScores.length);
+        for (let i = 0; i < fullScores.length; i++) {
+            expect(fullScores[i].id).toBe(compactScores[i].id);
+            expect(fullScores[i].score).toBe(compactScores[i].score);
+        }
+    });
+
+    it('S18.7: compact response is smaller than full response', async () => {
+        const fullRes = await server.inject({
+            method: 'POST', url: '/memory/bootstrap',
+            payload: { objective: 'sprint planning', limit: 10 },
+        });
+        const compactRes = await server.inject({
+            method: 'POST', url: '/memory/bootstrap',
+            payload: { objective: 'sprint planning', limit: 10, compactProofs: true },
+        });
+        // Compact should be meaningfully smaller
+        expect(compactRes.payload.length).toBeLessThan(fullRes.payload.length);
+    });
+});
+
+describe('Sprint 18 — Compact proofs env var override', () => {
+    const DB_PATH = tmpDb('s18-compact-env');
+    let server: FastifyInstance;
+    let orchestrator: ShardedOrchestrator;
+    const originalForce = process.env.MMPM_BOOTSTRAP_FORCE_FULL_PROOFS;
+    const originalCompact = process.env.MMPM_BOOTSTRAP_COMPACT_PROOFS;
+
+    beforeAll(async () => {
+        cleanup(DB_PATH);
+        const app = buildApp({
+            data: ['v1.fact.test_atom_for_env_override'],
+            dbBasePath: DB_PATH,
+        });
+        server = withEnvAuth(app.server);
+        orchestrator = app.orchestrator;
+        await orchestrator.init();
+    });
+
+    afterAll(async () => {
+        // Restore env vars
+        if (originalForce === undefined) delete process.env.MMPM_BOOTSTRAP_FORCE_FULL_PROOFS;
+        else process.env.MMPM_BOOTSTRAP_FORCE_FULL_PROOFS = originalForce;
+        if (originalCompact === undefined) delete process.env.MMPM_BOOTSTRAP_COMPACT_PROOFS;
+        else process.env.MMPM_BOOTSTRAP_COMPACT_PROOFS = originalCompact;
+        await server.close();
+        await orchestrator.close();
+        cleanup(DB_PATH);
+    });
+
+    it('S18.8: MMPM_BOOTSTRAP_FORCE_FULL_PROOFS=1 overrides client compactProofs=true', async () => {
+        process.env.MMPM_BOOTSTRAP_FORCE_FULL_PROOFS = '1';
+        delete process.env.MMPM_BOOTSTRAP_COMPACT_PROOFS;
+
+        const res = await server.inject({
+            method: 'POST', url: '/memory/bootstrap',
+            payload: { objective: 'test', compactProofs: true },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.proofMode.mode).toBe('full');
+        expect(body.proofMode.source).toBe('server_policy');
+        if (body.topMemories.length > 0) {
+            expect(typeof body.topMemories[0].proof.root).toBe('string');
+            expect(Array.isArray(body.topMemories[0].proof.auditPath)).toBe(true);
+        }
+
+        delete process.env.MMPM_BOOTSTRAP_FORCE_FULL_PROOFS;
+    });
+
+    it('S18.9: MMPM_BOOTSTRAP_COMPACT_PROOFS=1 overrides client compactProofs=false', async () => {
+        delete process.env.MMPM_BOOTSTRAP_FORCE_FULL_PROOFS;
+        process.env.MMPM_BOOTSTRAP_COMPACT_PROOFS = '1';
+
+        const res = await server.inject({
+            method: 'POST', url: '/memory/bootstrap',
+            payload: { objective: 'test', compactProofs: false },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.proofMode.mode).toBe('compact');
+        expect(body.proofMode.source).toBe('server_policy');
+        if (body.topMemories.length > 0) {
+            expect(typeof body.topMemories[0].proof.verified).toBe('boolean');
+            expect(body.topMemories[0].proof.auditPath).toBeUndefined();
+        }
+
+        delete process.env.MMPM_BOOTSTRAP_COMPACT_PROOFS;
+    });
+
+    it('S18.10: FORCE_FULL wins when both env vars are set', async () => {
+        process.env.MMPM_BOOTSTRAP_FORCE_FULL_PROOFS = '1';
+        process.env.MMPM_BOOTSTRAP_COMPACT_PROOFS = '1';
+
+        const res = await server.inject({
+            method: 'POST', url: '/memory/bootstrap',
+            payload: { objective: 'test', compactProofs: true },
+        });
+        expect(res.statusCode).toBe(200);
+        const body = JSON.parse(res.payload);
+        expect(body.proofMode.mode).toBe('full');
+        expect(body.proofMode.source).toBe('server_policy');
+
+        delete process.env.MMPM_BOOTSTRAP_FORCE_FULL_PROOFS;
+        delete process.env.MMPM_BOOTSTRAP_COMPACT_PROOFS;
+    });
+});
+
 describe('Sprint 12 — G2: Namespace isolation correctness', () => {
     const DB_PATH = tmpDb('s12-namespace');
     let server: FastifyInstance;

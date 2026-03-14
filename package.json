@@ -10,6 +10,7 @@
     "dev": "ts-node src/server.ts",
     "clean": "rm -rf dist",
     "cleanup": "ts-node tools/harness/cleanup.ts",
+    "preflight": "npm run typecheck && npm test",
     "test": "vitest run",
     "posttest": "npm run cleanup",
     "test:watch": "vitest",

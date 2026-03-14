@@ -5,4 +5,4 @@
 import dotenv from 'dotenv';
 import { resolve } from 'path';
 
-dotenv.config({ path: resolve(__dirname, '../../.env.test'), quiet: true });
+dotenv.config({ path: resolve(__dirname, '../../.env.test'), override: true });

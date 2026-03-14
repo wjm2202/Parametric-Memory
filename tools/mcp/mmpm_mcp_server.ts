@@ -458,6 +458,7 @@ export function createToolDefinitions(options: MmpmMcpOptions = {}): ToolDef[] {
                     limit: { type: 'number' },
                     highImpact: { type: 'boolean' },
                     evidenceThreshold: { type: 'number' },
+                    compactProofs: { type: 'boolean' },
                     asOfMs: { type: 'number' },
                     asOfVersion: { type: 'number' },
                     namespace: {
@@ -479,6 +480,7 @@ export function createToolDefinitions(options: MmpmMcpOptions = {}): ToolDef[] {
                 limit: typeof args.limit === 'number' ? args.limit : undefined,
                 highImpact: typeof args.highImpact === 'boolean' ? args.highImpact : undefined,
                 evidenceThreshold: typeof args.evidenceThreshold === 'number' ? args.evidenceThreshold : undefined,
+                compactProofs: typeof args.compactProofs === 'boolean' ? args.compactProofs : undefined,
                 asOfMs: typeof args.asOfMs === 'number' ? args.asOfMs : undefined,
                 asOfVersion: typeof args.asOfVersion === 'number' ? args.asOfVersion : undefined,
                 namespace: typeof args.namespace === 'object' && args.namespace !== null ? args.namespace : undefined,

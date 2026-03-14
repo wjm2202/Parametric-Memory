@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { readFileSync } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import Fastify, { FastifyInstance } from 'fastify';
+import Fastify, { FastifyInstance, FastifyReply } from 'fastify';
 import { ShardedOrchestrator } from './orchestrator';
 import { IngestionPipeline } from './ingestion';
 import { collectDefaultMetrics, register } from 'prom-client';
@@ -109,6 +109,12 @@ type BootstrapProof = {
     index: number;
 };
 
+type BootstrapCompactProof = {
+    verified: boolean;
+    treeVersion: number;
+    shardId: number;
+};
+
 type BootstrapMemoryItem = {
     atom: string;
     type: string;
@@ -118,7 +124,7 @@ type BootstrapMemoryItem = {
     createdAtMs: number;
     shardId: number;
     dominantNext: string | null;
-    proof: BootstrapProof;
+    proof: BootstrapProof | BootstrapCompactProof;
     contradiction: {
         hasConflict: boolean;
         conflictKey: string | null;
@@ -490,14 +496,27 @@ function buildDecisionEvidence(
     const objectiveTokens = new Set(tokenizeText(objectiveText));
 
     const memoryIds = topMemories.map(item => item.atom);
-    const proofReferences = topMemories.map(item => ({
-        memoryId: item.atom,
-        shardId: item.shardId,
-        treeVersion,
-        proofRoot: item.proof.root,
-        proofLeaf: item.proof.leaf,
-        proofIndex: item.proof.index,
-    }));
+    // When proofs are compact, emit a lightweight summary instead of per-atom
+    // proof references. Full proofs remain available via /atoms/:atom.
+    const isCompact = topMemories.length > 0 && 'verified' in topMemories[0].proof;
+    const proofReferences = isCompact
+        ? {
+            mode: 'compact' as const,
+            allVerified: topMemories.every(item => (item.proof as BootstrapCompactProof).verified),
+            treeVersion,
+            atomCount: topMemories.length,
+        }
+        : topMemories.map(item => {
+            const fullProof = item.proof as BootstrapProof;
+            return {
+                memoryId: item.atom,
+                shardId: item.shardId,
+                treeVersion,
+                proofRoot: fullProof.root,
+                proofLeaf: fullProof.leaf,
+                proofIndex: fullProof.index,
+            };
+        });
 
     const retrievalRationale = topMemories.map((item, idx) => {
         const valueTokens = new Set(tokenizeText(item.value));
@@ -540,18 +559,24 @@ function buildDecisionEvidence(
         retrievalRationale,
         coverage: {
             memoryIds: memoryIds.length,
-            proofReferences: proofReferences.length,
+            proofReferences: Array.isArray(proofReferences) ? proofReferences.length : proofReferences.atomCount,
             retrievalRationale: retrievalRationale.length,
             complete:
                 memoryIds.length > 0 &&
-                memoryIds.length === proofReferences.length &&
+                (Array.isArray(proofReferences)
+                    ? memoryIds.length === proofReferences.length
+                    : memoryIds.length === proofReferences.atomCount) &&
                 memoryIds.length === retrievalRationale.length,
         },
     };
 }
 
 function computeBootstrapEvidenceScore(item: BootstrapMemoryItem): number {
-    const proofPresent = item.proof && typeof item.proof.root === 'string' && item.proof.root.length > 0;
+    // Handle both full proofs (has .root) and compact proofs (has .verified)
+    const proofPresent = item.proof && (
+        ('root' in item.proof && typeof item.proof.root === 'string' && item.proof.root.length > 0) ||
+        ('verified' in item.proof && item.proof.verified === true)
+    );
     const categorySignal = item.category === 'memory' ? 0 : 1;
     const conflictPenalty = item.contradiction.hasConflict ? 0 : 1;
 
@@ -891,16 +916,27 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
     // S16-8: Multi-client named API keys — MMPM_API_KEYS=name:key,name:key,...
     // The legacy single MMPM_API_KEY is registered under the client name 'default'.
     // Named keys in MMPM_API_KEYS override the 'default' entry if the same key appears.
-    const apiKeyMap = new Map<string, string>(); // bearer-token → clientName
-    if (apiKey) apiKeyMap.set(apiKey, 'default');
+    // S17-1: Scope-aware auth — client names ending with @read get read-only scope.
+    // Read-only clients can access/search/list atoms but cannot write, train, or commit.
+    interface ApiClient {
+        name: string;
+        scope: 'master' | 'read';
+    }
+    const apiKeyMap = new Map<string, ApiClient>(); // bearer-token → ApiClient
+    if (apiKey) apiKeyMap.set(apiKey, { name: 'default', scope: 'master' });
     const multiKeyStr = process.env.MMPM_API_KEYS ?? '';
     if (multiKeyStr) {
         for (const pair of multiKeyStr.split(',')) {
             const idx = pair.indexOf(':');
             if (idx > 0) {
-                const name = pair.slice(0, idx).trim();
+                const rawName = pair.slice(0, idx).trim();
                 const key  = pair.slice(idx + 1).trim();
-                if (name && key) apiKeyMap.set(key, name);
+                if (rawName && key) {
+                    // Convention: name ending with @read → read scope
+                    const isRead = rawName.endsWith('@read');
+                    const name = isRead ? rawName.slice(0, -5) : rawName;
+                    apiKeyMap.set(key, { name, scope: isRead ? 'read' : 'master' });
+                }
             }
         }
     }
@@ -908,7 +944,30 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
     const getClientName = (req: { headers: { authorization?: string } }): string | undefined => {
         const auth = req.headers.authorization;
         if (!auth?.startsWith('Bearer ')) return undefined;
+        return apiKeyMap.get(auth.slice(7))?.name;
+    };
+    // S17-1: Helper to resolve the ApiClient from a Fastify request.
+    const getApiClient = (req: { headers: { authorization?: string } }): ApiClient | undefined => {
+        const auth = req.headers.authorization;
+        if (!auth?.startsWith('Bearer ')) return undefined;
         return apiKeyMap.get(auth.slice(7));
+    };
+    // S17-1: Read-only scope check — returns true if the client has read scope.
+    const isReadOnly = (req: { headers: { authorization?: string } }): boolean => {
+        return getApiClient(req)?.scope === 'read';
+    };
+    // S17-1: Guard for write endpoints — sends 403 and returns false if client is read-only.
+    const requireMaster = (req: { headers: { authorization?: string } }, reply: FastifyReply): boolean => {
+        if (isReadOnly(req)) {
+            reply.code(403).send({
+                error: 'forbidden',
+                message: 'Read-only client cannot perform write operations',
+                scope: 'read',
+                requiredScope: 'master',
+            });
+            return false;
+        }
+        return true;
     };
 
     const orchestrator = new ShardedOrchestrator(numShards, initialData, dbBasePath);
@@ -1005,6 +1064,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
     // S16-8: Multi-key Bearer auth.  Accepts any key present in apiKeyMap.
     // If no keys are configured (apiKeyMap is empty), auth is disabled — same
     // behaviour as the old single-key path when MMPM_API_KEY was unset.
+    // S17-1: Auth now resolves ApiClient with scope (master|read).
     if (apiKeyMap.size > 0) {
         server.addHook('onRequest', async (request, reply) => {
             if (probePaths.has(request.url)) return;
@@ -1041,8 +1101,9 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             if (!item) {
                 return reply.status(400).send({ error: `Property 'data' invalid — ${SCHEMA_ERROR}` });
             }
-            const report = await orchestrator.access(item);
-            ttlRegistry.touch(item); // 14-C-1: reset TTL clock on access
+            const readOnly = isReadOnly(request);
+            const report = await orchestrator.access(item, { skipSideEffects: readOnly });
+            if (!readOnly) ttlRegistry.touch(item); // 14-C-1: reset TTL clock on access (master only)
             const result = report.predictedNext !== null ? 'hit' : 'miss';
             accessCounter.inc({ result });
             requestDuration.observe(report.latencyMs);
@@ -1094,8 +1155,9 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
                 return reply.status(400).send({ error: `Property 'items' invalid — ${SCHEMA_ERROR}` });
             }
 
-            const results = await orchestrator.batchAccess(normalized as string[]);
-            ttlRegistry.touchAll(normalized as string[]); // 14-C-1: reset TTL clocks on batch access
+            const readOnly = isReadOnly(request);
+            const results = await orchestrator.batchAccess(normalized as string[], { skipSideEffects: readOnly });
+            if (!readOnly) ttlRegistry.touchAll(normalized as string[]); // 14-C-1: reset TTL clocks (master only)
             return { results };
         } catch (e: any) {
             return reply.status(500).send({ error: e.message });
@@ -1119,6 +1181,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
      * Body: { policy: TypePolicyConfig } | { policy: 'default' }
      */
     server.post('/policy', async (request, reply) => {
+        if (!requireMaster(request, reply)) return;
         const { policy } = (request.body ?? {}) as { policy?: unknown };
 
         if (policy === 'default') {
@@ -1164,6 +1227,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
      *    or: { policy: 'default' }
      */
     server.post('/write-policy', async (request, reply) => {
+        if (!requireMaster(request, reply)) return;
         const { policy } = (request.body ?? {}) as { policy?: unknown };
 
         if (policy === 'default') {
@@ -1195,6 +1259,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
      * POST /train  —  Body: { "sequence": ["Node_A", "Node_B"] }
      */
     server.post('/train', async (request, reply) => {
+        if (!requireMaster(request, reply)) return;
         try {
             const { sequence } = request.body as { sequence?: unknown };
             if (!sequence || !Array.isArray(sequence) || sequence.length === 0) {
@@ -1532,7 +1597,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
      * metadata and a compact context block for session initialization.
      */
     server.post('/memory/bootstrap', async (request, reply) => {
-        const { objective, maxTokens, limit, namespace, includeGlobal, asOfMs, asOfVersion, highImpact, evidenceThreshold } = (request.body ?? {}) as {
+        const { objective, maxTokens, limit, namespace, includeGlobal, asOfMs, asOfVersion, highImpact, evidenceThreshold, compactProofs } = (request.body ?? {}) as {
             objective?: unknown;
             maxTokens?: unknown;
             limit?: unknown;
@@ -1542,6 +1607,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             asOfVersion?: unknown;
             highImpact?: unknown;
             evidenceThreshold?: unknown;
+            compactProofs?: unknown;
         };
 
         if (objective !== undefined && (typeof objective !== 'string' || objective.trim().length === 0)) {
@@ -1573,6 +1639,26 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
         if (namespaceScope === null) {
             return reply.status(400).send({ error: "Property 'namespace' must be an object with optional user/project/task strings; includeGlobal must be boolean when provided." });
         }
+
+        if (compactProofs !== undefined && typeof compactProofs !== 'boolean') {
+            return reply.status(400).send({ error: "Property 'compactProofs' must be boolean when provided." });
+        }
+
+        // Resolve proof mode: server env var > client request > default (full).
+        // MMPM_BOOTSTRAP_FORCE_FULL_PROOFS=1 overrides client to always return full proofs.
+        // MMPM_BOOTSTRAP_COMPACT_PROOFS=1 overrides client to always return compact proofs.
+        // If both are set, force-full wins (safe default — more data is safer than less).
+        const forceFullProofs = process.env.MMPM_BOOTSTRAP_FORCE_FULL_PROOFS === '1';
+        const forceCompactProofs = process.env.MMPM_BOOTSTRAP_COMPACT_PROOFS === '1';
+        const useCompactProofs = forceFullProofs
+            ? false
+            : forceCompactProofs
+                ? true
+                : compactProofs === true;
+        const proofModeSource: 'server_policy' | 'client_request' | 'default' =
+            forceFullProofs || forceCompactProofs ? 'server_policy'
+                : compactProofs !== undefined ? 'client_request'
+                    : 'default';
 
         const temporal = resolveTemporalScope(asOfMs, asOfVersion);
         if (!temporal.ok) return reply.status(temporal.statusCode).send({ error: temporal.error });
@@ -1613,9 +1699,21 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             });
 
         const top = ranked.slice(0, topLimit);
+        const masterVersion = orchestrator.getMasterVersion();
         const withProofs: BootstrapMemoryItem[] = await Promise.all(top.map(async row => {
             const report = await orchestrator.access(row.entry.atom);
             const parsed = parseAtomV1(row.entry.atom);
+            // Proof is always generated (needed for evidence scoring).
+            // In compact mode, we verify server-side and return a summary
+            // instead of the full audit path — saving ~85% of proof tokens.
+            // Full proofs remain available via /atoms/:atom and memory_access.
+            const proof: BootstrapProof | BootstrapCompactProof = useCompactProofs
+                ? {
+                    verified: MerkleSnapshot.verifyProof(report.currentProof),
+                    treeVersion: masterVersion,
+                    shardId: row.entry.shard,
+                }
+                : report.currentProof;
             return {
                 atom: row.entry.atom,
                 type: parsed?.type ?? 'other',
@@ -1625,7 +1723,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
                 createdAtMs: row.entry.createdAtMs,
                 shardId: row.entry.shard,
                 dominantNext: row.entry.outgoingTransitions[0]?.to ?? null,
-                proof: report.currentProof,
+                proof,
                 contradiction: getFactConflictForAtom(row.entry.atom, conflictIndex),
             };
         }));
@@ -1637,7 +1735,6 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
         );
 
         const gatedMemories = evidenceGate.included;
-        const masterVersion = orchestrator.getMasterVersion();
         const decisionEvidence = buildDecisionEvidence(
             gatedMemories,
             objectiveText,
@@ -1684,6 +1781,10 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
                 fallbackReason: evidenceGate.gate.lowEvidenceFallback
                     ? 'Insufficient evidence after threshold gating; memory influence excluded for high-impact output.'
                     : null,
+            },
+            proofMode: {
+                mode: useCompactProofs ? 'compact' : 'full',
+                source: proofModeSource,
             },
             context: lines.join('\n'),
             includedAtoms: gatedMemories.length,
@@ -1733,6 +1834,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
      * Returns: { queued, batchId, commitEtaMs }
      */
     server.post('/atoms', async (request, reply) => {
+        if (!requireMaster(request, reply)) return;
         try {
             const { atoms, reviewApproved, ttlMs } = request.body as {
                 atoms?: unknown;
@@ -1964,6 +2066,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
      * Returns: { status, flushedCount }
      */
     server.post('/admin/commit', async (request, reply) => {
+        if (!requireMaster(request, reply)) return;
         try {
             const before = pipeline.getStats().totalCommitted;
             await pipeline.flush();
@@ -2129,6 +2232,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
      *            accessCountsImported, errors, meta }
      */
     server.post('/admin/import-full', async (request, reply) => {
+        if (!requireMaster(request, reply)) return;
         const rawBody = typeof request.body === 'string'
             ? request.body
             : JSON.stringify(request.body ?? '');
@@ -2167,6 +2271,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
      *   errors   — lines that could not be parsed or had an invalid atom string
      */
     server.post('/admin/import', async (request, reply) => {
+        if (!requireMaster(request, reply)) return;
         const rawBody = typeof request.body === 'string'
             ? request.body
             : JSON.stringify(request.body ?? '');
@@ -2344,6 +2449,7 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
      * Returns: { status, tombstonedAtom, treeVersion }
      */
     server.delete('/atoms/:atom', async (request, reply) => {
+        if (!requireMaster(request, reply)) return;
         const { atom } = request.params as { atom: string };
         if (!isAtomV1(atom)) {
             return reply.status(400).send({ error: `Path param 'atom' invalid — ${SCHEMA_ERROR}` });
