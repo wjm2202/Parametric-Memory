@@ -45,6 +45,7 @@ Parametric-Memory (MMPM) stores atoms with cryptographic Merkle proof paths, lea
 | **TTL with auto-promotion** | Atoms can be ingested with a time-to-live. If accessed before expiry, they auto-promote to permanent storage. |
 | **Temporal versioning** | Every commit increments a monotonic master version; any read endpoint accepts `asOfVersion` or `asOfMs`. |
 | **Conflict detection** | Fact atoms are checked for contradictions automatically. Conflicting claims surface in bootstrap results so you can tombstone the stale one. |
+| **Compact proof mode** | Bootstrap can return server-verified proof summaries instead of full audit paths, reducing response tokens by ~60%. Server env vars can force full or compact mode regardless of client request. Full proofs always available via `/atoms/:atom`. |
 
 ---
 
@@ -79,6 +80,8 @@ Environment variables (see `.env.example` for the full list):
 | `WRITE_POLICY` | `auto-write` | `auto-write` \| `review-required` \| `never-store` |
 | `MMPM_METRICS_PUBLIC` | `0` | Set to `1` to expose `/metrics` without auth (Prometheus scraping) |
 | `MMPM_BLOCK_SECRET_ATOMS` | `0` | Set to `1` to reject atoms matching credential patterns (recommended in prod) |
+| `MMPM_BOOTSTRAP_FORCE_FULL_PROOFS` | `0` | Set to `1` to always return full Merkle proofs in bootstrap (ignores client request) |
+| `MMPM_BOOTSTRAP_COMPACT_PROOFS` | `0` | Set to `1` to always return compact proofs in bootstrap (saves ~60% tokens) |
 | `LOG_LEVEL` | `info` | Pino log level: `trace` \| `debug` \| `info` \| `warn` \| `error` |
 
 ---

@@ -139,7 +139,7 @@ export class ShardedOrchestrator {
         this.ready = true;
     }
 
-    async access(item: DataAtom): Promise<PredictionReport> {
+    async access(item: DataAtom, opts?: { skipSideEffects?: boolean }): Promise<PredictionReport> {
         assertAtomV1(item, 'access.item');
         const start = performance.now();
         const sIdx = this.router.getShardIndex(item);
@@ -147,7 +147,7 @@ export class ShardedOrchestrator {
 
         if (!shard) throw new Error(`Shard ${sIdx} not initialized for item ${item}`);
 
-        const result = await shard.access(item);
+        const result = await shard.access(item, opts);
 
         // Record inter-shard transitions (lastShard tracking only)
         if (this.lastShard !== null && this.lastShard !== sIdx) {
@@ -180,7 +180,7 @@ export class ShardedOrchestrator {
         };
     }
 
-    async batchAccess(items: DataAtom[]): Promise<BatchAccessResult[]> {
+    async batchAccess(items: DataAtom[], opts?: { skipSideEffects?: boolean }): Promise<BatchAccessResult[]> {
         assertAtomsV1(items, 'batchAccess.items');
         if (items.length === 0) return [];
 
@@ -210,7 +210,7 @@ export class ShardedOrchestrator {
                     return;
                 }
 
-                const shardResults = await shard.batchAccess(batch.map(entry => entry.item));
+                const shardResults = await shard.batchAccess(batch.map(entry => entry.item), opts);
                 for (let i = 0; i < shardResults.length; i++) {
                     const shardResult = shardResults[i];
                     const original = batch[i];

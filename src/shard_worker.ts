@@ -1188,7 +1188,7 @@ export class ShardWorker {
         return count;
     }
 
-    async access(item: DataAtom): Promise<ShardAccessResult> {
+    async access(item: DataAtom, opts?: { skipSideEffects?: boolean }): Promise<ShardAccessResult> {
         const idx = this.dataIndex.get(item);
         if (idx === undefined) throw new Error(`Item ${item} not found in this shard.`);
         if (this.tombstoned.has(idx)) throw new Error(`Atom '${item}' has been tombstoned.`);
@@ -1203,14 +1203,14 @@ export class ShardWorker {
                 );
             }
 
-            return this.buildAccessResult(snapshot, idx);
+            return this.buildAccessResult(snapshot, idx, opts?.skipSideEffects);
         } finally {
             this.releaseSnapshotReference(snapshot);
             this.epoch.endRead(ticket);
         }
     }
 
-    async batchAccess(items: DataAtom[]): Promise<ShardBatchAccessItemResult[]> {
+    async batchAccess(items: DataAtom[], opts?: { skipSideEffects?: boolean }): Promise<ShardBatchAccessItemResult[]> {
         if (items.length === 0) return [];
 
         const ticket: ReadTicket = this.epoch.beginRead();
@@ -1252,7 +1252,7 @@ export class ShardWorker {
                 results.push({
                     ok: true,
                     item,
-                    result: this.buildAccessResult(snapshot, idx),
+                    result: this.buildAccessResult(snapshot, idx, opts?.skipSideEffects),
                 });
             }
 
@@ -1263,33 +1263,37 @@ export class ShardWorker {
         }
     }
 
-    private buildAccessResult(snapshot: MerkleSnapshot, idx: number): ShardAccessResult {
-        // HLR: increment access count (fire-and-forget persistence)
-        const newCount = (this.accessCounts.get(idx) ?? 0) + 1;
-        this.accessCounts.set(idx, newCount);
-        const acKey = `ac:${String(idx).padStart(10, '0')}`;
-        this.storage.put(acKey, String(newCount))
-            .catch((err: unknown) => logger.error({ err }, 'Access count persist error'));
+    private buildAccessResult(snapshot: MerkleSnapshot, idx: number, skipSideEffects = false): ShardAccessResult {
+        if (!skipSideEffects) {
+            // HLR: increment access count (fire-and-forget persistence)
+            const newCount = (this.accessCounts.get(idx) ?? 0) + 1;
+            this.accessCounts.set(idx, newCount);
+            const acKey = `ac:${String(idx).padStart(10, '0')}`;
+            this.storage.put(acKey, String(newCount))
+                .catch((err: unknown) => logger.error({ err }, 'Access count persist error'));
 
-        // Sprint 15: Track last-access timestamp for tier classification
-        const nowMs = this.clock();
-        this.lastAccessedAtMs.set(idx, nowMs);
-        const laKey = `la:${String(idx).padStart(10, '0')}`;
-        this.storage.put(laKey, String(Math.round(nowMs)))
-            .catch((err: unknown) => logger.error({ err }, 'Last-access timestamp persist error'));
+            // Sprint 15: Track last-access timestamp for tier classification
+            const nowMs = this.clock();
+            this.lastAccessedAtMs.set(idx, nowMs);
+            const laKey = `la:${String(idx).padStart(10, '0')}`;
+            this.storage.put(laKey, String(Math.round(nowMs)))
+                .catch((err: unknown) => logger.error({ err }, 'Last-access timestamp persist error'));
 
-        // Sprint 14: Log access event for HLR training data
-        if (this.accessLog && idx < this.data.length) {
-            this.accessLog.append({ atom: this.data[idx], type: 'access', ts: this.clock() })
-                .catch((err: unknown) => logger.error({ err }, 'Access log append error'));
+            // Sprint 14: Log access event for HLR training data
+            if (this.accessLog && idx < this.data.length) {
+                this.accessLog.append({ atom: this.data[idx], type: 'access', ts: this.clock() })
+                    .catch((err: unknown) => logger.error({ err }, 'Access log append error'));
+            }
         }
 
         const hash = snapshot.getLeafHash(idx);
         const proof = snapshot.getProof(idx);
 
-        // PPM: record this access in the running history for context-aware prediction
-        if (this.ppmModel) {
-            this.ppmModel.recordAccess(hash);
+        if (!skipSideEffects) {
+            // PPM: record this access in the running history for context-aware prediction
+            if (this.ppmModel) {
+                this.ppmModel.recordAccess(hash);
+            }
         }
 
         let predictedHash: Hash | null = null;
