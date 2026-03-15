@@ -285,6 +285,7 @@ ENV_FILE="${REMOTE_DIR}/.env.production"
 if [[ ! -f "$ENV_FILE" ]]; then
     MMPM_API_KEY="mmk_$(openssl rand -hex 24)"
     MMPM_MCP_AUTH_KEY="mcp_$(openssl rand -hex 24)"
+    MMPM_VIZ_KEY="mmk_viz_$(openssl rand -hex 16)"
 
     # Write the full env file using the setup-droplet.sh template
     cd "$REMOTE_DIR"
@@ -302,6 +303,12 @@ LOG_LEVEL=info
 MMPM_API_KEY=${MMPM_API_KEY}
 MMPM_MCP_AUTH_KEY=${MMPM_MCP_AUTH_KEY}
 MMPM_OAUTH_ISSUER=https://${MMPM_DOMAIN:-mmpm.co.nz}
+
+# Scoped API keys (S16-8): comma-separated name@scope:key pairs.
+# Read-only clients use @read scope; they can access all read endpoints
+# but are blocked from writes (403).
+# Auto-generated viz-client key — copy to website .env.local as MMPM_VIZ_API_KEY.
+MMPM_API_KEYS=viz-client@read:${MMPM_VIZ_KEY}
 
 MMPM_BLOCK_SECRET_ATOMS=1
 MMPM_METRICS_PUBLIC=0
@@ -340,7 +347,7 @@ GF_LOG_FILTERS=context:warn
 ENVEOF
 
     chmod 600 "$ENV_FILE"
-    echo "{\"new\":true,\"api_key\":\"${MMPM_API_KEY}\",\"mcp_key\":\"${MMPM_MCP_AUTH_KEY}\"}"
+    echo "{\"new\":true,\"api_key\":\"${MMPM_API_KEY}\",\"mcp_key\":\"${MMPM_MCP_AUTH_KEY}\",\"viz_key\":\"${MMPM_VIZ_KEY}\"}"
 else
     # Merge missing defaults (idempotent upgrade)
     DEFAULTS=(
@@ -370,9 +377,29 @@ else
             ((ADDED++)) || true
         fi
     done
+    # S16-8: Ensure MMPM_API_KEYS has at least a viz-client read key.
+    # If the line exists but is empty, or missing entirely, generate one.
+    EXISTING_API_KEYS=$(grep "^MMPM_API_KEYS=" "$ENV_FILE" 2>/dev/null | cut -d= -f2-)
+    if [[ -z "$EXISTING_API_KEYS" ]]; then
+        VIZ_KEY="mmk_viz_$(openssl rand -hex 16)"
+        if grep -q "^MMPM_API_KEYS=" "$ENV_FILE"; then
+            # Line exists but empty — replace it
+            sed -i "s/^MMPM_API_KEYS=$/MMPM_API_KEYS=viz-client@read:${VIZ_KEY}/" "$ENV_FILE"
+        else
+            # Line missing entirely — append it
+            echo "" >> "$ENV_FILE"
+            echo "# Scoped API keys (S16-8): auto-generated viz-client read key" >> "$ENV_FILE"
+            echo "MMPM_API_KEYS=viz-client@read:${VIZ_KEY}" >> "$ENV_FILE"
+        fi
+        ((ADDED++)) || true
+    else
+        # Extract viz key from existing MMPM_API_KEYS value
+        VIZ_KEY=$(echo "$EXISTING_API_KEYS" | grep -oP 'viz-client@read:\K[^,]+' || echo "")
+    fi
+
     API_KEY=$(grep "^MMPM_API_KEY=" "$ENV_FILE" | cut -d= -f2)
     MCP_KEY=$(grep "^MMPM_MCP_AUTH_KEY=" "$ENV_FILE" | cut -d= -f2)
-    echo "{\"new\":false,\"added\":${ADDED},\"api_key\":\"${API_KEY}\",\"mcp_key\":\"${MCP_KEY}\"}"
+    echo "{\"new\":false,\"added\":${ADDED},\"api_key\":\"${API_KEY}\",\"mcp_key\":\"${MCP_KEY}\",\"viz_key\":\"${VIZ_KEY}\"}"
 fi
 REMOTE_ENV
     )
@@ -380,31 +407,39 @@ REMOTE_ENV
     IS_NEW=$(echo "$KEYS_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('new',''))")
     API_KEY=$(echo "$KEYS_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('api_key',''))")
     MCP_KEY=$(echo "$KEYS_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('mcp_key',''))")
+    VIZ_KEY=$(echo "$KEYS_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('viz_key',''))")
 
-    if [[ "$IS_NEW" == "True" ]]; then
-        ok "Generated new API keys"
-
-        # Save keys locally
-        local KEYS_FILE="${REPO_ROOT}/.mmpm-keys"
-        cat > "$KEYS_FILE" <<EOF
-# MMPM Production Keys — generated $(date -Iseconds)
+    # Always save/update local keys file with all current keys
+    local KEYS_FILE="${REPO_ROOT}/.mmpm-keys"
+    cat > "$KEYS_FILE" <<EOF
+# MMPM Production Keys — updated $(date -Iseconds)
 # KEEP SECRET. Do not commit to git.
 MMPM_API_KEY=${API_KEY}
 MMPM_MCP_AUTH_KEY=${MCP_KEY}
 MMPM_HOST=${MMPM_HOST}
 MMPM_DOMAIN=${MMPM_DOMAIN}
+
+# Read-only viz key — copy this to website .env.local as MMPM_VIZ_API_KEY
+MMPM_VIZ_API_KEY=${VIZ_KEY}
 EOF
-        chmod 600 "$KEYS_FILE"
+    chmod 600 "$KEYS_FILE"
+
+    if [[ "$IS_NEW" == "True" ]]; then
+        ok "Generated new API keys (master + MCP + viz-client)"
         echo ""
-        echo "  ┌──────────────────────────────────────────────────┐"
-        echo "  │  SAVE THESE KEYS (also in .mmpm-keys)            │"
-        echo "  ├──────────────────────────────────────────────────┤"
-        echo "  │  API Key:  ${API_KEY}"
-        echo "  │  MCP Auth: ${MCP_KEY}"
-        echo "  └──────────────────────────────────────────────────┘"
+        echo "  ┌───────────────────────────────────────────────────────┐"
+        echo "  │  SAVE THESE KEYS (also in .mmpm-keys)                 │"
+        echo "  ├───────────────────────────────────────────────────────┤"
+        echo "  │  API Key:      ${API_KEY}"
+        echo "  │  MCP Auth:     ${MCP_KEY}"
+        echo "  │  Viz (read):   ${VIZ_KEY}"
+        echo "  ├───────────────────────────────────────────────────────┤"
+        echo "  │  Add to website .env.local:                           │"
+        echo "  │  MMPM_VIZ_API_KEY=${VIZ_KEY}"
+        echo "  └───────────────────────────────────────────────────────┘"
         echo ""
     else
-        ok "Environment configured (existing keys preserved)"
+        ok "Environment configured (keys preserved, viz-client: ${VIZ_KEY:+present}${VIZ_KEY:-MISSING})"
     fi
 
     # ── Phase 6: TLS certificate (idempotent) ─────────────────────────────────

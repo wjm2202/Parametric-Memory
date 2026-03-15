@@ -2,9 +2,9 @@
 # Live Integration Test — MMPM Local Server
 # Tests MASTER and READ-ONLY client against http://127.0.0.1:3000
 
-BASE="http://127.0.0.1:3000"
-MASTER_KEY="mmk_test_master_key_12345"
-READ_KEY="mmk_test_read_key_67890"
+BASE="${BASE:-http://127.0.0.1:3000}"
+MASTER_KEY="${MASTER_KEY:-mmk_test_master_key_12345}"
+READ_KEY="${READ_KEY:-mmk_test_read_key_67890}"
 MASTER_AUTH="Bearer $MASTER_KEY"
 READ_AUTH="Bearer $READ_KEY"
 
