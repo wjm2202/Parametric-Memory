@@ -342,10 +342,13 @@ const httpServer = createServer(async (req, res) => {
     }
 
     if (req.method === 'GET') {
-        // SSE server-push stream — not needed (no server-initiated notifications).
-        // Return 405 so Cowork doesn't try to open a long-lived SSE connection.
-        res.writeHead(405);
-        res.end('GET SSE stream not supported — use POST for all tool calls');
+        // SSE server-push stream — Cowork requires this to stay open to consider
+        // the connection alive. Delegate to the SDK transport.
+        if (sessionId && transports.has(sessionId)) {
+            await transports.get(sessionId)!.handleRequest(req, res);
+            return;
+        }
+        jsonResponse(res, 400, { error: 'Missing or invalid session ID' });
         return;
     }
 

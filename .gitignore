@@ -18,6 +18,12 @@ data/LOCK
 data/CURRENT
 data/LOG
 data/MANIFEST-*
+data/**/LOCK
+data/**/CURRENT
+data/**/LOG
+data/**/MANIFEST-*
+data/**/*.ldb
+data/**/*.sst
 # Legacy path (pre-v1.1 default)
 mmpm-db/
 # Harness and smoke-test databases (still written to cwd by some tools)
