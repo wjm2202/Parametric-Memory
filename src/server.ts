@@ -849,6 +849,118 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
     // 14-A-3: Audit log — bounded ring buffer of mutation events.
     const auditLog = new AuditLog(parseInt(process.env.MMPM_AUDIT_LOG_MAX_ENTRIES ?? '1000', 10));
 
+    // ── S16-3: SSE EventHub — real-time push of mutations to website viewers ──
+    // Mutations are buffered between commits; access events emit immediately.
+    // GET /events provides the SSE stream. MCP server is NOT modified.
+    interface SseClient {
+        id: string;
+        res: import('http').ServerResponse;
+        /** Number of sequential write failures — evict after threshold */
+        failCount: number;
+    }
+    const sseClients = new Set<SseClient>();
+    const SSE_MAX_WRITE_FAILURES = 3;
+
+    const sseBuffer = {
+        pendingAdded: [] as string[],
+        pendingTombstoned: [] as string[],
+        pendingTrained: [] as string[][],
+    };
+    /** Safety cap — auto-flush if buffer grows beyond this (prevents unbounded memory) */
+    const SSE_BUFFER_HIGH_WATER = 500;
+
+    /**
+     * NON-BLOCKING broadcast — serialises the payload synchronously (cheap for
+     * typical commit payloads) then writes to each client via setImmediate so
+     * the caller's request/response cycle is never blocked by slow SSE clients.
+     *
+     * Clients whose socket is destroyed or that fail SSE_MAX_WRITE_FAILURES
+     * consecutive writes are evicted silently.
+     */
+    function sseBroadcast(event: string, data: unknown): void {
+        if (sseClients.size === 0) return; // fast exit — no subscribers
+        const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+        // Defer writes so the calling route handler returns immediately
+        setImmediate(() => {
+            const dead: SseClient[] = [];
+            for (const client of sseClients) {
+                try {
+                    if (client.res.destroyed) {
+                        dead.push(client);
+                        continue;
+                    }
+                    client.res.write(payload);
+                    client.failCount = 0; // reset on success
+                } catch {
+                    client.failCount++;
+                    if (client.failCount >= SSE_MAX_WRITE_FAILURES) {
+                        dead.push(client);
+                    }
+                }
+            }
+            // Clean up outside the iteration loop
+            for (const client of dead) {
+                sseClients.delete(client);
+                try { client.res.end(); } catch { /* already gone */ }
+                logger.info({ clientId: client.id, totalClients: sseClients.size }, '[SSE] Evicted stale client');
+            }
+        });
+    }
+
+    function sseBroadcastClientCount(): void {
+        sseBroadcast('clients', { count: sseClients.size });
+    }
+
+    function sseFlushCommitBuffer(version: number, root: string): void {
+        if (
+            sseBuffer.pendingAdded.length === 0 &&
+            sseBuffer.pendingTombstoned.length === 0 &&
+            sseBuffer.pendingTrained.length === 0
+        ) {
+            return; // Nothing to emit
+        }
+
+        // Enrich added atoms with Merkle position data so the website can
+        // place them in the correct tree position immediately (no follow-up
+        // batch-access needed).  All lookups are in-memory O(1) — no I/O.
+        const enrichedAdded = sseBuffer.pendingAdded.map(key => {
+            const shard = orchestrator.getShardIndex(key);
+            const proof = orchestrator.getAtomProof(key);
+            return {
+                key,
+                shard,
+                index: proof?.index ?? -1,
+                hash: proof?.leaf ?? '',
+            };
+        });
+
+        sseBroadcast('commit', {
+            version,
+            root,
+            added: enrichedAdded,
+            tombstoned: sseBuffer.pendingTombstoned,
+            trained: sseBuffer.pendingTrained,
+        });
+        sseBuffer.pendingAdded = [];
+        sseBuffer.pendingTombstoned = [];
+        sseBuffer.pendingTrained = [];
+    }
+
+    /**
+     * Guard: prevent unbounded buffer growth if commits are delayed.
+     * Called after every buffer append — O(1) length checks.
+     */
+    function sseBufferGuard(): void {
+        const total = sseBuffer.pendingAdded.length
+            + sseBuffer.pendingTombstoned.length
+            + sseBuffer.pendingTrained.length;
+        if (total >= SSE_BUFFER_HIGH_WATER) {
+            logger.warn({ total, cap: SSE_BUFFER_HIGH_WATER }, '[SSE] Buffer high-water — auto-flushing');
+            const head = orchestrator.getTreeHead();
+            sseFlushCommitBuffer(head.version, String(head.root ?? ''));
+        }
+    }
+
     // 14-C-1: TTL registry — optional per-atom expiry with access-aware reset.
     // Step 5: Auto-promotion — atoms accessed ≥ threshold times graduate to permanent.
     const promotionThreshold = parseInt(process.env.MMPM_TTL_PROMOTION_THRESHOLD ?? '3', 10);
@@ -1104,6 +1216,10 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             const readOnly = isReadOnly(request);
             const report = await orchestrator.access(item, { skipSideEffects: readOnly });
             if (!readOnly) ttlRegistry.touch(item); // 14-C-1: reset TTL clock on access (master only)
+            // S16-3: Emit immediate access SSE event — only for master access,
+            // not read-only. Avoids feedback loop where website's own reads
+            // trigger SSE events that pulse back into the same website.
+            if (!readOnly) sseBroadcast('access', { atoms: [item] });
             const result = report.predictedNext !== null ? 'hit' : 'miss';
             accessCounter.inc({ result });
             requestDuration.observe(report.latencyMs);
@@ -1158,6 +1274,8 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             const readOnly = isReadOnly(request);
             const results = await orchestrator.batchAccess(normalized as string[], { skipSideEffects: readOnly });
             if (!readOnly) ttlRegistry.touchAll(normalized as string[]); // 14-C-1: reset TTL clocks (master only)
+            // S16-3: Emit immediate access SSE event — master only (see access route comment)
+            if (!readOnly) sseBroadcast('access', { atoms: normalized as string[] });
             return { results };
         } catch (e: any) {
             return reply.status(500).send({ error: e.message });
@@ -1270,6 +1388,9 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
                 return reply.status(400).send({ error: `Property 'sequence' invalid — ${SCHEMA_ERROR}` });
             }
             await orchestrator.train(normalized as string[]);
+            // S16-3: Buffer trained sequence for SSE commit event (arc animations)
+            sseBuffer.pendingTrained.push(normalized as string[]);
+            sseBufferGuard();
             trainCounter.inc();
             trainSequenceLength.observe(normalized.length);
 
@@ -1968,6 +2089,9 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
                 });
             }
             const receipt = await pipeline.enqueue(writeEvaluation.allowedAtoms);
+            // S16-3: Buffer added atoms for SSE commit event
+            sseBuffer.pendingAdded.push(...writeEvaluation.allowedAtoms);
+            sseBufferGuard();
             // 14-C-1: Register TTL if requested
             if (ttlMsNum !== undefined) {
                 for (const atom of writeEvaluation.allowedAtoms) {
@@ -2072,12 +2196,16 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             await pipeline.flush();
             const after = pipeline.getStats().totalCommitted;
             const flushedCount = after - before;
+            const treeVersion = orchestrator.getMasterVersion();
             auditLog.record('admin.commit', {
                 count: flushedCount,
                 requestId: request.id as string,
                 clientName: getClientName(request),
-                treeVersion: orchestrator.getMasterVersion(),
+                treeVersion,
             });
+            // S16-3: Flush SSE buffer — emit batched commit event to all connected viewers
+            const head = orchestrator.getTreeHead();
+            sseFlushCommitBuffer(treeVersion, String(head.root ?? ''));
             return { status: 'Committed', flushedCount };
         } catch (e: any) {
             return reply.status(500).send({ error: e.message });
@@ -2458,6 +2586,9 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
             const treeVersion = await orchestrator.removeAtom(atom);
             searchRemoveAtom(atom); // Incremental search index update after tombstone
             ttlRegistry.delete(atom); // 14-C-1: remove TTL tracking after tombstone
+            // S16-3: Buffer tombstoned atom for SSE commit event
+            sseBuffer.pendingTombstoned.push(atom);
+            sseBufferGuard();
             auditLog.record('atom.tombstone', {
                 atoms: [atom],
                 count: 1,
@@ -2606,6 +2737,75 @@ export function buildApp(opts: BuildAppOpts = {}): { server: FastifyInstance; or
     }, reaperIntervalMs);
     // Ensure the timer doesn't keep the process alive on graceful shutdown
     if (typeof reaperTimer.unref === 'function') reaperTimer.unref();
+
+    // ── S16-3: GET /events — SSE endpoint for real-time updates ─────────────
+    // Auth: requires valid API key (read-only viz key works).
+    // Protocol: text/event-stream with :ping keep-alive every 15s.
+    // Events: 'commit' (batched mutations), 'access' (immediate highlights),
+    //         'connected' (initial handshake), 'clients' (subscriber count).
+    server.get('/events', async (request, reply) => {
+        // Auth check — read-only keys are sufficient
+        const auth = request.headers.authorization;
+        const token = auth?.startsWith('Bearer ') ? auth.slice(7) : '';
+        const isValidKey = apiKeyMap.has(token);
+        if (apiKeyMap.size > 0 && !isValidKey) {
+            return reply.status(401).send({ error: 'Unauthorized — Bearer token required for SSE' });
+        }
+
+        // Hijack the raw HTTP response for SSE streaming
+        const raw = reply.raw;
+        raw.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no', // Disable nginx buffering
+            'Access-Control-Allow-Origin': process.env.CORS_ORIGIN ?? '*',
+        });
+
+        const clientId = `sse-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const client: SseClient = { id: clientId, res: raw, failCount: 0 };
+        sseClients.add(client);
+        logger.info({ clientId, totalClients: sseClients.size }, '[SSE] Client connected');
+
+        // Send initial connected event with current tree head
+        const head = orchestrator.getTreeHead();
+        raw.write(`event: connected\ndata: ${JSON.stringify({
+            clientId,
+            clientCount: sseClients.size,
+            version: head.version,
+            root: String(head.root ?? ''),
+        })}\n\n`);
+
+        // Broadcast updated client count to all
+        sseBroadcastClientCount();
+
+        // Keep-alive ping every 15s to prevent proxy/firewall timeout.
+        // .unref() ensures the timer doesn't prevent graceful shutdown.
+        const pingInterval = setInterval(() => {
+            try {
+                if (!raw.destroyed) raw.write(`:ping ${Date.now()}\n\n`);
+            } catch {
+                clearInterval(pingInterval);
+            }
+        }, 15_000);
+        if (typeof pingInterval.unref === 'function') pingInterval.unref();
+
+        // Cleanup on disconnect
+        request.raw.on('close', () => {
+            clearInterval(pingInterval);
+            sseClients.delete(client);
+            logger.info({ clientId, totalClients: sseClients.size }, '[SSE] Client disconnected');
+            sseBroadcastClientCount();
+        });
+
+        // Prevent Fastify from sending its own response — we're streaming
+        reply.hijack();
+    });
+
+    // S16-5: GET /events/clients — lightweight endpoint for SSE subscriber count
+    server.get('/events/clients', async () => {
+        return { count: sseClients.size };
+    });
 
     return { server, orchestrator, pipeline, auditLog };
 }

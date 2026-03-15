@@ -858,6 +858,11 @@ export class ShardedOrchestrator {
      * the proof was valid at the version the atom was committed and can still be
      * independently verified against that version's root hash.
      */
+    /** Shard index for a given atom — pure hash, O(1), no I/O. */
+    getShardIndex(atom: DataAtom): number {
+        return this.router.getShardIndex(atom);
+    }
+
     getAtomProof(atom: DataAtom): MerkleProof | null {
         const shardIdx = this.router.getShardIndex(atom);
         const shard = this.shards.get(shardIdx);
