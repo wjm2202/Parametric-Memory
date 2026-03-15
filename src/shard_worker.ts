@@ -139,6 +139,14 @@ export class ShardWorker {
     private readonly consolidation: ConsolidationCycle | null;
     private consolidationTimer: ReturnType<typeof setInterval> | null = null;
     private readonly consolidationIntervalMs: number;
+    /**
+     * Minimum interval between per-commit tier classifications (ms).
+     * Prevents O(n) LevelDB batch writes on every commit when commits are
+     * frequent (e.g. per-atom ingestion).  Default: 30 000 ms (30 s).
+     * Set via MMPM_TIER_CLASSIFY_INTERVAL_MS.
+     */
+    private readonly tierClassifyIntervalMs: number;
+    private lastTierClassifyAtMs: number = 0;
 
     // ─── Last access timestamp per atom (for tier classification) ─────
     private lastAccessedAtMs: Map<number, number> = new Map();
@@ -290,6 +298,10 @@ export class ShardWorker {
             const thresholds = parseThresholdsFromEnv();
             this.tierEngine = new TierEngine(this.hlrModel, thresholds);
 
+            const envTierClassifyInterval = parseInt(process.env.MMPM_TIER_CLASSIFY_INTERVAL_MS ?? '', 10);
+            this.tierClassifyIntervalMs = Number.isFinite(envTierClassifyInterval) && envTierClassifyInterval >= 0
+                ? envTierClassifyInterval
+                : 30_000; // Default: 30s — prevents O(n) writes on every commit
             const consolidationOpts = parseConsolidationOptionsFromEnv();
             this.consolidationIntervalMs = consolidationOpts.intervalMs ?? 60 * 60 * 1000; // 1 hour
             const shardInterface = this.buildConsolidationInterface();
@@ -301,6 +313,7 @@ export class ShardWorker {
             this.tierEngine = null;
             this.consolidation = null;
             this.consolidationIntervalMs = 0;
+            this.tierClassifyIntervalMs = 0;
         }
 
         // STDP: Spike-Timing-Dependent Plasticity (Sprint 12)
@@ -675,21 +688,27 @@ export class ShardWorker {
             );
         }
 
-        // Sprint 15: Classify tiers for all active atoms during commit
+        // Sprint 15: Classify tiers for all active atoms during commit.
+        // Throttled: only runs when tierClassifyIntervalMs has elapsed since
+        // the last classification.  Prevents O(n) LevelDB batch writes on
+        // every commit under high-frequency ingestion.
         if (this.consolidation) {
             const nowMs = this.clock();
-            const atomsToClassify: Array<{ index: number; features: import('./hlr').HlrFeatures; lastAccessedMs: number }> = [];
-            for (let i = 0; i < this.data.length; i++) {
-                if (this.tombstoned.has(i)) continue;
-                atomsToClassify.push({
-                    index: i,
-                    features: this.getHlrFeatures(i),
-                    lastAccessedMs: this.lastAccessedAtMs.get(i) ?? this.atomCreatedAtMs[i] ?? 0,
-                });
+            if (nowMs - this.lastTierClassifyAtMs >= this.tierClassifyIntervalMs) {
+                this.lastTierClassifyAtMs = nowMs;
+                const atomsToClassify: Array<{ index: number; features: import('./hlr').HlrFeatures; lastAccessedMs: number }> = [];
+                for (let i = 0; i < this.data.length; i++) {
+                    if (this.tombstoned.has(i)) continue;
+                    atomsToClassify.push({
+                        index: i,
+                        features: this.getHlrFeatures(i),
+                        lastAccessedMs: this.lastAccessedAtMs.get(i) ?? this.atomCreatedAtMs[i] ?? 0,
+                    });
+                }
+                await this.consolidation.batchClassifyAndPersist(atomsToClassify, this.storage, nowMs).catch(
+                    (err: unknown) => logger.error({ err, shard: this._shardId }, 'Tier classification failed'),
+                );
             }
-            await this.consolidation.batchClassifyAndPersist(atomsToClassify, this.storage, nowMs).catch(
-                (err: unknown) => logger.error({ err, shard: this._shardId }, 'Tier classification failed'),
-            );
         }
 
         // Sprint 12: Active forgetting — prune stale transitions during commit
