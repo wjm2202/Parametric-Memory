@@ -102,6 +102,7 @@ const transports = new Map<string, StreamableHTTPServerTransport>();
 async function createNewSession(): Promise<StreamableHTTPServerTransport> {
     const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
+        enableJsonResponse: true,
         onsessioninitialized: (sessionId: string) => {
             transports.set(sessionId, transport);
             console.log(`[mmpm-mcp-http] New session: ${sessionId}`);
@@ -325,11 +326,10 @@ const httpServer = createServer(async (req, res) => {
     }
 
     if (req.method === 'GET') {
-        if (sessionId && transports.has(sessionId)) {
-            await transports.get(sessionId)!.handleRequest(req, res);
-            return;
-        }
-        jsonResponse(res, 400, { error: 'Missing or invalid session ID' });
+        // SSE server-push stream — not needed (no server-initiated notifications).
+        // Return 405 so Cowork doesn't try to open a long-lived SSE connection.
+        res.writeHead(405);
+        res.end('GET SSE stream not supported — use POST for all tool calls');
         return;
     }
 
