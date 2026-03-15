@@ -76,17 +76,33 @@ function parseFormBody(body: string): Record<string, string> {
 function checkAuth(req: IncomingMessage, res: ServerResponse): boolean {
     const auth = req.headers.authorization;
     const token = auth?.startsWith('Bearer ') ? auth.slice(7) : '';
+    const method = req.method ?? '?';
+    const path = req.url ?? '/';
+    const tokenPreview = token ? `${token.slice(0, 12)}...` : '(none)';
+
+    console.log(`[auth] ${method} ${path} | token: ${tokenPreview} | AUTH_KEY set: ${!!AUTH_KEY}`);
 
     // 1. Static Bearer token
-    if (AUTH_KEY && token === AUTH_KEY) return true;
+    if (AUTH_KEY && token === AUTH_KEY) {
+        console.log(`[auth] ✓ static bearer match`);
+        return true;
+    }
 
     // 2. OAuth access token
-    if (token && oauthProvider.validateAccessToken(token)) return true;
+    if (token) {
+        const oauthValid = oauthProvider.validateAccessToken(token);
+        console.log(`[auth] OAuth validate: ${oauthValid} | token prefix: ${token.slice(0, 20)} | active tokens: ${oauthProvider.activeTokenCount}`);
+        if (oauthValid) return true;
+    }
 
     // 3. If no auth mechanisms are configured, allow through
-    if (!AUTH_KEY) return true;
+    if (!AUTH_KEY) {
+        console.log(`[auth] ✓ no AUTH_KEY — open access`);
+        return true;
+    }
 
     // Reject with WWW-Authenticate pointing to OAuth metadata
+    console.log(`[auth] ✗ REJECTED — token did not match static bearer or OAuth`);
     res.writeHead(401, {
         'Content-Type': 'application/json',
         'WWW-Authenticate': `Bearer resource_metadata="${OAUTH_ISSUER}/.well-known/oauth-authorization-server"`,

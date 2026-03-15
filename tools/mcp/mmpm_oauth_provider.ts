@@ -255,13 +255,23 @@ export class OAuthProvider {
 
     // ── Token Validation ───────────────────────────────────────────────────────
 
+    /** Number of active (non-expired) access tokens in memory. */
+    get activeTokenCount(): number {
+        return this.accessTokens.size;
+    }
+
     validateAccessToken(token: string): boolean {
         const record = this.accessTokens.get(token);
-        if (!record) return false;
+        if (!record) {
+            console.log(`[oauth] validateAccessToken: token not found in ${this.accessTokens.size} stored tokens`);
+            return false;
+        }
         if (record.expiresAt < Date.now()) {
+            console.log(`[oauth] validateAccessToken: token expired ${Math.round((Date.now() - record.expiresAt) / 1000)}s ago for client ${record.clientId}`);
             this.accessTokens.delete(token);
             return false;
         }
+        console.log(`[oauth] validateAccessToken: ✓ valid for client ${record.clientId}, expires in ${Math.round((record.expiresAt - Date.now()) / 1000)}s`);
         return true;
     }
 
