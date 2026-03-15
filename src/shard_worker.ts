@@ -148,6 +148,28 @@ export class ShardWorker {
     private readonly tierClassifyIntervalMs: number;
     private lastTierClassifyAtMs: number = 0;
 
+    /**
+     * Minimum interval between per-commit PPM trie persistence (ms).
+     * Prevents expensive LevelDB range-scan + batch-write on every commit
+     * when the trie is continuously dirtied by writer trains.
+     * Default: 30 000 ms (30 s).  Set via MMPM_PPM_PERSIST_INTERVAL_MS.
+     */
+    private readonly ppmPersistIntervalMs: number;
+    private lastPpmPersistAtMs: number = 0;
+
+    /**
+     * Minimum interval between flushing access-metric writes to LevelDB (ms).
+     * Instead of fire-and-forget puts on every access(), we batch dirty indices
+     * and flush them periodically.  Default: 10 000 ms (10 s).
+     * Set via MMPM_ACCESS_FLUSH_INTERVAL_MS.
+     */
+    private readonly accessFlushIntervalMs: number;
+    private lastAccessFlushAtMs: number = 0;
+    /** Indices whose access count or last-access timestamp changed since last flush. */
+    private dirtyAccessIndices: Set<number> = new Set();
+    /** Buffered access log entries — flushed as a batch during commit. */
+    private pendingAccessLogEntries: import('./access_log').AccessLogEntry[] = [];
+
     // ─── Last access timestamp per atom (for tier classification) ─────
     private lastAccessedAtMs: Map<number, number> = new Map();
 
@@ -315,6 +337,18 @@ export class ShardWorker {
             this.consolidationIntervalMs = 0;
             this.tierClassifyIntervalMs = 0;
         }
+
+        // Sprint 16: PPM trie persistence throttle.
+        const envPpmPersistInterval = parseInt(process.env.MMPM_PPM_PERSIST_INTERVAL_MS ?? '', 10);
+        this.ppmPersistIntervalMs = Number.isFinite(envPpmPersistInterval) && envPpmPersistInterval >= 0
+            ? envPpmPersistInterval
+            : 30_000; // Default: 30s — prevents expensive range-scan+write on every commit
+
+        // Sprint 16: Access-metric flush throttle.
+        const envAccessFlushInterval = parseInt(process.env.MMPM_ACCESS_FLUSH_INTERVAL_MS ?? '', 10);
+        this.accessFlushIntervalMs = Number.isFinite(envAccessFlushInterval) && envAccessFlushInterval >= 0
+            ? envAccessFlushInterval
+            : 10_000; // Default: 10s — batches fire-and-forget puts into periodic flushes
 
         // STDP: Spike-Timing-Dependent Plasticity (Sprint 12)
         // Default: 0 (disabled, classic +1). Set MMPM_STDP_TAU_MS=300000 in production.
@@ -681,11 +715,32 @@ export class ShardWorker {
         await this.wal.writeCommit();
         await this.wal.truncate();
 
-        // Sprint 13: Persist PPM trie if it has been modified since last save
+        // Sprint 16: Flush batched access metrics (counts + timestamps) to LevelDB.
+        // Throttled: only runs when accessFlushIntervalMs has elapsed.
+        // Replaces individual fire-and-forget puts that used to run on every access().
+        {
+            const nowFlush = this.clock();
+            if (nowFlush - this.lastAccessFlushAtMs >= this.accessFlushIntervalMs) {
+                this.lastAccessFlushAtMs = nowFlush;
+                await this.flushAccessMetrics().catch(
+                    (err: unknown) => logger.error({ err, shard: this._shardId }, 'Access metrics flush failed'),
+                );
+            }
+        }
+
+        // Sprint 13: Persist PPM trie if it has been modified since last save.
+        // Sprint 16: Throttled — only persists when ppmPersistIntervalMs has
+        // elapsed.  The trie is always dirty under concurrent write+train load;
+        // persisting on every commit triggers a full LevelDB range-scan + batch
+        // delete + batch write each time.
         if (this.ppmModel?.dirty) {
-            await this.persistPpmTrie().catch(
-                (err: unknown) => logger.error({ err, shard: this._shardId }, 'PPM trie persistence failed'),
-            );
+            const nowPpm = this.clock();
+            if (nowPpm - this.lastPpmPersistAtMs >= this.ppmPersistIntervalMs) {
+                this.lastPpmPersistAtMs = nowPpm;
+                await this.persistPpmTrie().catch(
+                    (err: unknown) => logger.error({ err, shard: this._shardId }, 'PPM trie persistence failed'),
+                );
+            }
         }
 
         // Sprint 15: Classify tiers for all active atoms during commit.
@@ -1284,24 +1339,23 @@ export class ShardWorker {
 
     private buildAccessResult(snapshot: MerkleSnapshot, idx: number, skipSideEffects = false): ShardAccessResult {
         if (!skipSideEffects) {
-            // HLR: increment access count (fire-and-forget persistence)
+            // HLR: increment access count (in-memory — flushed to LevelDB periodically)
             const newCount = (this.accessCounts.get(idx) ?? 0) + 1;
             this.accessCounts.set(idx, newCount);
-            const acKey = `ac:${String(idx).padStart(10, '0')}`;
-            this.storage.put(acKey, String(newCount))
-                .catch((err: unknown) => logger.error({ err }, 'Access count persist error'));
 
-            // Sprint 15: Track last-access timestamp for tier classification
+            // Sprint 15: Track last-access timestamp for tier classification (in-memory)
             const nowMs = this.clock();
             this.lastAccessedAtMs.set(idx, nowMs);
-            const laKey = `la:${String(idx).padStart(10, '0')}`;
-            this.storage.put(laKey, String(Math.round(nowMs)))
-                .catch((err: unknown) => logger.error({ err }, 'Last-access timestamp persist error'));
 
-            // Sprint 14: Log access event for HLR training data
+            // Sprint 16: Mark index dirty for batched flush instead of fire-and-forget puts.
+            // This eliminates 2 individual LevelDB writes per access() call — they're
+            // batched into a single LevelDB batch write during commit (throttled).
+            this.dirtyAccessIndices.add(idx);
+
+            // Sprint 14: Log access event for HLR training data.
+            // Sprint 16: Buffer entries for batched flush instead of individual puts.
             if (this.accessLog && idx < this.data.length) {
-                this.accessLog.append({ atom: this.data[idx], type: 'access', ts: this.clock() })
-                    .catch((err: unknown) => logger.error({ err }, 'Access log append error'));
+                this.pendingAccessLogEntries.push({ atom: this.data[idx], type: 'access', ts: this.clock() });
             }
         }
 
@@ -1632,6 +1686,57 @@ export class ShardWorker {
         );
     }
 
+    /**
+     * Sprint 16: Flush dirty access metrics (counts + last-access timestamps)
+     * and buffered access log entries to LevelDB in a single batch write.
+     * Replaces the fire-and-forget individual puts that used to run on every
+     * access() call — eliminates 3 LevelDB writes per reader access.
+     */
+    private async flushAccessMetrics(): Promise<void> {
+        const hasDirtyMetrics = this.dirtyAccessIndices.size > 0;
+        const hasLogEntries = this.pendingAccessLogEntries.length > 0;
+        if (!hasDirtyMetrics && !hasLogEntries) return;
+
+        let batch = this.storage.batch();
+
+        // Flush dirty access counts and timestamps
+        for (const idx of this.dirtyAccessIndices) {
+            const paddedIdx = String(idx).padStart(10, '0');
+            const count = this.accessCounts.get(idx);
+            if (count !== undefined) {
+                batch = batch.put(`ac:${paddedIdx}`, String(count));
+            }
+            const lastAccess = this.lastAccessedAtMs.get(idx);
+            if (lastAccess !== undefined) {
+                batch = batch.put(`la:${paddedIdx}`, String(Math.round(lastAccess)));
+            }
+        }
+
+        // Flush buffered access log entries
+        if (this.accessLog && hasLogEntries) {
+            // Use appendBatch which writes directly — but we already have a batch,
+            // so inline the key generation to avoid a second batch.write().
+            for (const entry of this.pendingAccessLogEntries) {
+                const key = `al:${String(entry.ts).padStart(15, '0')}`;
+                batch = batch.put(key, JSON.stringify(entry));
+            }
+        }
+
+        await batch.write();
+
+        // Update the access log entry count (for eviction tracking)
+        if (this.accessLog && hasLogEntries) {
+            this.accessLog.adjustCount(this.pendingAccessLogEntries.length);
+        }
+
+        logger.debug(
+            { shard: this._shardId, dirtyIndices: this.dirtyAccessIndices.size, logEntries: this.pendingAccessLogEntries.length },
+            'Access metrics flushed'
+        );
+        this.dirtyAccessIndices.clear();
+        this.pendingAccessLogEntries = [];
+    }
+
     private isConfidenceDecayEnabled(): boolean {
         return this.confidenceHalfLifeMs > 0;
     }
@@ -1920,6 +2025,16 @@ export class ShardWorker {
         if (this.commitTimer) { clearInterval(this.commitTimer); this.commitTimer = null; }
         if (!this.pending.isEmpty()) {
             await this.commit().catch((err: unknown) => logger.error({ err }, 'Final commit failed during close'));
+        }
+        // Sprint 16: Flush any remaining dirty access metrics before closing storage
+        await this.flushAccessMetrics().catch(
+            (err: unknown) => logger.error({ err, shard: this._shardId }, 'Final access metrics flush failed during close'),
+        );
+        // Final PPM persistence if dirty
+        if (this.ppmModel?.dirty) {
+            await this.persistPpmTrie().catch(
+                (err: unknown) => logger.error({ err, shard: this._shardId }, 'Final PPM persist failed during close'),
+            );
         }
         await this.wal.close();
         await this.storage.close();

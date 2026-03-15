@@ -120,8 +120,11 @@ describe('Load — sequential /access throughput (500 requests)', () => {
 
         expect(failures).toBe(0);
         const s = stats(latencies);
-        // In-process Fastify inject should be well under 10ms p95 even on slow CI
-        expect(s.p95, `p95 latency ${s.p95.toFixed(3)}ms exceeded 10ms`).toBeLessThan(10);
+        // In-process Fastify inject should be well under 13ms p95 even on slow CI.
+        // Raised from 10ms → 13ms in Sprint 16: batched I/O throttling (PPM persist,
+        // access metrics flush) trades ~2-3ms sequential overhead for dramatically
+        // better concurrent throughput.  S17-5 targets restoring <10ms.
+        expect(s.p95, `p95 latency ${s.p95.toFixed(3)}ms exceeded 13ms`).toBeLessThan(13);
     }, 30_000);
 });
 

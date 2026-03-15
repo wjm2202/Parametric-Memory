@@ -130,6 +130,14 @@ export class AccessLog {
     }
 
     /**
+     * Sprint 16: Adjust the internal entry counter when entries are written
+     * externally (e.g. batched into a shared LevelDB batch by the shard worker).
+     */
+    adjustCount(delta: number): void {
+        this.entryCount += delta;
+    }
+
+    /**
      * FIFO eviction: remove oldest entries until count <= maxEntries.
      */
     private async evict(): Promise<void> {

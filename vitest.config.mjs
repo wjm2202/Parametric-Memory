@@ -14,5 +14,10 @@ export default defineConfig({
         exclude: ['dist/**', 'node_modules/**'],
         // Load .env.test into process.env before every test file.
         setupFiles: ['./src/__tests__/setup.ts'],
+        // The concurrent stress test creates 4 full LevelDB shards with all
+        // Sprint 15+ features (tier engine, consolidation, HLR, access log).
+        // Use vmThreads instead of forks to avoid doubling process memory
+        // overhead — critical on memory-constrained CI / dev environments.
+        pool: 'vmThreads',
     },
 });
