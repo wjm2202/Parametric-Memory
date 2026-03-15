@@ -1,0 +1,47 @@
+# ── Local-test stack ─────────────────────────────────────────────────────────
+#
+#   Lightweight memory-only container for testing the website locally.
+#   No Prometheus, no Grafana — just the API server on port 3100.
+#
+#   Usage:
+#     docker compose -f docker-compose.local.yml up --build -d
+#     docker compose -f docker-compose.local.yml down
+#
+#   The website's .env.docker points MMPM_API_URL=http://localhost:3100
+#   so Next.js dev server (port 3000) talks to this container.
+#
+# ── Memory safety ────────────────────────────────────────────────────────────
+#   Uses a SEPARATE local-test DB at ~/.mmpm/local-test-data so your
+#   production memory at ~/.mmpm/data is never touched.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  mmpm-local:
+    build: .
+    ports:
+      - "3100:3000"
+    env_file:
+      - .env
+    environment:
+      # Bind all interfaces (required inside Docker for port forwarding)
+      - HOST=0.0.0.0
+      # Isolated test DB — never touches production ~/.mmpm/data
+      - DB_BASE_PATH=/app/mmpm-db
+      - MMPM_ATOM_FILE=/app/seeds.json
+      # Quieter logging for local dev
+      - LOG_LEVEL=info
+    volumes:
+      # Separate bind-mount for local testing (not production data)
+      - ${HOME}/.mmpm/local-test-data:/app/mmpm-db
+      - ./seeds.json:/app/seeds.json:ro
+      - ./memory:/app/memory:ro
+      # Model2Vec vocabulary for semantic search
+      - ./data/model2vec_vocab.bin:/app/data/model2vec_vocab.bin:ro
+      - ./data/model2vec_vocab.json:/app/data/model2vec_vocab.json:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/ready').then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
